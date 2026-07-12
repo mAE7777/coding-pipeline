@@ -20,14 +20,11 @@ and the latest `/qa` verdict is PASS. If any slice is unverified or the load-bea
 not proven, HALT and say which.
 
 ### Stage 2 — Release safety gate (deterministic, blocking)
-Run and show evidence for each:
-- build / typecheck green;
-- dependency/SCA audit + secret scan (no committed secrets, no critical vulnerabilities);
-- AI-trace scrub on tracked files (no "Generated with Claude", no `Co-Authored-By` AI, no AI
-  emoji; the repo's own `.gitignore` does not list `.claude/`) per `working-rules.md`;
-- for a public repo: README and description read as human-written (the de-AI rules in
-  `working-rules.md`).
-Any failure blocks the release until fixed.
+Run `~/.claude/skills/_shared/gate.sh <project-dir>` (build/typecheck, secret scan, dependency
+audit, leftover-debug and AI-trace scan, tracked-.env and `.gitignore` checks) and show its table.
+Any FAIL blocks the release; a SKIP on a check that matters for this target (e.g. no dependency
+audit before publishing a package) is resolved, not waved through. On top of the script, for a
+public repo: README and description read as human-written (the de-AI rules in `working-rules.md`).
 
 ### Stage 3 — Thin changelog
 From the slice list and the intent, write a short user-facing changelog (what a user can now do,

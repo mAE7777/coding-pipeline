@@ -70,8 +70,13 @@ For each rule you think you heard, try to write ONE concrete example with real d
 - A rule that needs many examples is probably several rules (split). A story drowning in
   questions is not ready (keep asking).
 
-## E. The recommended-answer question format (ask one at a time)
-Never dump an open question. For each:
+## E. The structured-question format (recommend first, show progress)
+Never dump an open question; every question leads with a recommendation and its reasoning.
+**Harness with a native question tool** (Claude Code: `AskUserQuestion`): use it. Recommended
+option first, labeled "(Recommended)"; a one-line description per option; batch up to 4 questions
+in ONE call only when they are independent (no answer would change another question); "Other" is
+provided automatically.
+**Harness without one** (Codex CLI and similar): markdown fallback, one question per message:
 ```
 **Recommended:** Option B — <1-2 sentence reasoning grounded in best practice / the stated goal>.
 
@@ -84,10 +89,11 @@ Never dump an open question. For each:
 
 Reply with a letter, say "recommended", or give your own.
 ```
-For short-answer questions, lead with `**Suggested:** <answer> — <reasoning>`. One question per
-message; never reveal queued questions. Stop when all material ambiguities are resolved or the
-user signals done. There is NO fixed question cap for material gaps; the filtering and grounding
-are what keep the count low.
+For short-answer questions, lead with `**Suggested:** <answer> — <reasoning>`.
+**Show progress every round**: say how many material gaps remain and where ("2 material gaps
+left: data lifecycle, auth"). Hiding the queue makes interrogation feel endless; the count costs
+nothing. Stop when all material ambiguities are resolved or the user signals done. There is NO
+fixed question cap for material gaps; the filtering and grounding are what keep the count low.
 
 ## F. What may be defaulted vs what must be asked
 Default-and-record-as-`[ASSUMPTION]` (safe + obvious, low impact): error-message wording,

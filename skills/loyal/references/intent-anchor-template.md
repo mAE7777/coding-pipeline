@@ -62,10 +62,11 @@ lifecycle, integration failure modes, etc. One line each. Omit dimensions that d
 - **Nothing material is assumed silently.** Every inference lives in the Assumptions Index and is
   confirmed at the gate. An assumption baked into a DoD line instead of surfaced here is a
   process violation.
-- **The evaluator never sees this file.** Check Mode passes the isolated evaluator only the Goal
-  and Persona; the DoD, examples, and resolved details are the harness's private diff target, so
-  the evaluator must rediscover behaviors rather than confirm a list. qa, by contrast, DOES see
-  the EARS DoD + examples (it checks correctness against the stated requirements).
+- **The evaluator never sees this file.** Check Mode passes the isolated evaluator only the Goal,
+  the Persona, and the project's build/run commands (which leak no intent); the DoD, examples, and
+  resolved details are the harness's private diff target, so the evaluator must rediscover
+  behaviors rather than confirm a list. qa, by contrast, DOES see the EARS DoD + examples (it
+  checks correctness against the stated requirements).
 - **The hash is a tamper check**, not security. It exists so a later "no drift" result cannot be
   quietly manufactured by editing the anchor. If intent genuinely changed, append a dated
   `## Re-freeze` section below the original and note in the ledger that the drift baseline reset.

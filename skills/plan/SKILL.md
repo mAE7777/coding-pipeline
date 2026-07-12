@@ -55,8 +55,9 @@ Load `references/interrogation.md`. Then:
 2. **Ground each candidate rule in a concrete example.** Where you can write a real example,
    intent is confirmed; where you can't, it's a gap.
 3. **Triage gaps into questions, never guess** (RED-card: turn unknown-unknowns into known
-   questions). Ask one at a time using the **recommended-answer format** (a `**Recommended:**`
-   option + reasoning, a small option table, "reply letter / 'recommended' / your own").
+   questions). Ask using the structured-question format (interrogation.md §E): the harness's
+   native question tool when it has one, the markdown recommended-answer table when it does not;
+   always lead with a recommendation, and say how many material gaps remain.
 4. **Write each answer back** into the right anchor section immediately; replace superseded
    statements, don't duplicate.
 
