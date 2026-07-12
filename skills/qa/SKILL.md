@@ -57,6 +57,17 @@ Preserve/Verify directives (load `~/.claude/skills/_shared/references/steal-prot
 constant, missing field, or paraphrased formula is a STEAL_DEVIATION, reported as a `contradicts`
 or `partial` gap.
 
+### Stage 2b — Anti-fabrication guard (before trusting the verdict)
+A subagent can emit tool-call syntax as plain text, execute nothing, and still return a plausible
+structured verdict. Before acting on the report: (1) confirm the verifier actually executed tools
+(a nonzero tool-call count; zero tools with any HOLDS is fabrication by definition); (2) spot-check
+at least one cited trace against reality (the quoted command re-runs, the cited file exists, the
+output fragment matches). If either check fails, discard the report in full and re-spawn the
+verifier once with an explicit "invoke tools for real; never write tool-call syntax as text"
+instruction. If the second spawn also fails, run the checks yourself (harness-grounded) and record
+that verifier isolation was compromised this pass. A fabricated verdict accepted as real is the
+worst outcome this skill can produce.
+
 ### Stage 3 — Self-certify or escalate (bounded)
 - **All HOLDS with evidence, no medium+ security finding** → report PASS in one line, evidence
   collapsed. Done. Do not manufacture findings to look useful.
@@ -66,17 +77,19 @@ or `partial` gap.
   is genuinely ambiguous (is this intended?), or (c) a security finding touches credentials or
   an irreversible action.
 
-### Stage 4 — Deterministic gate (zero human attention)
-Run, or confirm `/loyal` already ran, the rot/security gate on the slice: lint, a complexity
-threshold, clone/duplication detection, dependency/SCA scan, secret scan. Report pass/fail counts
-only, as a separate block. Name any check skipped for lack of a configured tool rather than
-implying it passed.
+### Stage 4 — Deterministic gate (owned here, zero human attention)
+Run the gate script: `~/.claude/skills/_shared/gate.sh <project-dir>`. It is an actual script,
+not a model behavior: secret scan, lint, typecheck/build, dependency audit, leftover-debug and
+AI-trace scan, complexity/clones when the project's tools exist, each reported PASS/FAIL/WARN/SKIP
+deterministically (a SKIP is named, never implied as a pass). `/qa` is the gate's sole owner in
+the loop; report the script's table as a separate block.
 
 ### Stage 4b — Definition-of-Done exit check
 The slice is "done" only when BOTH its EARS criteria HOLD with evidence AND the global Definition
 of Done holds: independent review done (this pass), tests written and passing, build/CI green,
-security gate clean, accessibility/performance checked where applicable, no known critical defect,
-docs/changelog updated. Report DoD as a short checklist. An unmet DoD item blocks "done" even if
+security gate clean, accessibility/performance checked where applicable, no known critical defect.
+(Docs/changelog belong to the whole-product DoD at `/integrate` and `/deploy`, not per slice.)
+Report DoD as a short checklist. An unmet DoD item blocks "done" even if
 every EARS criterion HOLDS; route it to `/dev` or `/fix`.
 
 ### Stage 5 — Record

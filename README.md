@@ -1,6 +1,6 @@
 # Claude Code Pipeline II
 
-A development harness for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), rebuilt for frontier agents (Opus 4.8 at high/max effort, Codex GPT-5.x). It replaces the earlier [coding-team](https://github.com/mAE7777/coding-team) pipeline, which froze a heavy `phases.md` up front and asked for approval at every transition.
+A development harness for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), built for frontier agents at high reasoning effort (Fable 5 and Codex GPT-5.6 first; Opus 4.8 and GPT-5.5 at xhigh run it too). It replaces the earlier [coding-team](https://github.com/mAE7777/coding-team) pipeline, which froze a heavy `phases.md` up front and asked for approval at every transition.
 
 One position drives the whole thing: **thick intent, thin code**. The field answers AI-code drift with more specs, but a spec is feedforward, it sets the target once and hopes. What actually bounds drift is a sensor. So the rigor goes to two layers and nowhere else: the intent layer (interrogate what to build until it is complete, play it back, freeze it) and the verification layer (isolated, evidence-bound checks that reconstruct behavior from the finished code alone). The code layer is left to the model, written freely and kept hidden.
 
@@ -9,10 +9,12 @@ The governing test for every rule in here: a skill or constraint earns its place
 ## The loop
 
 ```
-(scout?) → plan → for each slice:  dev → verify → explain → integrate → deploy
+(scout?) → plan → for each slice:  dev → verify → integrate → deploy
                                             │
-  plan  = interrogate intent, EARS anchor, CONFIRM gate     └→ fix (off-loop)
-  verify = loyal (intent drift) + qa (correctness/security) + deterministic gate
+  plan    = interrogate intent, EARS anchor, CONFIRM gate    └→ fix (off-loop)
+  verify  = loyal (intent drift) + qa (correctness/security) + the gate script,
+            run concurrently; a clean pass rolls straight into the next slice
+  explain = on-demand recap in the reader's register (engineer/founder/investor/user)
 ```
 
 A "phase" here is not a layer or a formula. It is a vertical slice, one user-facing capability cut end to end, sized to what the model builds reliably and a human verifies in one pass. The riskiest, load-bearing slice goes first; the hard part is never deferred to a later slice or version.
@@ -38,7 +40,7 @@ Every slice passes through four layers, kept separate on purpose, because a clea
 
 1. **Intent drift** via `/loyal`: behavior reconstructed from the finished code, diffed against the frozen anchor.
 2. **Correctness and security** via `/qa`: isolated, ideally a different model, falsifying each acceptance criterion and classifying every gap as missing, partial, contradicting, or unrequested.
-3. **Rot and secrets** via the deterministic gate: lint, complexity, clone detection, dependency scan, secret scan.
+3. **Rot and secrets** via the deterministic gate, a real script ([`skills/_shared/gate.sh`](skills/_shared/gate.sh), owned by `/qa`): secret scan, lint, typecheck, dependency audit, leftover-debug and AI-trace scan, complexity/clones when the project's tools exist. Every check reports PASS, FAIL, WARN, or SKIP; a skipped check is named, never implied as a pass. Deterministic means a script runs it, not a model re-deriving it.
 4. **The definition-of-done** exit gate.
 
 Two rules hold across all of it. Isolation: a verifier runs in a fresh context that did not write the code, preferably a different model, because self-review is biased toward its own work. Evidence over assertion: every verdict is backed by a real command and its output, a trace, or a screenshot. "Looks done" is rejected. There are no finding quotas; a forced minimum trains the eye to skim.

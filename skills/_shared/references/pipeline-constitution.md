@@ -1,8 +1,9 @@
 # Pipeline Charter
 
 Principles for the coding pipeline (scout, plan, dev, qa, loyal, explain, fix, integrate, polish,
-deploy). Principles, not prescriptions. Rebuilt 2026-06-20 for frontier agents (Opus 4.8
-xhigh/max, Codex GPT-5.5/5.6 xhigh). Full rationale and evidence:
+deploy). Principles, not prescriptions. Rebuilt 2026-06-20, hardened 2026-07-12, for frontier
+agents at high reasoning effort (Fable 5 and Codex GPT-5.6 first; Opus 4.8 xhigh and GPT-5.5
+xhigh run it too). Full rationale and evidence:
 `~/Projects/lab/intent-diff-driven-design/pipeline-redesign.md` and the v2 blueprint
 `~/Projects/lab/intent-diff-driven-design/pipeline-v2-design.md`.
 
@@ -21,11 +22,12 @@ freely downstream because intent was pinned upstream.
 ## The loop
 `(scout? optional) → plan [interrogate intent → EARS anchor + contracts → CONFIRM gate] → for each
 slice: dev [build hidden, hard-part-first, self-verify, ask-don't-guess] → verify [loyal intent +
-qa correctness/security with converge + DoD, all isolated/evidence-bound/escalate-by-exception,
-plus the deterministic gate] → explain [chosen register] → integrate [whole-product converge +
+qa correctness/security with converge + DoD, run concurrently where the harness allows, all
+isolated/evidence-bound/escalate-by-exception, plus the deterministic gate script owned by qa; a
+clean pass continues to the next slice automatically] → integrate [whole-product converge +
 analyze + DoD] → deploy [back-translation gate].` `fix` = off-loop targeted change. `explain` = the
-4-mode (engineer/founder/investor/user) layer that keeps code hidden. `polish` = optional product
-scrutiny, not part of the coding loop.
+4-mode (engineer/founder/investor/user) layer that keeps code hidden, on demand and after the
+final slice. `polish` = optional product scrutiny, not part of the coding loop.
 
 ## Artifacts (the whole state)
 - `intent-anchor.md` — immutable frozen intent: goal; definition-of-done as **EARS statements,
@@ -61,9 +63,11 @@ scrutiny, not part of the coding loop.
 - **Four verification layers per slice, isolated and evidence-bound**: (1) intent drift → `/loyal`
   (behavior reconstruction vs the frozen anchor); (2) correctness + security → `/qa` (isolated,
   ideally a different model; falsifies each EARS criterion; classifies gaps as
-  missing/partial/contradicts/unrequested); (3) rot + secrets → the deterministic gate (lint,
-  complexity, clones, SCA, secrets); (4) the Definition-of-Done exit gate. Keep them separate; a
-  clean intent pass does not mean clean internals. `integrate` runs the whole-product versions
+  missing/partial/contradicts/unrequested); (3) rot + secrets → the deterministic gate, an actual
+  script (`~/.claude/skills/_shared/gate.sh`, sole owner `/qa`): secrets, lint, typecheck,
+  dependency audit, AI traces, complexity/clones when the project's tools exist; deterministic
+  means a script runs it, not a model re-deriving it; (4) the Definition-of-Done exit gate. Keep
+  them separate; a clean intent pass does not mean clean internals. `integrate` runs the whole-product versions
   (converge + analyze + full DoD).
 - **No quotas**: never force a minimum finding count. Manufactured findings train the eye to skim.
 
@@ -96,7 +100,7 @@ surfaces in qa's converge check. This restores the v1 curated capability and the
 as a true superset, on demand.
 
 ## Security is continuous
-Write-time hooks, the per-slice deterministic gate (SCA/secrets), the verifier's security lens,
+Write-time hooks, the per-slice gate script (SCA/secrets), the verifier's security lens,
 and the pre-deploy audit + back-translation gate. Not just at deploy. Untrusted input and
 credentials are where models still fail regardless of capability.
 

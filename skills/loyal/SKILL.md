@@ -88,14 +88,18 @@ fatigue; end-of-project is too late. One pass per milestone bounds drift to a sa
 2. Determine the phase code surface: the files changed since the last ledger checkpoint (or,
    if not under version control, ask the user which files implement the milestone just reached).
 3. Read `intent-ledger.md` to see which DoD behaviors were already confirmed and which deltas
-   are still open.
+   are still open. Never read a `## Vigilance` block as verdict history; if one sits at
+   `outcome: pending` (a session died mid-probe), resolve and reveal it to the user first, then
+   proceed. A pending planted item is not ground truth.
 
 ### Stage 1: Spawn the loyal-evaluator (isolated reconstruction)
-Spawn the `loyal-evaluator` subagent with a FRESH context. Pass it ONLY these three things,
+Spawn the `loyal-evaluator` subagent with a FRESH context. Pass it ONLY these four things,
 and nothing else:
 - the phase code surface (the files / diff),
 - the one-line **goal** from the anchor,
-- the **persona** from the anchor.
+- the **persona** from the anchor,
+- the build/run/test commands from `AGENTS.md` (commands leak no intent; they only cut
+  UNGROUNDED noise and wasted toolchain rediscovery).
 
 Do NOT pass: the definition-of-done behaviors, the load-bearing behavior, the specs, the phase
 plan, the dev conversation, or your own expectations. Withholding the DoD is deliberate: the
@@ -136,7 +140,11 @@ The human does not do this comparison; their memory has co-drifted with the buil
 Compute and label each item:
 - **HOLDS**: a DoD behavior is present and its grounding trace matches intent.
 - **DRIFT**: a DoD behavior exists but does something different from what the anchor says.
-- **MISSING**: a DoD behavior is absent from `behaviors[]`.
+- **MISSING**: a DoD behavior is absent from `behaviors[]`. Calibrate before alarming: absent
+  can mean not built, or just never exercised (the evaluator does not know what to look for, by
+  design). Check the evaluator's `ungrounded[]` and traces first, and let `/qa`'s direct check of
+  that criterion settle it; loyal's strong unique signals are DRIFT, EXTRA, ORPHAN, and the
+  purpose diff, not MISSING.
 - **EXTRA**: a behavior exists that no DoD statement called for (scope creep / led-by-the-nose).
 - **ORPHAN**: an evaluator orphan (unexplained behavior).
 - **LOAD-BEARING**: the evaluator never saw the load-bearing behavior, so map it now. Read the
@@ -166,22 +174,20 @@ fix instruction) / **inspect** (reveal an item's grounding trace) / **ask** (que
 Append to `intent-ledger.md`: milestone name, date, the per-item verdicts, the user's decision,
 and any correction sent back to dev. This ledger is the drift history and the input to Status Mode.
 
-### Stage 5: Deterministic quality gate (parallel, zero human attention)
-Independently of the fidelity result, run the rot/security gate on the phase code surface and
-report it as a SEPARATE, clearly-labeled block (never folded into the fidelity glance):
-- linters / formatters (style),
-- a complexity threshold (flag functions over the project's cyclomatic limit),
-- clone / duplication detection,
-- dependency / SCA scan and a secret scan.
-Report pass/fail counts only. Then state the boundary verbatim: "Intent fidelity is judged above;
-internal quality and security are judged here and by /qa. A clean fidelity result does not mean
-the internals are clean." If the project has no configured tools for a check, say which checks
-were skipped rather than implying they passed.
+### Stage 5: Deterministic quality gate boundary
+The rot/security gate is an actual script, `~/.claude/skills/_shared/gate.sh`, and `/qa` is its
+sole owner inside the pipeline loop; do not duplicate the run here when `/qa` is part of this
+build. Only when loyal runs standalone (vibe coding with no `/qa` in the loop), run the script
+yourself and report its table as a SEPARATE, clearly-labeled block (never folded into the
+fidelity glance). Either way, state the boundary verbatim: "Intent fidelity is judged above;
+internal quality and security are judged by the deterministic gate and /qa. A clean fidelity
+result does not mean the internals are clean."
 
 ### Success: a glanceable delta the user judged in one pass, ledger updated, gate run.
 ### Failure: evaluator could not ground any behavior (inconclusive), or no anchor exists (HALT).
 
-> HALT after each Check pass. The next milestone gets its own pass.
+> A no-drift pass is one line and continues the loop. HALT for a user decision only when an item
+> is not HOLDS, the pass is inconclusive, or fabrication was detected.
 
 ---
 
@@ -192,10 +198,11 @@ research finds that operators stop monitoring automation they trust, and more so
 mode measures whether that is happening, and it only works if the planted lie is persisted to disk
 before the user sees it, never held in the model's head across turns.
 
-**Schedule (deterministic, but the lie is hidden):** a vigilance pass fires when the milestone
-index is divisible by 4, or on a cadence the user sets. The cadence is allowed to be known; what
-must stay hidden is WHICH item in the report is false. Knowing a test is due does not let the user
-fake catching it, because they still have to find the planted item.
+**Manual only.** A vigilance pass runs ONLY when the user explicitly invokes `/loyal vigilance`
+(or has set an explicit cadence themselves). It never fires automatically: at the scale of a solo
+build a scheduled probe barely ever triggers, and a planted verdict is not something this skill
+inserts unasked. What must stay hidden is WHICH item in the report is false; knowing a probe is
+running does not let the user fake catching it, because they still have to find the planted item.
 
 When a Check pass is also a vigilance pass:
 1. **Plant and persist first.** Before rendering the Stage 3 report, pick one item to falsify (flip

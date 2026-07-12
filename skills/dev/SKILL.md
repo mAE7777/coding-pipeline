@@ -63,13 +63,15 @@ surface why rather than faking it or stubbing.
 Mark the slice done in `slices.md` and set the next `current:`. If a real convention or gotcha
 emerged, add one line to `AGENTS.md` (keep it lean). Note anything that should reshape the
 remaining slices. Then hand the slice to its verification gate: `/loyal check` (intent fidelity)
-and `/qa` (correctness). After it passes, recap what the slice now does via `/explain` (founder or
-user register by default), not by showing code.
+and `/qa` (correctness); they are isolated from each other by design, so spawn their evaluators
+concurrently where the harness allows. `/explain` recaps run on demand and after the final slice
+(founder or user register), never as per-slice ceremony; code stays hidden either way.
 
 ### Success: the slice's load-bearing behavior works and is proven by a green check shown as evidence; `slices.md` updated.
 ### Failure: cannot reach a green check, or a contract had to be broken. HALT and surface it.
 
-> HALT after the slice. Verification runs next, then the next slice.
+> After the slice, verification runs. On a clean pass, continue to the next slice automatically;
+> HALT only on a failed check, a material question, or when the user asked to review each slice.
 
 ## Guardrails (do not rebuild a cage)
 - No `dev-planner` / `task-implementer` subagents, no multi-section plan file, no Quick/Standard/
@@ -78,9 +80,10 @@ user register by default), not by showing code.
   could be 50 get rewritten.
 - Don't defer the hard part to a later slice. Don't insert demo/placeholder data that hides a
   behavior that doesn't actually work.
-- For UI work, build to `design-intent.md` and avoid generic AI aesthetics (lean on the
-  `frontend-design` guidance). The rendered screen is what the user judges, so make this slice's
-  screen real, not a placeholder.
+- For UI work, build to the anchor's design-intent section and avoid generic AI aesthetics (lean
+  on the `frontend-design` guidance; when the design carries real stakes, run the `/taste-design`
+  lint, or hand the page's direction to `/taste-design` or `/atelier` before building). The
+  rendered screen is what the user judges, so make this slice's screen real, not a placeholder.
 
 ## Ecosystem
 - **Reads**: `slices.md`, `intent-anchor.md`, `contracts.md`, `AGENTS.md`.

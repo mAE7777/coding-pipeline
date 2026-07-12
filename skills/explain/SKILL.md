@@ -54,5 +54,5 @@ needs data you do not have (e.g. investor metrics), say what is missing rather t
 ## Ecosystem
 - **Reads**: `intent-anchor.md`, `slices.md`, `/loyal` and `/qa` results + evidence, `CHANGELOG.md`.
 - **Loads**: `references/modes.md`.
-- **Used by**: `/deploy` (user-mode changelog), the per-slice loop (a founder/user recap after a
-  slice), and investor updates.
+- **Used by**: `/deploy` (user-mode changelog), on-demand recaps during the loop and after the
+  final slice, and investor updates.
