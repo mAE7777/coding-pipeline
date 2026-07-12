@@ -241,5 +241,5 @@ When a Check pass is also a vigilance pass:
 - **Boundary siblings**: hands correctness/security to /qa and rot to the Stage 5 gate. When a
   DRIFT turns out to be a real defect, route the fix through /fix.
 - **Research**: if the evaluator repeatedly cannot ground behaviors for a given stack (no runner,
-  no render path), emit a request to `~/.claude/skills/_shared/requests/pending/` for a grounding
-  harness for that stack rather than silently narrating.
+  no render path), build a grounding harness for that stack (a runner, a render route, a test
+  entry point) rather than silently narrating.

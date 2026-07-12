@@ -42,6 +42,5 @@ investor) for the user's judgment. Write a short product-readiness note.
 ## Ecosystem
 - **Reads**: `intent-anchor.md`, README, startup-track docs; runs the product; researches the
   market.
-- **Spawns (optional)**: `deep-researcher` / market research for real external data.
-- **Routes to**: `/fix`, `/dev`. **Feeds**: the startup pipeline (`/launch`, `/scale`) if
-  applicable.
+- **Spawns (optional)**: a research subagent / market research for real external data.
+- **Routes to**: `/fix`, `/dev`. **Feeds**: a startup pipeline, if one applies.

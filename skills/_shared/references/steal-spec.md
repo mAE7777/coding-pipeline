@@ -1,8 +1,8 @@
 # Steal Reference Specification
 
-> Format for all steal reference docs at `~/.claude/projects/<name>.md`.
-> Consumed by: /plan (Phase 1 step 1c, Phase 4 task annotation, Phase 4b audit),
->              task-implementer (pre-implementation reading).
+> Format for all steal reference docs (`steal-*.md` at the project root, or entries in a
+> project index you keep).
+> Consumed by: /plan (steal detection and Steal-block generation) and /dev (pre-port reading).
 
 A steal reference is an implementation guide — not insights, not lessons, not inspiration.
 It answers exactly: what code/pattern to read, what to preserve verbatim, what minimal
@@ -173,13 +173,13 @@ After running this sweep: review the final Preserve list one more time and ask "
 
 **Phase 1 step 1b** (local): reads steal-*.md, reference-*.md at project root.
 
-**Phase 1 step 1c** (global): reads `~/.claude/projects.md`, checks each external project's
-"Stealable" entries against this project's tech stack + domain, loads `~/.claude/projects/<name>.md`
-for any matching project.
+**Phase 1 step 1c** (global): if you keep a project index, check each external project's
+"Stealable" entries against this project's tech stack + domain, and load the matching project's
+steal notes.
 
 For each task that maps to a steal item, /plan generates a Steal block in task notes:
 ```
-Steal: ~/.claude/projects/<name>.md §<N>. <Item Name> (type: code-portable)
+Steal: <steal-doc> §<N>. <Item Name> (type: code-portable)
 Preserve: <verbatim Preserve directives>
 Verify: <check derived from Preserve — e.g., "BM25_WEIGHT constant equals 0.3">
 ```
@@ -190,11 +190,11 @@ to user before proceeding.
 
 ---
 
-## How task-implementer Consumes This
+## How /dev Consumes This
 
-When a task has a Steal block:
+When a slice has a Steal block:
 
-1. Read `~/.claude/projects/<name>.md §<N>` before writing any code.
+1. Read the steal doc's cited section before writing any code.
 2. For code-portable: read the source file at the exact path and line range. Read it, do not infer.
 3. Port verbatim — apply ONLY adaptations listed. Nothing extra.
 4. Run all Validation checks before marking task complete.

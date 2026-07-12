@@ -24,7 +24,7 @@ Run `~/.claude/skills/_shared/gate.sh <project-dir>` (build/typecheck, secret sc
 audit, leftover-debug and AI-trace scan, tracked-.env and `.gitignore` checks) and show its table.
 Any FAIL blocks the release; a SKIP on a check that matters for this target (e.g. no dependency
 audit before publishing a package) is resolved, not waved through. On top of the script, for a
-public repo: README and description read as human-written (the de-AI rules in `working-rules.md`).
+public repo: README and description read as human-written, with no AI-styled prose tics.
 
 ### Stage 3 — Thin changelog
 From the slice list and the intent, write a short user-facing changelog (what a user can now do,
@@ -53,8 +53,7 @@ surface it immediately with rollback options.
 - Don't ship on "looks done"; ship on a green post-deploy check shown as evidence.
 
 ## Ecosystem
-- **Reads**: `slices.md`, `intent-anchor.md`, latest `/loyal` and `/qa` results,
-  `working-rules.md`, `AGENTS.md`.
+- **Reads**: `slices.md`, `intent-anchor.md`, latest `/loyal` and `/qa` results, `AGENTS.md`.
 - **Writes**: `CHANGELOG.md`; deploys.
 - **Gates**: deterministic release safety + the back-translation confirmation (the
   vibe-diff-before-high-risk control from the security research).

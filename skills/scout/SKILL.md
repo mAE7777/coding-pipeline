@@ -27,7 +27,7 @@ if false, kills the approach. That assumption gets the most scrutiny.
 
 ### Stage 2 — Investigate
 Research the options, feasibility, or codebase with the right tools (web search and fetch, reading
-the code, `deep-researcher` for unlimited-scope research, firecrawl/context7 for docs). When the
+the code, a research subagent for unlimited-scope questions, doc-fetching tools). When the
 unknown is an existing codebase, load `references/brownfield-analysis-guide.md` for a mapping
 strategy. Verify load-bearing claims against a primary source; a single blog is weak evidence. Run a deliberate
 disconfirming search for your leading option (look for why it fails) to counter confirmation bias.
@@ -49,6 +49,6 @@ freeze around. Length matches the stakes.
 - Don't default to a fixed stack; derive the choice from the project's nature.
 
 ## Ecosystem
-- **Reads**: the codebase (brownfield), the web, `deep-knowledge.md` if relevant.
-- **Spawns (optional)**: `deep-researcher` for unlimited-scope research.
+- **Reads**: the codebase (brownfield), the web.
+- **Spawns (optional)**: a research subagent for unlimited-scope research.
 - **Hands to**: `/plan` (freeze intent and contracts on the resolved ground).

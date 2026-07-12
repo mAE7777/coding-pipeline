@@ -95,7 +95,7 @@ belongs in Preserve. Over-preservation costs zero; a missed invariant costs a br
 ## How the pipeline consumes this (v2)
 
 **`/plan`** (intake): detect steal/reference docs at the project root (`steal-*.md`, `reference-*.md`,
-`port-*.md`) and check `~/.claude/projects.md` for a stealable match against this project's stack
+`port-*.md`) and check any project index you keep for a stealable match against this project's stack
 and domain. For each stolen item, classify the tier and write a **Steal block** into the slice that
 uses it, in `slices.md`. Run the Preserve sweep so the block is complete before the build starts.
 

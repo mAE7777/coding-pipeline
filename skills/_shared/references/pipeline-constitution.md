@@ -104,9 +104,8 @@ credentials are where models still fail regardless of capability.
 
 ## Taste: stand with users, leave no AI traces
 Every decision traces to "what happens when a real person uses this." Output (code, commits,
-READMEs, changelogs) reads as human-written: no AI traces, and the de-AI writing rules in
-`working-rules.md` apply. Identity and constraints live in `working-rules.md`; facts and stack
-in `tech-ledger.md`.
+READMEs, changelogs) reads as human-written: no AI attribution lines, no generated-with banners,
+no AI-styled prose tics.
 
 ## Deprecated (rebuilt 2026-06-20)
 Superseded and no longer used by the pipeline: `phases.md` and the phase-decomposition machinery

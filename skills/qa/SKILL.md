@@ -95,8 +95,8 @@ every EARS criterion HOLDS; route it to `/dev` or `/fix`.
 ### Stage 5 — Record
 Append the verdict, the gap classifications, and evidence pointers to a short qa note for the
 slice. If the verifier repeatedly cannot ground behaviors for this stack (no runner, no render
-path), emit a request to `~/.claude/skills/_shared/requests/pending/` for a grounding harness
-rather than narrating.
+path), set up a grounding harness (a runner, a render route, a test entry point) rather than
+narrating.
 
 ### Success: every EARS criterion HOLDS with evidence, no unresolved medium+ finding, DoD met.
 ### Failure: a required behavior FAILS after bounded retries, or a finding needs a human call. Escalate.

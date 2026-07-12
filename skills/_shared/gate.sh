@@ -227,7 +227,7 @@ else
   report PASS ai-traces "no AI fingerprints"
 fi
 if [ -f .gitignore ] && grep -qE '(^|/)\.claude' .gitignore; then
-  report WARN gitignore ".gitignore lists .claude (reveals tooling; remove per working rules)"
+  report WARN gitignore ".gitignore lists .claude (reveals tooling; remove it)"
 fi
 
 # ---- complexity / clones ---------------------------------------------------------
