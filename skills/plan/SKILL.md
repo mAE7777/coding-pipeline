@@ -35,7 +35,7 @@ vague → **Coaching** (pull it out, push hardest where assumptions are thinnest
 Right-size rigor to stakes. **Multi-goal split**: if the input bundles independent goals, surface
 them and confirm which one this run builds; the rest go to the `slices.md` backlog.
 **Steal detection**: if steal/reference docs (`steal-*.md`, `reference-*.md`, `port-*.md`) are at
-the project root, or `~/.claude/projects.md` lists a stealable match for this stack/domain, load
+the project root, or a prior project you know is a stealable match for this stack/domain, load
 `~/.claude/skills/_shared/references/steal-protocol.md`; you will carry a Steal block (tier +
 source + Preserve + Verify) into the slice that uses each item at Stage 6. If this is a
 genuinely trivial change (describable in one sentence, no material unknowns), say so and take the

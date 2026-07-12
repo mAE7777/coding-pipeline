@@ -3,9 +3,7 @@
 Principles for the coding pipeline (scout, plan, dev, qa, loyal, explain, fix, integrate, polish,
 deploy). Principles, not prescriptions. Rebuilt 2026-06-20, hardened 2026-07-12, for frontier
 agents at high reasoning effort (Fable 5 and Codex GPT-5.6 first; Opus 4.8 xhigh and GPT-5.5
-xhigh run it too). Full rationale and evidence:
-`~/Projects/lab/intent-diff-driven-design/pipeline-redesign.md` and the v2 blueprint
-`~/Projects/lab/intent-diff-driven-design/pipeline-v2-design.md`.
+xhigh run it too).
 
 ## The governing test
 A skill or rule earns its place ONLY if a frontier model at high reasoning effort does
@@ -106,9 +104,8 @@ credentials are where models still fail regardless of capability.
 
 ## Taste: stand with users, leave no AI traces
 Every decision traces to "what happens when a real person uses this." Output (code, commits,
-READMEs, changelogs) reads as human-written: no AI traces, and the de-AI writing rules in
-`working-rules.md` apply. Identity and constraints live in `working-rules.md`; facts and stack
-in `tech-ledger.md`.
+READMEs, changelogs) reads as human-written: no AI attribution lines, no generated-with banners,
+no AI-styled prose tics.
 
 ## Deprecated (rebuilt 2026-06-20)
 Superseded and no longer used by the pipeline: `phases.md` and the phase-decomposition machinery
@@ -120,4 +117,4 @@ tiers); `pipeline-state.md` ceremony; mandatory key-learnings; blanket per-trans
 The shared references `decomposition-framework.md`, `phase-design-principles.md`,
 `testing-strategy-archetypes.md`, `ai-output-determinism.md`, `user-journey-simulation.md` and
 the agents `dev-planner`/`task-implementer`/`qa-planner`/`category-executor` are retained for
-reference but unwired. Prior pipeline backup: `~/.claude/_backups/pipeline-20260620/`.
+reference but unwired.
