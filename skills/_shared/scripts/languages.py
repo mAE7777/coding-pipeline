@@ -24,7 +24,7 @@ CODE = {
 }
 # Markup and styles hold product code but not the control flow the inventory's patterns look for.
 NOT_SCANNED = {"html", "css", "sql", "terraform"}
-DOC = {".md", ".mdx", ".txt", ".rst", ".adoc", ".org"}
+DOC = {".md", ".mdx", ".txt", ".rst", ".adoc", ".org", ".pdf", ".docx", ".doc", ".odt", ".rtf", ".epub"}
 
 
 def language(path):

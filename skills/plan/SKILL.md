@@ -87,8 +87,8 @@ before the lock, and the lock playback names every unit that became a non-goal o
 
 A project that exists without a complete record. The procedure, the ledger rules, and the checks are in
 `references/adopt.md`; in short: `adopt.py inventory`, read with a coverage ledger (documents fully
-through `/capture` in rounds until nothing is missed, code by area with large areas to read-only explorers,
-at most 3 at once, writing notes to disk, and every load-bearing area read a second time independently),
+documents, code, tests, configuration, commit history, and issues alike through `/capture`'s rounds until
+nothing is missed, every point landing in the record),
 reconstruct the record with evidence labels, the product as found becomes M0 with a demo verified by
 running it, `adopt.py commands`, `adopt.py check`, the cold reads, a characterization gate on M0 (`/gate
 M0`), then the lock with discrepancies first. The owner's acceptance of M0 is the baseline every later

@@ -15,24 +15,28 @@ inventory writes docs/project/research/adoption/:
                     read-only explorer (at most 3 at once), each writing areas/<area>.md
   coverage.md       the ledger: one row per document and code file ("todo"), with lock files, vendored,
                     generated, binary, and asset files pre-accounted as "skipped (<class>)"
-Ledger statuses: read · outlined (<why the rest was not needed>) · delegated (areas/<area>.md) · skipped
-(<reason>) · stale (<evidence>) · superseded (<by what>). Documents must be read, stale, or superseded,
-never skipped or outlined: they carry intent.
+Ledger statuses: captured (SRC-<n>: imported by capture.py add --inventory and read through capture's rounds) ·
+read (a document, citing SRC-<n>) · skipped (<reason>) · stale (<evidence>) · superseded (<by what>). Documents,
+code, tests, and configuration are all captured and read in full; outlining is not reading.
 
 check FAILs when: a file the inventory lists (other than pre-accounted lock, vendored, generated, binary, and
-record files) has no ledger row; a document marked read cites no imported capture source (SRC-<n> in its note,
-present in docs/project/sources/index.md); a ledger row is still todo; a document row is outlined or skipped; a delegated row's area
-note is missing; an outlined row has no reason; a record file is missing (intent, brief, milestones,
-interfaces, decisions, state, gate); AGENTS.md has no labeled Commands; the commands were never run (adopt.py
-commands); milestones.md has no M0 (the product as found); a reconstructed done example carries no
-evidence label ([code ...], [doc ...], [git ...], [owner ...]); an earlier pipeline's file is not marked
-superseded; the imported documents' dossier fails capture.py check (which also requires every document read by
-independent extraction rounds until one found nothing missed); an area note does not open with "Load-bearing:
-yes (...)" or "no (...)"; a load-bearing area has no second, independent reading (areas/<area>.second.md) or no
-settled "## Reconciled" section.
+record files) has no ledger row, or a row still todo; a document is not read, captured, stale, or superseded; a
+code, test, configuration, or other file is not captured, stale, superseded, or skipped with a reason; a
+captured or read row cites no source the sources index holds; the dossier fails capture.py check (every unit
+of every source accounted for, every source read by independent extraction rounds until one found nothing
+missed) or capture.py closure (every point lands in the record); a git repository's history is not captured
+(capture.py add --git-log); a GitHub project's issue tracker is neither captured (--tracker) nor recorded in
+brief.md as "Tracker: not read (<reason>)"; a record file is missing (intent, brief, milestones, interfaces,
+decisions, state, gate); AGENTS.md has no labeled Commands; the commands were never run (adopt.py commands);
+milestones.md has no M0 (the product as found); a reconstructed done example or must-not-lose item carries no
+evidence label ([code ...], [doc ...], [git ...], [owner ...], [capture ...]); an earlier pipeline's file is not
+marked superseded; the characterization of M0 (gate_run.py --intent-only) never ran, ran on an older draft of
+the intent, or did not finish, or a discrepancy it found (a row not HOLDS) is missing from brief.md's
+"## Discrepancies" section.
 Exit 0 on success, 1 on a FAIL, 2 on bad usage.
 """
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -47,7 +51,7 @@ from gate_keys import commands as labeled_commands  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from languages import CODE as LANG, DOC as DOC_EXT  # noqa: E402
-BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz", ".mp3", ".mp4", ".mov",
+BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".zip", ".gz", ".mp3", ".mp4", ".mov",
               ".wav", ".woff", ".woff2", ".ttf", ".otf", ".sqlite", ".db", ".bin", ".psd", ".sketch", ".fig"}
 LOCKFILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Cargo.lock", "go.sum",
              "Gemfile.lock", "composer.lock", "Podfile.lock", "uv.lock", "bun.lockb"}
@@ -260,6 +264,42 @@ def run_commands(project):
     return 0
 
 
+def characterization_problems(project, brief_text):
+    """The blind characterization of M0 must have run on the current draft, and each discrepancy it found must be
+    listed for the owner."""
+    rounds = sorted((Path(project) / ".evidence/loyal/M0").glob("r*"),
+                    key=lambda p: int(p.name[1:]) if p.name[1:].isdigit() else 0)
+    finished = [r for r in rounds if (r / "verdict.json").is_file()]
+    if not finished:
+        return ["the characterization of M0 never ran (gate_run.py <project> --milestone M0 --intent-only)"]
+    last = finished[-1]
+    verdict = json.loads((last / "verdict.json").read_text())
+    if verdict.get("verdict") in ("INCONCLUSIVE", "ERROR", "BLOCKED"):
+        return [f"the latest characterization ({last.name}) ended {verdict.get('verdict')}: "
+                + "; ".join(verdict.get("reasons") or [])[:300]]
+    intent = Path(project) / "docs/project/intent.md"
+    now_sha = hashlib.sha256(intent.read_bytes()).hexdigest() if intent.is_file() else None
+    if verdict.get("intent_sha") != now_sha:
+        return [f"the draft intent changed after the latest characterization ({last.name}); run it again on this draft"]
+    judge = (last / "gate-judge.result.md").read_text(encoding="utf-8") if (last / "gate-judge.result.md").is_file() else ""
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", judge, flags=re.S)
+    rows = []
+    for b in reversed(blocks):
+        try:
+            rows = json.loads(b).get("intent_diff") or []
+            break
+        except ValueError:
+            continue
+    section = re.search(r"^## Discrepancies\s*$(.*?)(?=^## |\Z)", brief_text, re.M | re.S)
+    listed = section.group(1) if section else ""
+    out = []
+    for r in rows:
+        if str(r.get("status", "")).upper() != "HOLDS" and str(r.get("id", "")) not in listed:
+            out.append(f"characterization found {r.get('id')} {str(r.get('status', '')).upper()}, which brief.md's "
+                       "## Discrepancies does not list for the owner")
+    return out
+
+
 def check(project):
     project = Path(project).resolve()
     fails = []
@@ -274,40 +314,14 @@ def check(project):
                 continue
             path, cls, status, note = m.groups()
             if status == "todo" or not status:
-                fails.append(f"{path}: not accounted for yet")
-            elif cls in ("doc", "legacy-record") and not re.match(r"^(read|stale \(.+\)|superseded \(.+\))$", status):
-                fails.append(f"{path}: a document must be read (or marked stale/superseded with evidence), not '{status}'")
-            elif status.startswith("delegated"):
-                area = re.search(r"areas/[^\s)]+\.md", status + " " + note)
-                if not area or not (d / area.group(0)).is_file():
-                    fails.append(f"{path}: delegated, but its area note is missing")
-            elif status.startswith("outlined") and not re.match(r"^outlined \(.+\)$", status):
-                fails.append(f"{path}: outlined without saying why the rest was not needed")
-            elif not re.match(r"^(read|outlined \(.+\)|delegated.*|skipped \(.+\)|stale \(.+\)|superseded \(.+\))$", status):
-                fails.append(f"{path}: status '{status}' is not a ledger status")
-    areas = d / "areas"
-    for note in sorted(areas.glob("*.md")) if areas.is_dir() else []:
-        if note.name.endswith(".second.md"):
-            continue
-        text = note.read_text(encoding="utf-8")
-        first = next((l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")), "")
-        lb = re.match(r"^Load-bearing:\s*(yes|no)\b", first, re.I)
-        if not lb:
-            fails.append(f"areas/{note.name}: does not open with 'Load-bearing: yes (<why>)' or 'Load-bearing: no (<why>)'")
-            continue
-        if lb.group(1).lower() != "yes":
-            continue
-        second = note.with_name(note.stem + ".second.md")
-        if not second.is_file():
-            fails.append(f"areas/{note.name}: a load-bearing area without a second, independent reading ({second.name})")
-        rec_sec = re.search(r"^## Reconciled\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
-        if not rec_sec:
-            fails.append(f"areas/{note.name}: the two readings are not reconciled (## Reconciled)")
-            continue
-        for line in rec_sec.group(1).splitlines():
-            if line.strip().startswith("- ") and not re.search(
-                    r"· (note corrected|second reading wrong \(.+\)|unknown U-\d+|owner \(.+\))\s*$", line):
-                fails.append(f"areas/{note.name}: a difference between the readings is not settled: {line.strip()[:80]}")
+                fails.append(f"{path}: not accounted for yet" + (f" ({note})" if note else ""))
+            elif cls in ("doc", "legacy-record") and not re.match(r"^(read|captured|stale \(.+\)|superseded \(.+\))$", status):
+                fails.append(f"{path}: a document must be read or captured (or marked stale/superseded with evidence), "
+                             f"not '{status}'")
+            elif cls not in ("doc", "legacy-record") and not re.match(
+                    r"^(captured|skipped \(.+\)|stale \(.+\)|superseded \(.+\))$", status):
+                fails.append(f"{path}: code, tests, and configuration are captured and read in full (capture.py add "
+                             f"--inventory), or skipped with a reason; '{status}' is not enough")
     inv_path = d / "inventory.json"
     listed = set()
     if ledger.is_file():
@@ -315,13 +329,13 @@ def check(project):
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if len(cells) >= 4 and cells[0] not in ("Path", "") and not set(cells[0]) <= set("-: "):
                 listed.add(cells[0])
-                if cells[1] in ("doc", "legacy-record") and cells[3] == "read":
+                if cells[3] in ("read", "captured"):
                     src = re.findall(r"\bSRC-\d+\b", cells[4] if len(cells) > 4 else "")
                     index = project / "docs/project/sources/index.md"
                     known = set(re.findall(r"\bSRC-\d+\b", index.read_text(encoding="utf-8"))) if index.is_file() else set()
                     if not src:
-                        fails.append(f"{cells[0]}: marked read, but its note cites no imported source (capture.py add "
-                                     "... --kind doc, then SRC-<n> in the note)")
+                        fails.append(f"{cells[0]}: marked {cells[3]}, but its note cites no imported source (capture.py "
+                                     "add, then SRC-<n> in the note)")
                     elif not set(src) <= known:
                         fails.append(f"{cells[0]}: cites {', '.join(sorted(set(src) - known))}, which the sources index "
                                      "does not hold")
@@ -349,8 +363,8 @@ def check(project):
     intent = rec / "intent.md"
     if intent.is_file():
         for line in intent.read_text(encoding="utf-8").splitlines():
-            if re.match(r"^- I-D\d+", line) and not re.search(r"\[(code|doc|git|owner|capture) ", line):
-                fails.append(f"reconstructed done example without an evidence label: {line[:60]}")
+            if re.match(r"^- (I-D\d+|L-\d+)", line) and not re.search(r"\[(code|doc|git|owner|capture) ", line):
+                fails.append(f"reconstructed done example or must-not-lose item without an evidence label: {line[:60]}")
     inv = d / "inventory.json"
     if inv.is_file():
         for r in json.loads(inv.read_text()).get("files", []):
@@ -361,7 +375,25 @@ def check(project):
     if (rec / "sources").is_dir() and (rec / "sources/dossier.md").is_file():
         r = subprocess.run([sys.executable, str(HERE / "capture.py"), "check", str(project)], capture_output=True, text=True)
         if r.returncode != 0:
-            fails.append("the documents' dossier fails capture.py check:\n" + r.stdout.strip()[:800])
+            fails.append("the dossier fails capture.py check:\n" + r.stdout.strip()[:800])
+        r = subprocess.run([sys.executable, str(HERE / "capture.py"), "closure", str(project)], capture_output=True, text=True)
+        if r.returncode != 0:
+            fails.append("a point the reading found does not land in the record (capture.py closure):\n"
+                         + r.stdout.strip()[:800])
+    kinds = set()
+    for meta in (rec / "sources").glob("SRC-*/meta.json") if (rec / "sources").is_dir() else []:
+        try:
+            kinds.add(json.loads(meta.read_text())["kind"])
+        except (OSError, ValueError, KeyError):
+            continue
+    if (project / ".git").exists() and "git-history" not in kinds:
+        fails.append("the commit history was not read (capture.py add <project> --git-log)")
+    remotes = git(project, "remote", "-v") if (project / ".git").exists() else ""
+    brief_text = (rec / "brief.md").read_text(encoding="utf-8") if (rec / "brief.md").is_file() else ""
+    if "github.com" in remotes and "tracker" not in kinds and not re.search(r"^Tracker: not read \(.+\)", brief_text, re.M):
+        fails.append("the GitHub issues and pull requests were not read (capture.py add <project> --tracker), and "
+                     "brief.md does not say why (Tracker: not read (<reason>))")
+    fails += characterization_problems(project, brief_text)
     for f in fails:
         print(f"FAIL   adopt       {f}")
     if not fails:

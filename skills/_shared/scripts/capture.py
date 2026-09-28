@@ -3,9 +3,13 @@
 against them.
 
 Usage:
-  capture.py add <project> <file or folder> [--kind auto|chatgpt-export|chat-text|doc|log|pdf|office|audio]
+  capture.py add <project> <file or folder> [--kind auto|chatgpt-export|chat-text|doc|log|pdf|office|code|audio]
                  [--chat <id or title>] [--title <title>] [--speaker owner|document] [--language <code>]
                  [--model <whisper model>]
+  capture.py add <project> --inventory          every file adoption's inventory lists (code, tests, config,
+                                                documents), each a source, the coverage ledger updated
+  capture.py add <project> --git-log            the project's commit history, one unit per commit, oldest first
+  capture.py add <project> --tracker            its GitHub issues and pull requests with their comments
   capture.py list <conversations.json>          the conversations in a ChatGPT export
   capture.py reconcile <project> <extraction result.md>
                                                 an independent extraction against the dossier: every point it
@@ -39,6 +43,9 @@ Inputs.
                   (a scan) is named; a PDF with no text at all is not read, and says so.
   office          Word, OpenDocument, RTF, HTML, EPUB: converted to Markdown with pandoc (or to text with
                   textutil when pandoc cannot read it; the converter used is recorded), then split as a doc.
+  code            source code, tests, and configuration; one unit per window of 150 lines, speaker "code".
+  git history and the tracker are records (speaker "record"): one unit per commit, issue, or pull request. The
+  tracker needs the gh command signed in and a GitHub remote; without them the import says so and fails.
 A folder is walked (hidden folders, dependencies, builds, and the sources folder itself left out): every file
 it can read becomes a source, a file unchanged since an earlier import is skipped, code files are left to the
 code reading of /plan adopt, and every file it could not read is named with the reason. The walk is recorded in
@@ -75,8 +82,11 @@ MARK = re.compile(rf"^\s*({OWNER_MARK}|{ASSIST_MARK})\s*", re.M)
 STRONG = re.compile(r"^\s*(You said:|ChatGPT said:|Claude said:)\s*", re.M)
 CATEGORIES = {"problem", "vision", "narrative", "product", "user", "implementation", "research", "constraint",
               "decision", "rejected", "term", "other"}
-ATTRIBUTION = {"owner", "owner-agreed", "assistant", "document", "transcribed", "record"}
-COVERED_ROLES = ("document", "record")  # besides owner turns: every section and log window is read and accounted for
+ATTRIBUTION = {"owner", "owner-agreed", "assistant", "document", "transcribed", "record", "code"}
+CODE_WINDOW = 150
+INVENTORY_KINDS = {"doc": None, "legacy-record": None, "code": "code", "test": "code", "config": "code",
+                   "other": "code"}  # None: detected (doc, pdf, office); lockfile, vendored, generated, binary: not read
+COVERED_ROLES = ("document", "record", "code")  # besides owner turns: every section and log window is read and accounted for
 AUDIO_SUFFIX = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".mp4", ".mov", ".webm"}
 LOG_SUFFIX = {".log", ".jsonl", ".ndjson", ".out", ".err"}
 PANDOC_SUFFIX = {".docx", ".odt", ".rtf", ".html", ".htm", ".epub"}
@@ -296,6 +306,68 @@ def log_turns(text):
     return out
 
 
+def code_turns(text):
+    lines = text.splitlines()
+    return [{"node": None, "role": "code", "time": f"lines {i + 1}-{i + len(lines[i:i + CODE_WINDOW])}",
+             "text": "\n".join(lines[i:i + CODE_WINDOW]), "parent": None}
+            for i in range(0, len(lines), CODE_WINDOW) if "".join(lines[i:i + CODE_WINDOW]).strip()]
+
+
+SEP = "\x1e"
+
+
+def git_history(project):
+    """(text, turns): every commit, oldest first, with its full message and changed files."""
+    if not shutil.which("git") or not (Path(project) / ".git").exists():
+        raise Unreadable("not a git repository (no history to read)")
+    r = subprocess.run(["git", "-C", str(project), "log", "--reverse", "--date=iso-strict", "--name-status",
+                        f"--format={SEP}%H%n%ad%n%an%n%B"], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Unreadable(f"git log failed: {r.stderr.strip()[-200:]}")
+    turns = []
+    for block in r.stdout.split(SEP)[1:]:
+        lines = block.strip("\n").splitlines()
+        if len(lines) < 3:
+            continue
+        turns.append({"node": lines[0], "role": "record", "time": lines[1],
+                      "text": f"commit {lines[0][:12]} by {lines[2]}\n" + "\n".join(lines[3:]).strip(), "parent": None})
+    if not turns:
+        raise Unreadable("the repository has no commits")
+    return r.stdout, turns
+
+
+def tracker_items(project):
+    """(text, turns): every GitHub issue and pull request, oldest first, with body and comments."""
+    gh = shutil.which("gh")
+    if not gh:
+        raise Unreadable("the gh command is not installed, so the issue tracker cannot be read")
+    turns, raw, limit = [], [], 100000
+    for kind in ("issue", "pr"):
+        r = subprocess.run([gh, kind, "list", "--state", "all", "--limit", str(limit), "--json",
+                            "number,title,body,state,createdAt,author,comments"], cwd=project, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise Unreadable(f"gh {kind} list failed ({r.stderr.strip()[-200:] or 'no output'}); sign in with gh auth "
+                             "login, or record the tracker as unread")
+        items = json.loads(r.stdout or "[]")
+        if len(items) >= limit:
+            raise Unreadable(f"gh returned {limit} {kind}s, the most it was asked for, so some may be missing")
+        raw.append(r.stdout)
+        for it in items:
+            comments = "\n".join(f"- {(c.get('author') or {}).get('login', '?')}: {c.get('body', '').strip()}"
+                                  for c in it.get("comments") or [])
+            text = (f"{'Pull request' if kind == 'pr' else 'Issue'} #{it['number']} ({it.get('state')}) by "
+                    f"{(it.get('author') or {}).get('login', '?')}: {it.get('title', '')}\n\n"
+                    f"{(it.get('body') or '').strip()}" + (f"\n\nComments:\n{comments}" if comments else ""))
+            # Keyed by content: an issue that gained comments comes back as a new version, never skipped.
+            turns.append({"node": f"{kind}-{it['number']}-{sha(text.encode())[:12]}", "role": "record",
+                          "time": it.get("createdAt", ""),
+                          "text": text, "parent": None})
+    turns.sort(key=lambda t: t["time"])
+    if not turns:
+        raise Unreadable("the tracker has no issues or pull requests")
+    return "\n".join(raw), turns
+
+
 def pdf_turns(path):
     tool = shutil.which("pdftotext")
     if not tool:
@@ -450,6 +522,12 @@ def cmd_add(argv):
         return 2
     project, src = Path(argv[0]).resolve(), Path(argv[1])
     opts = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1) if argv[i].startswith("--")}
+    if argv[1] in ("--inventory", "--git-log", "--tracker"):
+        try:
+            return {"--inventory": add_inventory, "--git-log": add_history, "--tracker": add_tracker}[argv[1]](project)
+        except Unreadable as exc:
+            print(f"FAIL   capture     {argv[1][2:]}: not read: {exc}")
+            return 1
     if src.is_dir():
         return add_folder(project, src.resolve(), opts)
     if not src.is_file():
@@ -504,13 +582,85 @@ def add_folder(project, folder, opts):
     return 1 if failed else 0
 
 
-def add_file(project, src, opts):
+def add_generated(project, title, kind, text, turns):
+    """Import text the script produced itself (history, tracker) as a source, appending to an earlier import."""
+    tmp = Path(tempfile.mkdtemp(prefix="capture-gen-")) / f"{slug(title)}.txt"
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        return add_file(project, tmp, {"--title": title}, preset=(kind, turns))
+    finally:
+        shutil.rmtree(tmp.parent, ignore_errors=True)
+
+
+def add_history(project):
+    text, turns = git_history(project)
+    return add_generated(project, "git history", "git-history", text, turns)
+
+
+def add_tracker(project):
+    text, turns = tracker_items(project)
+    return add_generated(project, "issue tracker", "tracker", text, turns)
+
+
+def add_inventory(project):
+    inv = Path(project) / "docs/project/research/adoption/inventory.json"
+    if not inv.is_file():
+        raise Unreadable("no adoption inventory yet (adopt.py inventory)")
+    files = json.loads(inv.read_text()).get("files", [])
+    known = {rev["sha256"]: meta["id"] for _, meta in existing_sources(project) for rev in meta["revisions"]}
+    rows, failed = {}, 0
+    for f in files:
+        if f["class"] not in INVENTORY_KINDS:
+            continue
+        path = Path(project) / f["path"]
+        if not path.is_file():
+            rows[f["path"]] = ("todo", "missing on disk")
+            continue
+        digest = sha(path.read_bytes())
+        if digest in known:
+            rows[f["path"]] = ("captured", known[digest])
+            continue
+        before = {m["id"] for _, m in existing_sources(project)}
+        kind = INVENTORY_KINDS[f["class"]]
+        try:
+            code = add_file(project, path, {"--title": f["path"], **({"--kind": kind} if kind else {})})
+        except Unreadable as exc:
+            rows[f["path"]] = ("todo", f"NOT READ: {exc}")
+            failed += 1
+            print(f"FAIL   capture     {f['path']}: not read: {exc}")
+            continue
+        new = [m["id"] for _, m in existing_sources(project) if m["id"] not in before]
+        if code == 0 and new:
+            rows[f["path"]] = ("captured", new[0])
+            known[digest] = new[0]
+        else:
+            rows[f["path"]] = ("todo", "import failed (see above)")
+            failed += 1
+    ledger = Path(project) / "docs/project/research/adoption/coverage.md"
+    if ledger.is_file():
+        out = []
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 4 and cells[0] in rows:
+                status, note = rows[cells[0]]
+                line = f"| {cells[0]} | {cells[1]} | {cells[2]} | {status} | {note} |"
+            out.append(line)
+        ledger.write_text("\n".join(out) + "\n", encoding="utf-8")
+    done = sum(1 for s_, _ in rows.values() if s_ == "captured")
+    print(f"inventory: {done} of {len(rows)} readable file(s) captured · {failed} not read" +
+          (" (named above; each stays todo in the coverage ledger)" if failed else ""))
+    return 1 if failed else 0
+
+
+def add_file(project, src, opts, preset=None):
     kind = opts.get("--kind", "auto")
-    kind = detect_kind(src) if kind == "auto" else kind
+    kind = preset[0] if preset else (detect_kind(src) if kind == "auto" else kind)
     raw = src.read_bytes()
     conversation, title, branches, skipped, notes = None, opts.get("--title") or src.stem, [], 0, []
     converter = None
-    if kind == "chatgpt-export":
+    if preset:
+        turns = preset[1]
+    elif kind == "chatgpt-export":
         convs = load_export(src)
         want = opts.get("--chat")
         if want:
@@ -538,6 +688,8 @@ def add_file(project, src, opts):
     elif kind == "office":
         text, converter = office_text(src)
         turns = doc_turns(text, opts.get("--speaker", "document"))
+    elif kind == "code":
+        turns = code_turns(raw.decode("utf-8", errors="replace"))
     elif kind == "audio":
         turns, err = audio_turns(src, opts.get("--language"), opts.get("--model", "turbo"))
         if turns is None:
@@ -561,6 +713,11 @@ def add_file(project, src, opts):
                 all(norm(a["text"]) == norm(b["text"]) for a, b in zip(main_prev, turns)):
             target, meta, old = folder, m, prev
             break
+        if kind in ("git-history", "tracker") and m["kind"] == kind:
+            # A later import adds only what is new or changed (new commits, new issues, an issue with new
+            # comments as a new version), keeping every earlier unit and its ID.
+            target, meta, old = folder, m, prev
+            break
     if target is None:
         n = len(existing_sources(project)) + 1
         meta = {"id": f"SRC-{n}", "title": title, "kind": kind, "conversation": conversation, "revisions": []}
@@ -571,7 +728,7 @@ def add_file(project, src, opts):
     else:
         main_old = [t for t in old if not t["id"].startswith("B")]
         known_nodes = {t["node"] for t in old if t.get("node")}
-        if conversation:
+        if conversation or kind in ("git-history", "tracker"):
             new = [t for t in turns if t["node"] not in known_nodes]
             by_node = {t["node"]: t["id"] for t in old if t.get("node")}
         else:
@@ -734,7 +891,8 @@ def cmd_check(argv):
             if (t["role"].startswith("owner") or t["role"] in COVERED_ROLES) and (src, tid) not in cited \
                     and (src, tid) not in skip:
                 where = "an edited-away owner turn (branch)" if tid.startswith("B") else \
-                    {"document": "a document section", "record": "a log window"}.get(t["role"], "an owner turn")
+                    {"document": "a document section", "record": "a record (log window, commit, issue)",
+                     "code": "a code window"}.get(t["role"], "an owner turn")
                 fails.append(f"{src} {tid}: {where} no unit cites and not listed as no-content: "
                              f"\"{t['text'][:60]}\"")
     round_fails, round_warns = check_rounds(project, srcs, units)
@@ -885,8 +1043,8 @@ def check_rounds(project, srcs, units):
     return fails, warns
 
 
-CLOSURE_STATE = re.compile(r"^(intent \(.+\)|brief \(.+\)|milestone M\d+|named non-goal \(.+\)|unknown U-\d+|"
-                           r"not adopted \(.+\))$", re.I)
+CLOSURE_STATE = re.compile(r"^(intent \(.+\)|brief \(.+\)|interfaces \(.+\)|milestone M\d+|named non-goal \(.+\)|"
+                           r"unknown U-\d+|not adopted \(.+\))$", re.I)
 
 
 def cmd_closure(argv):

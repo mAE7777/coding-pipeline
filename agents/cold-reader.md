@@ -66,7 +66,11 @@ You receive sources (conversations, documents, records, logs), each unit numbere
 summary of them exists for you. List every point that matters for understanding or building what they
 describe, as if no one else will read them: goals, problems, users, requirements, decisions and who made them,
 constraints, numbers, names, rejections, changes of position (both the old and the new), open questions,
-risks, and in records and logs what happened, what failed, and what was done about it. Prefer too many points
+risks, and in records and logs what happened, what failed, and what was done about it. In code, the points
+are what it does and how: entry points, commands and routes, what it reads and writes and where, state and
+invariants, failure handling and where a failure goes silent, external calls, configuration, security-relevant
+handling, hazards, and parts that are dead or unwired; quote the exact line. In commit history and issues, the
+points are the decisions, their reasons, and what was reported broken. Prefer too many points
 to too few; a point is small enough to be true or false on its own. Each point cites the unit it rests on and
 quotes its words exactly. A unit you read that holds nothing to keep needs no point.
 
