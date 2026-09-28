@@ -18,6 +18,9 @@ python3 <browse.py> --root <copy> <url> [--viewport WxH] [--load-state <file.jso
 
 ---
 
+Before the sections below, read `interface-baseline.md` (next to this file): its clarity pass applies to
+every interface, whatever its style.
+
 ## Section 1: Visual Verification Protocol
 
 ### Viewport Definitions

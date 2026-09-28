@@ -53,6 +53,10 @@ concurrency, integration failure, and data lifecycle: they are almost always mis
 - Integrations: timeouts, retries with backoff, idempotency, degradation that is designed and visible,
   quotas, token expiry, version changes.
 - Observability: what is logged (no secrets), which signals say it is healthy, knowing before a user says.
+- Interface (when there is one): the style (a named look, or the minimal style in the gate's
+  `interface-baseline.md`, the default for tools and panels); whether the look carries the product (then it
+  goes through `/atelier`); what the user must see on each screen, and what stays in the logs; how each failure
+  the user can meet is shown and what they do next.
 
 ## D. Example mapping: the gap detector
 For each rule you think you heard, write one concrete example with real data.

@@ -100,8 +100,10 @@ def carried_ids(project, mid):
 
 
 INTENT_CHECKERS = ("loyal-evaluator", "loyal-evaluator-pass2", "gate-judge")
+# Finding classes the judge must triage (block or log) at any severity but low; clarity is usually logged, but it
+# may never vanish between the reviewer and the verdict.
 REVIEW_BLOCKING = {"correctness", "requirement", "security", "wiring", "silent-degradation", "quality-substitution",
-                   "placeholder-unconsented", "interface"}
+                   "placeholder-unconsented", "interface", "clarity"}
 BROKEN_WIRING = {"UNWIRED", "UNCONSUMED", "PHANTOM"}
 
 

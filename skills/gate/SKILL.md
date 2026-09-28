@@ -73,6 +73,7 @@ The latest round per milestone from `docs/project/reviews/`, the open findings f
 whether a round is running (`.evidence/gate/M<k>.running`).
 
 ## The protocols the checkers use
+`references/interface-baseline.md` (every user interface: the floor under any style, and the clarity pass),
 `references/ui-ux-validation-protocol.md` (web UI), `references/native-ui-validation-protocol.md` (native),
 `references/game-qa-protocol.md` (games), `references/regression-and-coverage-strategy.md`. The
 code-verifier reads the one that fits; they also help when writing a milestone's demo ending.

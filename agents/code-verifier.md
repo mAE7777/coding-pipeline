@@ -47,8 +47,12 @@ heavy-job wrapper and the browser script, with exact commands.
   rejected, not rendered), and the unavailable path (model down, erroring, or empty shows an honest state).
   Network calls, timing, and randomness are not model-backed and are verified normally.
 
+- **Interface** (a product with a user interface): the clarity pass in `interface-baseline.md` (next to the
+  validation protocols). Hidden from the user never means hidden from the record: a failure the user cannot
+  see, or whose detail is missing from the log, is `silent-degradation`.
+
 Report every finding you can ground, with severity (high, medium, low) and your confidence; do not filter
-by severity, the gate decides what blocks. Never comment on style, naming, or formatting.
+by severity, the gate decides what blocks. Never comment on code style, naming, or formatting.
 
 ```json
 {"mode": "review",
@@ -58,7 +62,7 @@ by severity, the gate decides what blocks. Never comment on style, naming, or fo
  "mechanisms": [{"name": "...", "status": "HOLDS | FAILS | UNGROUNDED", "evidence": "..."}],
  "must_not_lose": [{"id": "L-01", "status": "HOLDS | FAILS | UNGROUNDED", "evidence": "..."}],
  "wiring": [{"component": "...", "status": "proven | UNWIRED | UNCONSUMED | PHANTOM | parked-unreachable", "evidence": "..."}],
- "findings": [{"id": "F01", "class": "correctness | requirement | security | wiring | silent-degradation | quality-substitution | placeholder-unconsented | interface",
+ "findings": [{"id": "F01", "class": "correctness | requirement | security | wiring | silent-degradation | quality-substitution | placeholder-unconsented | interface | clarity",
                "severity": "high | medium | low", "confidence": "high | medium | low",
                "summary": "...", "evidence": "command and verbatim output", "where": "path:line"}],
  "security": {"auth": "...", "injection": "...", "untrusted_input": "...", "secrets": "...", "boundary_validation": "..."},

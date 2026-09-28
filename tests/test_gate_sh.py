@@ -72,5 +72,27 @@ class GateShTest(unittest.TestCase):
             self.assertIn("FAIL   pipeline-traces", out.stdout)
 
 
+    def test_committed_templates_never_trip_the_trace_check(self):
+        """A project that commits its record straight from the templates must pass; the new names must fail."""
+        import tempfile
+        sys.path.insert(0, str(ROOT / "skills/_shared/scripts"))
+        import inbox  # noqa: E402
+        templates = ROOT / "skills/_shared/templates"
+        with tempfile.TemporaryDirectory() as d:
+            docs = Path(d) / "docs/project"
+            docs.mkdir(parents=True)
+            for name in ("intent.md", "milestones.md", "decisions.md", "interfaces.md", "fix-log.md"):
+                (docs / name).write_text((templates / name).read_text())
+            (docs / "inbox.md").write_text(inbox.HEADER)
+            subprocess.run(["git", "init", "-q", d], check=True)
+            subprocess.run(["git", "-C", d, "add", "docs/project"], check=True)
+            out = gate(d)
+            self.assertIn("PASS   pipeline-traces", out.stdout, out.stdout[-600:])
+            for trace in ("Weighed with /inbox review.", "Proven with rulings.py record.", "Run /next auto.",
+                          "Recorded by project_status record."):
+                (docs / "decisions.md").write_text(f"## D-003\n{trace}\n")
+                self.assertIn("FAIL   pipeline-traces", gate(d).stdout, trace)
+
+
 if __name__ == "__main__":
     unittest.main()

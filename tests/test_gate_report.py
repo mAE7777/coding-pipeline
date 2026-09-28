@@ -215,6 +215,14 @@ class GateReportTest(unittest.TestCase):
         r = self.report(5, self.evidence(5, odd))
         self.assertEqual(r["verdict"], "INCONCLUSIVE", r)
 
+    def test_a_clarity_finding_must_be_triaged(self):
+        review = {**REVIEW_PASS, "findings": [{"id": "F09", "class": "clarity", "severity": "medium",
+                                               "summary": "every row shows the internal handoff number"}]}
+        r = self.report(1, self.evidence(1, CLEAN, review=review))
+        self.assertEqual(r["verdict"], "INCONCLUSIVE", r)
+        judge = {**CLEAN, "logged": [{"id": "M1-F01", "summary": "F09 handoff numbers on every row", "evidence": "q"}]}
+        self.assertEqual(self.report(2, self.evidence(2, judge, review=review))["verdict"], "ACCEPT-READY")
+
     def test_malformed_or_missing_evidence_is_inconclusive_and_clears_the_tick(self):
         self.report(1, self.evidence(1, CLEAN))
         self.assertIn("gate-passed [x]", (self.root / "docs/project/milestones.md").read_text())

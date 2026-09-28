@@ -45,9 +45,9 @@ HEADER = """# Inbox
 
 <!--
 Suggestions, proposed changes, and new ideas waiting to be weighed: other people's opinions, user feedback,
-review notes, and ideas the owner floated without deciding. Nothing here is a decision. /inbox review weighs
-each item; once decided, it leaves this file and its decision entry in decisions.md quotes it and records
-where it went. Add items with inbox.py add; never renumber or delete one by hand.
+review notes, and ideas the owner floated without deciding. Nothing here is a decision. Once an item is
+decided, it leaves this file, and its entry in decisions.md quotes it and records where it went. Items are
+numbered in order; a number is never reused, and an item is never deleted by hand.
 -->
 
 Next: IN-001
