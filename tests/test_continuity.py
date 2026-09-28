@@ -303,6 +303,8 @@ class ContinuityTest(unittest.TestCase):
         context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("Inbox: 1 open item(s)", context)
         self.assertIn("$inbox review", context)
+        self.assertIn("Next (", context)
+        self.assertIn("computed from the record", context)
 
     def test_claim_ignores_reads_and_outside_files(self):
         hook("claim", {"session_id": "ccc", "cwd": str(self.root), "tool_name": "Read", "tool_input": {}})

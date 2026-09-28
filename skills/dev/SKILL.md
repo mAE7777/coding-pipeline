@@ -105,3 +105,6 @@ checkout, the note says so: ask the owner to close it, since two writers in one 
 
 ## Campaign: /dev M<k>-M<n>
 Only with the owner's authorization, recorded as a decision in their words. Follow `references/campaign.md`.
+
+## End
+Every stop (a freeze, a question to the owner, a blocker, a finished campaign step) ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill dev --arg M<k> --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

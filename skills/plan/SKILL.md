@@ -110,3 +110,6 @@ mark the old one superseded (never deleted).
 
 Report in plain words: what is locked, the milestone map, open unknowns and how each resolves, and the
 next step (`/dev M1`). Leave `state.md` with phase idle and the next step written.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill plan --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

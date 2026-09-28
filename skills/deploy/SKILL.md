@@ -46,3 +46,6 @@ Load-bearing rules:
    report at once with the rollback options.
 8. **Record**: tick released and live-verified in the milestones' Readiness lines (with the version or URL),
    and note the deploy in `state.md`.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill deploy --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

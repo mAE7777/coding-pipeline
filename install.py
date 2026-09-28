@@ -44,7 +44,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
-SKILLS = ("capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
+SKILLS = ("next", "capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
           "polish")
 RETIRED_SKILLS = ("qa", "integrate")
 SHARED = ("gate.sh", "scripts", "templates", "references/pipeline-constitution.md", "references/steal-protocol.md",

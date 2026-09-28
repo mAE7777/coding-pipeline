@@ -42,3 +42,6 @@ Never skip a flaky test silently or raise its timeout to hide it. Find the cause
 order, network). If it cannot be fixed now, quarantine it explicitly: in the fix log, `Quarantined: <test> ·
 owner <who> · reason <why> · expires <date>`, and mark it in the test itself so the runner reports it as
 QUARANTINED, not passing.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill fix --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

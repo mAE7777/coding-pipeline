@@ -23,3 +23,6 @@ scrutiny, not code review: correctness, wiring, and intent fidelity belong to th
    what the product does well, stated plainly (a venture project classifies findings through `/strategist`).
    Real defects go to `/fix` or into a milestone; a finding that questions the intent goes to the owner, never
    quietly into the plan. Write `docs/project/research/polish-<date>.md`.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill polish --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

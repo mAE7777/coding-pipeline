@@ -34,3 +34,6 @@ user's register.
 The latest gate round as the one-screen owner summary: the verdict, exceptions first (what failed, what
 was skipped and why, what needs a ruling), what held and what drifted in words, how to see the demo, and the
 readiness line.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill explain --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

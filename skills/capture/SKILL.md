@@ -64,3 +64,6 @@ idea, proposed change, or opinion in it becomes an inbox item citing its turns (
 <who> --kind <kind> --source "SRC-<n> T<a>-T<b>"`), weighed by `/inbox review`; a decision the owner states
 outright is a ruling and goes through `/plan amend`. In a venture project each source is also registered in helm's source ledger (the private
 overlay says how).
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill capture --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

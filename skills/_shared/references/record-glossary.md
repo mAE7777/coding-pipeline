@@ -44,6 +44,8 @@ mistaken for ambiguity in the product.
 - **Unknown** (U-nn): an open question with the way it will be settled.
 - **Inbox item** (IN-nnn, in `inbox.md`): a suggestion, proposed change, or new idea waiting to be weighed;
   once decided it leaves the inbox and its decision entry records where it went.
+- **Journal** (`journal.md`): one line per step taken (which step, when, in which session, the outcome, and what
+  came next), local-only.
 - **Local-only files**: working files kept out of commits (brief, state, gate settings, handoff notes,
   reviews, research, captured sources, `.evidence/` with test and review output).
 - **Gate settings** (`gate.md`): the project's extra check commands and which paths carry intent.

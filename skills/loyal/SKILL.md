@@ -41,3 +41,6 @@ revealed before anything else.
 ## status
 The intent ledger's recent checks, the vigilance record (caught and missed), and the open intent findings
 in `docs/project/reviews/*.findings.json`.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill loyal --arg M<k> --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

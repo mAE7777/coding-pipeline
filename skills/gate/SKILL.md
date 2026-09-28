@@ -76,3 +76,6 @@ whether a round is running (`.evidence/gate/M<k>.running`).
 `references/ui-ux-validation-protocol.md` (web UI), `references/native-ui-validation-protocol.md` (native),
 `references/game-qa-protocol.md` (games), `references/regression-and-coverage-strategy.md`. The
 code-verifier reads the one that fits; they also help when writing a milestone's demo ending.
+
+## End
+Every round report and every acceptance ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill gate --arg M<k> --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
