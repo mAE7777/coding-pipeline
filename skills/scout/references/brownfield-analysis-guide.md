@@ -13,7 +13,7 @@ Techniques for mapping existing codebases, identifying constraints, and discover
 4. Map the directory convention: src/, app/, pages/, api/, lib/, utils/, components/, etc.
 
 ### Layer 2: Architecture Patterns
-1. Entry points: Find the main entry file(s) — `src/index.ts`, `app/layout.tsx`, `src/main.ts`, etc.
+1. Entry points: Find the main entry file(s): `src/index.ts`, `app/layout.tsx`, `src/main.ts`, etc.
 2. Routing: Map how URLs/routes are handled (file-based, config-based, programmatic)
 3. State management: Identify how state flows (context, stores, props, URL state)
 4. Data layer: How data is fetched, cached, and mutated (API calls, ORM, direct DB)

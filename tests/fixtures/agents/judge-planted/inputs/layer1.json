@@ -1,0 +1,13 @@
+{
+ "status": "PASS",
+ "checks": [
+  {
+   "name": "gate.sh",
+   "status": "PASS"
+  },
+  {
+   "name": "test suite",
+   "status": "PASS"
+  }
+ ]
+}

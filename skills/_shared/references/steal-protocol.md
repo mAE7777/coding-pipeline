@@ -20,20 +20,20 @@ exact path, the item is a design-pattern, not code-portable; spec it accordingly
 ---
 
 ## Item Types
-- **code-portable** — source code exists locally. Port it verbatim: read the source file, copy the
+- **code-portable**: source code exists locally. Port it verbatim: read the source file, copy the
   implementation, apply only the mechanical changes in Adaptation Notes. Nothing else.
-- **design-pattern** — no code to copy; reconstructed from analysis/research. Implement from the
+- **design-pattern**: no code to copy; reconstructed from analysis/research. Implement from the
   fully-specified algorithm description.
-- **philosophy** — a design constraint that governs decisions and eliminates whole classes of
+- **philosophy**: a design constraint that governs decisions and eliminates whole classes of
   choices. A rule with hard invariants, not an algorithm.
-- **tech-choice** — a specific technology selection plus the configuration that makes it correct
+- **tech-choice**: a specific technology selection plus the configuration that makes it correct
   (the choice + its exact parameters, not just "use X").
-- **ui-ux** — a user-experience or interface pattern; port the interaction model.
-- **se-technique** — a software-engineering technique applicable across contexts.
+- **ui-ux**: a user-experience or interface pattern; port the interaction model.
+- **se-technique**: a software-engineering technique applicable across contexts.
 
 ## Steal Tiers
 Every steal item has a tier (1-5) that determines implementation rules. The tier is assigned at
-`/plan` time and travels via the Steal block in `slices.md` → `/dev` → `/qa`.
+`/plan` time and travels via the Steal block in the milestone's section of `docs/project/milestones.md` → `/dev` → the gate.
 
 - **Tier 1: Direct Port.** Source code exists in a compatible language. READ the source file. PORT
   it with ZERO unnecessary changes. Only allowed changes: import paths, logging mechanism, type
@@ -55,10 +55,10 @@ Every steal item has a tier (1-5) that determines implementation rules. The tier
 **Tier inference** (when no explicit Tier): code-portable → Tier 1 (same language) or 2 (different);
 design-pattern → 3; philosophy → 4; tech-choice → 3; ui-ux → 3; se-technique → 3.
 
-## Steal Block format (carried into the slice that uses the item)
+## Steal Block format (carried into the milestone that uses the item)
 ```
 Steal: <source-doc> §<N>. <Item Name> (tier: <1-5>, type: <type>)
-Source: `<project>` — `<file-path>:L{start}-{end}` | described from research
+Source: `<project>`: `<file-path>:L{start}-{end}` | described from research
 Preserve (verbatim, do not paraphrase):
   - Formula: `confidence *= decay_rate ^ days_since_last_use`  (exact, do not approximate)
   - Constant: `BM25_WEIGHT = 0.3`  (calibrated, do not adjust)
@@ -68,16 +68,16 @@ Verify (binary, runnable without reading the source): "BM25_WEIGHT constant equa
   "orchestrator.ts is under 300 lines (wc -l)".
 ```
 
-## Writing Preserve directives — sweep protocol
+## Writing Preserve directives: sweep protocol
 Writing Preserve is a search task, not a creative one. Every preservable element must be found,
 not imagined. After an initial list, run the sweep:
-1. **Formula sweep** — quote every equation exactly, all variables and operators.
-2. **Constant sweep** — every numeric constant/threshold/weight/rate/size/timeout with its value.
-3. **Ordering sweep** — every execution-order invariant ("X before Y", "append then loop").
-4. **Naming sweep** — naming conventions that affect behavior (e.g. "00.mp3..59.mp3 encode order").
-5. **Structural sweep** — structural invariants ("loop under 300 lines", "no state machines").
-6. **Interface sweep** — every API shape, schema field, type, expected behavior.
-Then review the list and ask "what would break if I changed this?" — anything that would break
+1. **Formula sweep**: quote every equation exactly, all variables and operators.
+2. **Constant sweep**: every numeric constant/threshold/weight/rate/size/timeout with its value.
+3. **Ordering sweep**: every execution-order invariant ("X before Y", "append then loop").
+4. **Naming sweep**: naming conventions that affect behavior (e.g. "00.mp3..59.mp3 encode order").
+5. **Structural sweep**: structural invariants ("loop under 300 lines", "no state machines").
+6. **Interface sweep**: every API shape, schema field, type, expected behavior.
+Then review the list and ask "what would break if I changed this?": anything that would break
 belongs in Preserve. Over-preservation costs zero; a missed invariant costs a broken port.
 
 ## Quality rules
@@ -92,18 +92,18 @@ belongs in Preserve. Over-preservation costs zero; a missed invariant costs a br
 
 ---
 
-## How the pipeline consumes this (v2)
+## How the pipeline consumes this
 
 **`/plan`** (intake): detect steal/reference docs at the project root (`steal-*.md`, `reference-*.md`,
 `port-*.md`) and check any project index you keep for a stealable match against this project's stack
-and domain. For each stolen item, classify the tier and write a **Steal block** into the slice that
-uses it, in `slices.md`. Run the Preserve sweep so the block is complete before the build starts.
+and domain. For each stolen item, classify the tier and write a **Steal block** into the milestone that
+uses it, in `docs/project/milestones.md` (its `Steal:` line). Run the Preserve sweep so the block is complete before the build starts.
 
-**`/dev`** (build): when the current slice carries a Steal block, for Tier 1-2 READ the original
+**`/dev`** (build): when the current milestone carries a Steal block, for Tier 1-2 READ the original
 source file at the exact path before writing a line; port verbatim, applying ONLY the listed
 mechanical adaptations; a Tier 1 deviation beyond imports/types/logging HALTs for approval; run the
-Verify checks before the slice is done. Never reimplement a stolen item from the summary.
+Verify checks before the milestone is frozen. Never reimplement a stolen item from the summary.
 
-**`/qa`** (verify): if the slice carried Steal blocks, verify the port against the source per the
-Preserve/Verify directives. A wrong constant, missing field, or paraphrased formula is a
-**STEAL_DEVIATION** finding (it surfaces in the converge check as `contradicts` or `partial`).
+**The gate** (verify): if the milestone carried Steal blocks, the code-verifier checks the port against the
+source per the Preserve/Verify directives (the Steal block is part of the milestone contract in its pack). A
+wrong constant, missing field, or paraphrased formula is a **STEAL_DEVIATION** finding and blocks.

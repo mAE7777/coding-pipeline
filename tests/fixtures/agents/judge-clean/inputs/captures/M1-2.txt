@@ -1,0 +1,8 @@
+$ python3 app.py add food 5
+added 5.00 to food
+$ python3 app.py add travel 40
+added 40.00 to travel
+$ python3 app.py add food 7.5
+added 7.50 to food
+$ python3 app.py total food
+Total food: 12.50

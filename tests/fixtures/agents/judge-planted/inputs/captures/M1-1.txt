@@ -1,0 +1,2 @@
+$ python3 app.py total food
+Total food: 0.00

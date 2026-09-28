@@ -1,6 +1,6 @@
-# Delta report format (Check Mode Stage 3)
+# Delta report format
 
-The report is the product. Its job is to let a busy, non-engineer builder judge intent fidelity in
+The report is the product. Its job is to let a busy, non-engineer owner judge intent fidelity in
 one glance and either move on or feed back a correction. Every formatting rule below exists to
 fight approval fatigue, which is the way this whole loop dies.
 
@@ -18,14 +18,14 @@ fight approval fatigue, which is the way this whole loop dies.
 5. **Traces collapsed.** The grounding trace for each item is available on `inspect`, not shown by
    default. The glance stays a glance.
 6. **One screen.** If the delta does not fit one screen, the milestone was too big; say so and
-   suggest splitting the next one, rather than emitting a wall.
+   propose a smaller cut for the next one, rather than emitting a wall.
 
 ## Shape
 
 ```
-LOAD-BEARING: <HOLDS | DRIFT | MISSING> — <the behavior, in one clause>
+LOAD-BEARING: <HOLDS | DRIFT | MISSING | INACCURATE>: <the behavior, in one clause>
 
-Goal (frozen): <one line>
+Goal (locked): <one line>
 Built (reconstructed): <evaluator purpose guess, one line>
 
 Drift from intent:
@@ -33,6 +33,7 @@ Drift from intent:
   MISSING  <DoD behavior that is not present>
   EXTRA    <behavior nobody asked for>
   ORPHAN   <behavior that fits no purpose>
+  INACCURATE <feature with the right name> works as <the rejected imitation> (wanted: <the mechanism card>)
 
 [accept]  [correct <n>]  [inspect <n>]  [ask <n>]
 ```
@@ -43,7 +44,8 @@ Drift from intent:
 - **DRIFT**: present but does something other than intent. The core signal.
 - **MISSING**: a definition-of-done behavior is absent.
 - **EXTRA**: a behavior exists that no intent statement called for (the led-by-the-nose signal).
-- **ORPHAN**: an unexplained behavior from the evaluator (drift or rot, route rot to the gate).
+- **ORPHAN**: an unexplained behavior from the evaluator (drift or rot; rot goes to the gate).
+- **INACCURATE**: the right name with a changed causal role, the familiar imitation a mechanism card rejects.
 
 ## When vigilance is active
 

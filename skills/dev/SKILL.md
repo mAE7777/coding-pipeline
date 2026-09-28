@@ -1,92 +1,107 @@
 ---
 name: dev
-description: "Build one vertical slice end-to-end in a single coherent thread at high reasoning effort. Use this skill when the user says /dev, 'build this slice', 'implement the current slice', 'start building', or hands off from /plan. Builds the current slice from slices.md, builds its load-bearing part first, keeps every change traceable to the frozen intent, and is not done until a check it ran is green. Hands the slice to /loyal and /qa for verification."
-argument-hint: "[slice number or name | empty = current slice]"
+description: "Build one milestone, or an owner-authorized campaign of milestones, as one sustained run against the locked plan: restate the understanding and have it read cold, record the baseline, build the load-bearing mechanism first with checkpoints, wire as you go, keep state.md current, then freeze the candidate and start the gate. /dev resume continues after a break, a compaction, or a switch from another tool. Use once /plan has locked the intent."
+argument-hint: "[M<k> | M<k>-M<n> | resume | freeze]"
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: "python3 $HOME/.claude/skills/dev/scripts/milestone-continue.py"
 ---
 
-# dev — Build a Slice
+# /dev
 
-> EXECUTABLE WORKFLOW. Thin by design. The model plans and decomposes the slice in its own
-> reasoning; this skill imposes only what a strong model skips: build the hard part first, keep
-> every change traceable, and never call it done without a green check.
+Deliver what the user asked for, at the scope they intended. Interpret ambiguity the way a careful
+colleague would: make routine judgment calls yourself, and check in only when different readings would lead
+to materially different work. If you conclude the ask is mistaken or a better approach exists, say so in a
+sentence and keep going with the task as asked - don't quietly narrow, widen, or transform it. Finish the
+whole task, not just the easy part of it - only report completion when it's fully done. If you genuinely
+can't complete something, do the rest and state plainly what's missing and why. Stop short of actions or
+changes that are clearly beyond what the user's ask implies.
+(The user here is the owner; the task is the milestone or campaign.)
 
-Build ONE slice in ONE thread at high effort. No orchestrator, no separate planner agent, no
-multi-section plan file, no complexity tiers. A frontier model holds a whole slice in context
-and plans it better in its own trace than a scaffold can. Those structures existed to survive
-small context windows; they are now overhead.
+Load-bearing rules:
+- The load-bearing mechanism first, built for real. Final quality: there is no later pass that makes it real.
+- The moment a placeholder, mock, sample, canned output, or other stand-in on the product path looks needed,
+  stop and ask the owner before writing it. Their consent, in their own words, becomes a decision entry with
+  the `[placeholder-consent: <path or part> <what> owner <date>]` token paired with a named non-goal or a
+  contract-blocked entry, proven with `rulings.py record`. You never write a consent the owner did not give.
+- Fail loudly at boundaries. No catch-and-continue with an invented default, no fallback for a case that
+  cannot happen; a fallback exists only as a designed, listed, labeled, visible behavior.
+- Tests are written with the code and never weakened: no raised timeouts, skipped tests, or removed
+  assertions to get green.
+- Wire as you go: when a wiring row moves (built, validated, wired, proven), update its status in
+  `milestones.md`. Code outside this milestone is parked unreachable with its re-enable condition.
+- Write through: a decision is written when it is made (`[proposed]` unless the owner decided it); `state.md`
+  at every checkpoint and meaningful completion. Before reporting progress, audit each claim against a tool
+  result from this session; only report work you can point to evidence for, and say plainly what is not yet
+  verified.
+- No build-record IDs (I-D3, L-01, M1.D2) and no intent prose in product code or comments: the blind copy
+  fails on them, and they are not product text.
+- A new dependency, interface change, migration, or external effect needs a decision entry; if it changes
+  the milestone contract, it needs the owner's ruling.
 
-## Core principles
-1. **One slice, one thread.** Build the current slice completely; don't sprawl into others.
-2. **Hard part first.** Build the slice's load-bearing behavior before its trimmings, so the
-   hard thing is proven, not deferred.
-3. **Scope guard.** Every changed line traces to this slice. No drive-by refactors, no
-   unrequested abstraction or flexibility, no improving adjacent code.
-4. **Done = a green check you ran, shown as evidence.** "Looks done" is not a stop signal.
-5. **Never decide on missing context.** Build only what the confirmed intent specifies. If
-   implementation surfaces a genuine intent question the anchor does not resolve, HALT and ask;
-   do not pick silently. A new dependency or a contract change also HALTs for approval.
-6. **Code is hidden by default.** Report progress as behavior and evidence, not diffs. The user
-   reads what was built through `/explain`, not by reviewing code.
+Scripts: `~/.claude/skills/_shared/scripts/`. Heavy commands go through the machine lock (the guard hook
+tells you the exact wrapped command); dev servers run through `heavy.py serve` in the background.
 
-## Workflow
+## Start: /dev M<k>
+1. `record_check.py`: anything but `complete` means `/plan adopt` first, unless the owner ruled otherwise.
+   `intent_lock.py verify` must pass. The milestone is planned or changes; earlier milestones are accepted,
+   or covered by a campaign authorization.
+2. Read the intent, brief, the milestone contract, interfaces, `AGENTS.md`, and the stack pack named in
+   `docs/project/gate.md`. When the project has a `truth/` folder, read
+   `~/.claude/skills/_shared/references/venture-mode.md` (BLOCKED if it is missing).
+3. `baseline.py record <project> M<k>` (once per milestone).
+4. `state.md`: the Writer line is claimed for this session by the continuity hook at your first edit (check
+   that it names this session: `claude session <id>` or `codex session <id>`), Milestone `M<k> · phase: building`,
+   Baseline, the Understanding (the promise and must-not-lose items in your own words), and the Open task
+   list. Set the milestone's Status to building.
+5. Understanding check: `run_isolated.py cold-reader --dir auto --out .evidence/dev --project <project>
+   --render --milestone M<k> --inputs understanding --` in the background. Fix every material divergence in
+   your Understanding before code; one the files cannot settle is a question for the owner. Show the owner
+   the one-line understanding and keep going.
 
-### Stage 1 — Load the slice
-Read `slices.md` (the `current:` slice, or the one named in `$ARGUMENTS`). Read `intent-anchor.md`
-(goal + load-bearing behavior + the slice's EARS criteria), `contracts.md` (interfaces to honor),
-`AGENTS.md` (conventions, build/test commands), and the design-intent section if this slice has
-UI. That is the whole context you need. Capture the baseline commit (`git rev-parse HEAD` if under
-version control) so drift from this point is measurable.
+## Build
+Work the Open list in the order the contract needs, hard part first. At each checkpoint run its check,
+record the result under Done with the evidence path, and do not build dependents on a failed checkpoint.
+For your own look at a UI, use `playwright-cli` (headless, token-lean; snapshots land in `.playwright-cli/`,
+which the fingerprint ignores; the browser lock is taken for you and released by `playwright-cli close`) and
+build to the design intent in `intent.md`; high-stakes design goes through `/taste-design` or `/atelier`
+first. Background work (a build, a server, an agent) is listed under In flight while it runs.
+Subagents: none by default. A read-only explorer for a genuinely wide unknown; parallel builders (at most
+two worktrees) only when the owner asks, each given the absolute path of this checkout's build record. A
+large mechanical change runs through a saved workflow, never a batch that spawns many agents at once.
 
-### Stage 2 — Plan only if non-trivial
-If you could describe this slice's diff in one sentence, skip planning and build. Otherwise think
-the approach through first. If anything material is ambiguous or the anchor does not resolve a
-fork, HALT and ask using a recommended-answer option, never guess. A new dependency or a change to
-`contracts.md` also HALTs for approval. Start with the load-bearing part.
+## Stops
+Input that arrives mid-build (a suggestion, someone's opinion, an idea the owner floats without deciding) goes
+into the inbox (`inbox.py add`, see `/inbox`) and the build goes on; it is weighed at a stop, or at once when it
+says the current work is wrong. The owner's own instruction is a ruling, not an inbox item.
+Stop for: a stand-in, a material intent fork, a contract change, an irreversible or credentialed action, or
+a blocker only the owner can clear. Every stop first writes a Blockers row (what, who can clear it, what
+unblocks it). A question to the owner ends your message with the question. Never end a turn on a plan, a
+promise, or an offer while work is still owed; the stop hook holds the turn while Open items remain.
 
-### Stage 3 — Build
-Honor the contracts. Match `AGENTS.md` conventions (or, on a greenfield with no pattern yet,
-set a clean one: this slice becomes the reference the rest copy). Hold the scope guard: if the
-slice genuinely needs something outside its scope, surface it, don't silently expand. If the
-slice carries a Steal block, load `~/.claude/skills/_shared/references/steal-protocol.md`: for
-Tier 1-2, READ the original source file before writing, port verbatim with only the listed
-adaptations, and HALT for approval on any Tier 1 deviation. Never reimplement a stolen item from
-its summary.
+## Freeze: /dev freeze (or when the Open list is done)
+Every Open item done with evidence; every wiring row proven or parked; servers stopped and leases released
+(`heavy.py release --owner <session>`); `state.md` Candidate set to `fingerprint.py <project>` and phase
+`gate`; the milestone's Status `gate`. Then start the gate in the background:
+`python3 ~/.claude/skills/_shared/scripts/gate_run.py <project> --milestone M<k>` and continue with `/gate`
+when it reports.
 
-### Stage 4 — Self-verify (no done without a green check)
-Give yourself a check and run it: the slice's test, a build/typecheck, a real input→output run,
-or a screenshot. Show the evidence (the command and what it returned, or the screenshot), never
-assert success. If nothing runnable exists yet, write the smallest check that proves the
-load-bearing behavior. Iterate until green, bounded; if you cannot get it green, stop and
-surface why rather than faking it or stubbing.
+## Resume: /dev resume
+Read `state.md`, `docs/project/handoffs/latest.md`, and what the session-start note said changed. When the
+note reports work after the last handoff (another session or tool that stopped without updating the record,
+for example when its usage limit ran out), fold that work in before building on it:
+1. Every decision or instruction in the owner's messages the note quotes goes into the record: a decision entry
+   in their words, proven with the `rulings.py record ... --session <the id the note gives>` it names; open
+   items into state.md. Ask the owner only where two readings of their words would build different things.
+2. The files changed since the note may hold a half-finished edit: read the diff, run the test command, and
+   either finish the edit to its evident purpose (the other session's last message says what it was doing) or
+   revert it, recording which in state.md.
+3. Update state.md (Done with evidence, Open, Next step), mark evidence for changed files STALE, keep the
+   baseline, restate the Understanding, and continue.
+The continuity hook records you as the writer on your first edit. If the other tool is still open in this
+checkout, the note says so: ask the owner to close it, since two writers in one checkout conflict.
 
-### Stage 5 — Record and hand off
-Mark the slice done in `slices.md` and set the next `current:`. If a real convention or gotcha
-emerged, add one line to `AGENTS.md` (keep it lean). Note anything that should reshape the
-remaining slices. Then hand the slice to its verification gate: `/loyal check` (intent fidelity)
-and `/qa` (correctness); they are isolated from each other by design, so spawn their evaluators
-concurrently where the harness allows. `/explain` recaps run on demand and after the final slice
-(founder or user register), never as per-slice ceremony; code stays hidden either way.
-
-### Success: the slice's load-bearing behavior works and is proven by a green check shown as evidence; `slices.md` updated.
-### Failure: cannot reach a green check, or a contract had to be broken. HALT and surface it.
-
-> After the slice, verification runs. On a clean pass, continue to the next slice automatically;
-> HALT only on a failed check, a material question, or when the user asked to review each slice.
-
-## Guardrails (do not rebuild a cage)
-- No `dev-planner` / `task-implementer` subagents, no multi-section plan file, no Quick/Standard/
-  Deep tiers. The model plans in-trace.
-- Don't over-build. A senior engineer should not call the result overcomplicated; 200 lines that
-  could be 50 get rewritten.
-- Don't defer the hard part to a later slice. Don't insert demo/placeholder data that hides a
-  behavior that doesn't actually work.
-- For UI work, build to the anchor's design-intent section and avoid generic AI aesthetics (lean
-  on the `frontend-design` guidance; when the design carries real stakes, run the `/taste-design`
-  lint, or hand the page's direction to `/taste-design` or `/atelier` before building). The
-  rendered screen is what the user judges, so make this slice's screen real, not a placeholder.
-
-## Ecosystem
-- **Reads**: `slices.md`, `intent-anchor.md`, `contracts.md`, `AGENTS.md`.
-- **Writes**: code; updates `slices.md` and `AGENTS.md`.
-- **Hands to**: `/loyal check` + `/qa` (the slice's verification gate).
-- **Off-loop sibling**: `/fix` for a targeted change that isn't a whole slice.
+## Campaign: /dev M<k>-M<n>
+Only with the owner's authorization, recorded as a decision in their words. Follow `references/campaign.md`.
