@@ -1,7 +1,7 @@
 # Intent
 
 <!--
-What must be true for the person who uses this. Locked with the owner and hashed (intent_lock.py). After
+What must be true for the person who uses this. Locked with the owner and hashed. After
 the lock the text above "Re-freeze log" is never edited; a change is a re-freeze entry at the bottom,
 made only with the owner's ruling. Written in plain product language: no framework, library, file, or
 function names.
@@ -51,6 +51,7 @@ Appearance: <light, dark, or both>
 
 ## Design intent
 <UI only: feel, references, the one screen that matters most, named patterns to avoid>
+Style: <a named style, or the minimal style in interface-baseline.md; the baseline's principles hold under any>
 
 ## Assumptions
 - A-01 <what was assumed and why> · signed <date>

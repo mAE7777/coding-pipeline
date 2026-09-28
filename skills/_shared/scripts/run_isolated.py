@@ -411,7 +411,8 @@ def tools_section(workdir):
                  "$CHECKER_TMP instead, and that failure is not the product's.")
     protocols, stacks = protocols_dir(), stacks_dir()
     if protocols:
-        lines.append(f"Validation protocols (read the one that fits the product): {protocols}/ui-ux-validation-protocol.md "
+        lines.append(f"Any user interface: {protocols}/interface-baseline.md (the clarity pass). "
+                     f"Validation protocols (read the one that fits the product): {protocols}/ui-ux-validation-protocol.md "
                      f"(web UI), native-ui-validation-protocol.md (native apps), game-qa-protocol.md (games), "
                      f"regression-and-coverage-strategy.md.")
     if stacks:

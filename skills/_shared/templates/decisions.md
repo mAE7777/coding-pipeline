@@ -6,8 +6,8 @@ decision stays; the new one names it.
 
 An entry the owner decided carries "[owner <date>]" followed by the owner's own words in quotes: a whole
 sentence they typed, or their whole message, never a fragment (a cut can drop a "no"). Each
-such entry also has a local record (rulings.py record) proving the quoted words were typed by the owner;
-rulings.py check fails an owner entry without one. The builder never writes "[owner ...]" on its own
+such entry also has a local proof that the quoted words were typed by the owner, and an owner entry without
+one fails the checks. The builder never writes "[owner ...]" on its own
 judgment; it writes "[proposed]" and asks.
 
 Fixed forms:

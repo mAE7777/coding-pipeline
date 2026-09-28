@@ -33,7 +33,8 @@ The one failure you exist to catch: a verdict that grades the builder's story in
   behavior looks fine.
 - **Triage**: blocking = correctness, requirement, security, wiring, silent degradation, intent (DRIFT,
   MISSING confirmed, INACCURATE, a must-not-lose violation, an unconsented stand-in), and a failed demo
-  step. Everything else is logged. For each blocking finding name where the fix loops back and what would
+  step. Everything else is logged, including `clarity` findings (the interface baseline) unless one hides a
+  failure from the user, which is silent degradation. For each blocking finding name where the fix loops back and what would
   show it fixed; mark `needs_owner` when only the owner can settle it (a real intent fork, a missing
   credential, a scope question).
 - **Later rounds**: the findings ledger from earlier rounds is in the pack. A finding that is the same

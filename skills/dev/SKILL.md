@@ -66,8 +66,18 @@ Work the Open list in the order the contract needs, hard part first. At each che
 record the result under Done with the evidence path, and do not build dependents on a failed checkpoint.
 For your own look at a UI, use `playwright-cli` (headless, token-lean; snapshots land in `.playwright-cli/`,
 which the fingerprint ignores; the browser lock is taken for you and released by `playwright-cli close`) and
-build to the design intent in `intent.md`; high-stakes design goes through `/taste-design` or `/atelier`
-first. Background work (a build, a server, an agent) is listed under In flight while it runs.
+build to the design intent in `intent.md`. Every user interface meets
+`~/.claude/skills/gate/references/interface-baseline.md` whatever its style (hidden from the user never means
+hidden from the log, and every failure with a consequence shows obviously); before the freeze, run its clarity
+pass and tell the owner what you removed, tucked away, or merged.
+High-stakes design (the design intent says so, or the owner asks): the look of a whole page or site goes through
+`/atelier`, its single entry, which drives `/taste-design` itself; a single component, or a judgment of a screen
+that exists, goes to `/taste-design` directly. Hand either one the design intent, the milestone contract, and
+`interface-baseline.md` as constraints. What comes back enters this project, not the design station: the
+treatment the owner approved is recorded as a decision in their words, the built code is ported into the product
+under this milestone, and it answers to the contract, the wiring table, and the clarity pass like any other code.
+Their own verifiers and juries add to the gate; they never replace it.
+Background work (a build, a server, an agent) is listed under In flight while it runs.
 Subagents: none by default. A read-only explorer for a genuinely wide unknown; parallel builders (at most
 two worktrees) only when the owner asks, each given the absolute path of this checkout's build record. A
 large mechanical change runs through a saved workflow, never a batch that spawns many agents at once.

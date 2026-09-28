@@ -5,7 +5,8 @@ Load when verifying a milestone with native UI; the code-verifier uses these pro
 behaviour in a real rendered screen on a simulator or device.
 
 Sibling of `ui-ux-validation-protocol.md`, which covers the web through the browser script and does not
-apply here. Where a rule is identical in both, it is stated once, there.
+apply here. Where a rule is identical in both, it is stated once, there. `interface-baseline.md` applies to
+native screens too: run its clarity pass on the simulator (screenshots instead of the browser).
 
 Every simulator run (a UI test suite, a build, a demo step) goes through the machine-wide lock,
 `python3 <heavy.py> run -- <command>`, so one simulator runs on the machine at a time.

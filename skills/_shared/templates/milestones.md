@@ -1,7 +1,7 @@
 # Milestones
 
 <!--
-Format rules (checked by milestone_lint.py):
+Format rules (checked automatically):
 - One "## M<n> · <name>" section per milestone. IDs are never renumbered or deleted; a dropped
   milestone keeps its section with "Status: dropped" and a reason.
 - Status is one of: planned, building, gate, changes, accepted, dropped. Who sets it: the builder sets
