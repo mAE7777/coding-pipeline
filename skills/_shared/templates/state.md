@@ -46,3 +46,7 @@ none    (what · who can clear it · what unblocks it; written before every stop
 
 ## Next step
 <the exact next action>
+
+## Last step
+<skill and what it ran on · UTC time · session · outcome; written by project_status.py record at the end of
+every step, with the full history in docs/project/journal.md>

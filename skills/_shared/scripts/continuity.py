@@ -373,6 +373,19 @@ def session_start(data, tool):
             lines.append("Changed since the note: " + ", ".join(docs))
         lines.append("Read docs/project/state.md and docs/project/handoffs/latest.md, restate the milestone promise "
                      "and must-not-lose items, and take over as writer when you start changing files.")
+    if info["kind"] in ("complete", "partial"):
+        try:
+            from project_status import status  # noqa: E402
+            st = status(root)
+            if st["last_step"] != "none recorded":
+                lines.append(f"Last step: {st['last_step']}")
+            prefix = "$" if tool == "codex" else "/"
+            for i, n in enumerate(st["next"][:3]):
+                action = n["action"].replace("/", prefix, 1) if n["action"].startswith("/") else n["action"]
+                lines.append(f"{'Next' if i == 0 else 'Then'} ({n['who']}, computed from the record): {action} · "
+                             f"{n['why'][:200]}")
+        except Exception as exc:  # the briefing must never hide that the next step could not be computed
+            lines.append(f"(Could not compute the next step: {exc.__class__.__name__}: {exc}.)")
     try:
         from inbox import open_items  # noqa: E402
         waiting = open_items(root)

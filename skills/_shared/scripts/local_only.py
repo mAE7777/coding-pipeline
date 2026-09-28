@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 STANDARD = ["/docs/project/brief.md", "/docs/project/state.md", "/docs/project/gate.md", "/docs/project/handoffs/",
+            "/docs/project/journal.md",
             "/docs/project/reviews/", "/docs/project/research/", "/docs/project/sources/",
             "/docs/project/.gate-canary-*", "/.evidence/", "/.playwright-cli/", "/AGENTS.md", "/CLAUDE.md"]
 

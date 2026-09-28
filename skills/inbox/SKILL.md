@@ -83,3 +83,6 @@ Every open item, oldest first, or the one named. For each:
 ## Finish
 Report in plain words: each item and what happened to it, anything still open and what it waits for, and
 what the decisions changed in the current milestone.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill inbox --arg IN-<nnn> --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

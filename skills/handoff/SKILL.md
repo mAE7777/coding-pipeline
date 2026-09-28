@@ -50,3 +50,6 @@ project's context.
 A prompt for a chat model outside this machine (ChatGPT, a colleague) carries no secrets, credentials, `.env`
 values, customer data, or private documents the owner has not cleared. When unsure, say what you would send
 and ask. Codex and Claude Code sessions on this machine read the files directly and need no copy.
+
+## End
+Every packet written or received ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill handoff --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.

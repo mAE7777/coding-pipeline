@@ -52,3 +52,6 @@ answer. Nothing more happens until the file exists.
 3. Write the verified note: confirmed and corrected claims with their grades, refuted ones listed as refuted,
    unverified load-bearing claims as open unknowns; everything else graded single-source and external.
 4. Update the brief's unknowns and starting state from the note, by ID.
+
+## End
+Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill scout --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
