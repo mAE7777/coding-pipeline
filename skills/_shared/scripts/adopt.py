@@ -386,7 +386,8 @@ def check(project):
             kinds.add(json.loads(meta.read_text())["kind"])
         except (OSError, ValueError, KeyError):
             continue
-    if (project / ".git").exists() and "git-history" not in kinds:
+    has_history = (project / ".git").exists() and bool(git(project, "rev-list", "-n", "1", "HEAD").strip())
+    if has_history and "git-history" not in kinds:
         fails.append("the commit history was not read (capture.py add <project> --git-log)")
     remotes = git(project, "remote", "-v") if (project / ".git").exists() else ""
     brief_text = (rec / "brief.md").read_text(encoding="utf-8") if (rec / "brief.md").is_file() else ""

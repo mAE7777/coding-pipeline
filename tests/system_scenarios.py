@@ -224,6 +224,12 @@ def scenario_adopt(ev):
     subprocess.run(["git", "init", "-q", str(project)], check=True)
     result, session, code = claude("/plan adopt\n\nThis is my project; adopt it. My reply at the lock is the next "
                                    "line.\nYes, that is what it is today; lock it.", project, ev / "adopt.jsonl")
+    for turn in range(8):
+        # A headless session is not woken by its background work finishing (extraction rounds, characterization).
+        if not session or run([PY, str(SCRIPTS / "adopt.py"), "check", str(project)])[0] == 0:
+            break
+        (ev / "notes.txt").open("a").write(f"resumed the adopt session after its background work (turn {turn + 1})\n")
+        result, _, code = claude(CONTINUE, project, ev / "adopt.jsonl", resume=session)
     (ev / "adopt.result.md").write_text(result)
     problems = []
     code, out = run([PY, str(SCRIPTS / "adopt.py"), "check", str(project)])

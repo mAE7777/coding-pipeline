@@ -211,6 +211,12 @@ class AdoptTest(unittest.TestCase):
                           discrepancies="- EXTRA-1 the code exports to CSV; no document mentions it · owner (keep it?)")
         self.assertEqual(self.adopt("check").returncode, 0, self.adopt("check").stdout)
 
+    def test_a_repository_without_commits_has_no_history_to_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", d], check=True)
+            out = subprocess.run([sys.executable, str(ADOPT), "check", d], capture_output=True, text=True, env=self.env)
+            self.assertNotIn("commit history was not read", out.stdout)
+
     def test_the_history_must_be_read(self):
         self.adopt("inventory")
         self.complete()
