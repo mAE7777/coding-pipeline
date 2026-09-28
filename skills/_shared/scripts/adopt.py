@@ -26,7 +26,10 @@ note is missing; an outlined row has no reason; a record file is missing (intent
 interfaces, decisions, state, gate); AGENTS.md has no labeled Commands; the commands were never run (adopt.py
 commands); milestones.md has no M0 (the product as found); a reconstructed done example carries no
 evidence label ([code ...], [doc ...], [git ...], [owner ...]); an earlier pipeline's file is not marked
-superseded; the imported documents' dossier fails capture.py check.
+superseded; the imported documents' dossier fails capture.py check (which also requires every document read by
+independent extraction rounds until one found nothing missed); an area note does not open with "Load-bearing:
+yes (...)" or "no (...)"; a load-bearing area has no second, independent reading (areas/<area>.second.md) or no
+settled "## Reconciled" section.
 Exit 0 on success, 1 on a FAIL, 2 on bad usage.
 """
 import datetime
@@ -282,6 +285,29 @@ def check(project):
                 fails.append(f"{path}: outlined without saying why the rest was not needed")
             elif not re.match(r"^(read|outlined \(.+\)|delegated.*|skipped \(.+\)|stale \(.+\)|superseded \(.+\))$", status):
                 fails.append(f"{path}: status '{status}' is not a ledger status")
+    areas = d / "areas"
+    for note in sorted(areas.glob("*.md")) if areas.is_dir() else []:
+        if note.name.endswith(".second.md"):
+            continue
+        text = note.read_text(encoding="utf-8")
+        first = next((l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")), "")
+        lb = re.match(r"^Load-bearing:\s*(yes|no)\b", first, re.I)
+        if not lb:
+            fails.append(f"areas/{note.name}: does not open with 'Load-bearing: yes (<why>)' or 'Load-bearing: no (<why>)'")
+            continue
+        if lb.group(1).lower() != "yes":
+            continue
+        second = note.with_name(note.stem + ".second.md")
+        if not second.is_file():
+            fails.append(f"areas/{note.name}: a load-bearing area without a second, independent reading ({second.name})")
+        rec_sec = re.search(r"^## Reconciled\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+        if not rec_sec:
+            fails.append(f"areas/{note.name}: the two readings are not reconciled (## Reconciled)")
+            continue
+        for line in rec_sec.group(1).splitlines():
+            if line.strip().startswith("- ") and not re.search(
+                    r"· (note corrected|second reading wrong \(.+\)|unknown U-\d+|owner \(.+\))\s*$", line):
+                fails.append(f"areas/{note.name}: a difference between the readings is not settled: {line.strip()[:80]}")
     inv_path = d / "inventory.json"
     listed = set()
     if ledger.is_file():

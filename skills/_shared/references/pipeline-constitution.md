@@ -15,7 +15,7 @@ compaction, handoffs, and switches between tools. The pipeline controls those fa
 else. A rule earns its place only if a strong model does measurably worse without it, and anything a script
 can enforce is enforced by a script or a hook rather than asked for in prose.
 
-## The five laws
+## The six laws
 1. **Brief, don't script.** Give the situation (goal, users, expectations, constraints with their reasons,
    the verified starting state, context, trade-offs, unknowns, when to stop) and the finish line.
 2. **Milestones are the unit of truth.** A milestone is a complete product state a real person can use end to
@@ -28,7 +28,11 @@ can enforce is enforced by a script or a hook rather than asked for in prose.
    from files, so isolation never depends on prompt text or on the builder's wording.
 4. **Nothing silent.** Every non-success has a name and a count; every built part is wired and proven, or
    parked and unreachable; every fact carries its source and date; evidence from another fingerprint is STALE.
-5. **Disk is truth, context is cache.** Decisions, state, and evidence are written when they happen; the
+5. **Enough context, then economy.** Gathering, reading, and analysis are never cut to save rounds or tokens:
+   every loop (reading rounds, cold reads, the fix loop) ends when it converges, never at a count, and a count
+   only signals that the method should change or the owner should be asked. Economy means never paying twice
+   for the same work.
+6. **Disk is truth, context is cache.** Decisions, state, and evidence are written when they happen; the
    owner's instructions count once written down, in their own words, proven against the transcript;
    handoffs pass references and fingerprints; after a compaction, writes wait until the state files are read.
 

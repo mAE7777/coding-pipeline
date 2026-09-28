@@ -1,7 +1,7 @@
 ---
 name: capture
-description: "Keep idea conversations whole until the owner decides to build: ChatGPT chats (export file or pasted text, voice-mode transcripts included), voice recordings, notes, and existing documents are stored verbatim with numbered turns, then organized into a dossier (problems, vision, story, product, users, implementation ideas, research questions, decisions, rejected ideas, open tensions) where every point cites the turns it came from and the owner's own words are kept apart from the assistant's suggestions. Re-importing a chat that grew adds only the new turns. Checked by script (every owner turn covered, every quote verbatim) and by an isolated fidelity reader. Use for /capture, 'save this chat', 'keep this conversation', and before /plan when ideas came from conversations."
-argument-hint: "add <file> [--chat <title or id>] | status | check | prompt"
+description: "Keep and understand everything a project's ideas and knowledge live in: ChatGPT chats (export or pasted, voice included), voice recordings, notes, documents (Markdown, text, PDF, Word, OpenDocument, RTF, HTML, EPUB), and records and logs, one file or a whole folder at once. All of it is stored verbatim in numbered units and organized into a dossier where every point cites the units it came from and the owner's words stay apart from an assistant's suggestions. It reads in rounds until nothing is missed: after each organizing pass an isolated reader that never sees the dossier lists every point in the sources, a script diffs that list against the dossier, and every difference is settled; the rounds end only when one finds nothing missed, and an isolated fidelity reader then checks for distortion. Checked by script (every owner turn, document section, and log window accounted for; every quote verbatim; every source read by an independent extraction). Use for /capture, 'save this chat', 'read these documents or logs', 'understand this folder', and before /plan or /plan adopt."
+argument-hint: "add <file or folder> | status | check | prompt"
 ---
 
 # /capture
@@ -27,31 +27,52 @@ an idea with no folder yet a new folder named for the idea beside the owner's ot
 requirements file, `~/.claude/skills/_shared/references/owner-standing.md`, says where; otherwise ask); it
 becomes the project if the idea goes ahead.
 
-## add <file>
-1. Import: `capture.py add <project> <file> [--chat <title or id>]`. Kinds are detected (a `.json` ChatGPT
-   export, pasted chat text with "You said:" and "ChatGPT said:" markers, a Markdown or text document, an
-   audio recording). For an export with many chats, `capture.py list <file>` shows them. How to get a chat out
-   of ChatGPT without loss is in `references/chatgpt.md`. A second import of the same chat adds only its new
-   turns. Audio is transcribed locally with whisper through the heavy lock; its turns are labeled as
-   machine-transcribed.
-2. Organize: read the new turns in full (in `docs/project/sources/SRC-<n>-*/transcript.md`) and update
-   `docs/project/sources/dossier.md` in the grammar in `references/dossier.md`: new units for new points,
-   `superseded by` for changed positions, open questions, tensions, and the no-content turns (greetings,
-   "go on").
-3. Check: `capture.py check <project>`; fix every FAIL in the dossier (never in the transcript).
-4. Fidelity: the isolated reader compares the dossier with the transcripts. In the background:
-   `run_isolated.py cold-reader --dir auto --out .evidence/capture --project <project> --render --mode fidelity
-   --docs docs/project/sources/<SRC folder>/transcript.md --`, one `--docs` per source changed. Fix every
-   material item it names, then check again.
-5. Tell the owner, plainly: what the new material added, what changed position, the open questions and
-   tensions, and whether it looks ready to plan. Offer nothing they did not ask about.
+## add <file or folder>
+Context comes before economy: every unit is read in full, and nothing is skimmed or cut to save a round. What
+keeps the cost sane is never reading the same thing twice without a reason, not reading less.
+
+1. **Import**: `capture.py add <project> <file or folder> [--chat <title or id>]`. Kinds are detected: a ChatGPT
+   export (`capture.py list <file>` shows its chats), pasted chat text, documents (Markdown and text; PDF by
+   page; Word, OpenDocument, RTF, HTML, EPUB converted, the converter recorded), logs and records (windows of
+   200 lines), audio (whisper, through the heavy lock, labeled machine-transcribed). A folder is walked whole;
+   `docs/project/sources/import-ledger.md` records every file and what became of it. A file that could not be
+   read is named there with the reason (a scanned PDF needs OCR): tell the owner, never pass over it. A second
+   import of a chat that grew adds only its new turns; an unchanged file is not imported again. How to get a
+   chat out of ChatGPT without loss is in `references/chatgpt.md`.
+2. **Organize**: read the new units in full (`docs/project/sources/SRC-<n>-*/transcript.md`) and update
+   `docs/project/sources/dossier.md` in the grammar in `references/dossier.md`. Every owner turn, document
+   section, and log window is carried by a unit or listed under "No-content turns" (read, nothing to keep);
+   changed positions are marked `superseded by`, and both stay. For a large corpus, work in portions you can
+   take in fully, writing each portion's units before the next.
+3. **Rounds, until one finds nothing missed** (the dossier is checked against a reading that never saw it):
+   a. Extraction: in the background, `run_isolated.py cold-reader --dir auto --out .evidence/capture/extract-<n>
+      --project <project> --render --mode extract --docs docs/project/sources/<SRC folder>/transcript.md --`,
+      one `--docs` per source in the portion. Size each portion so the reader can take all of it in (split a
+      large corpus into several runs, at most three at once); the reader gets the sources only.
+   b. `capture.py reconcile <project> .evidence/capture/extract-<n>/cold-reader.result.md` writes
+      `sources/rounds/round-<n>.md` with every point the dossier does not carry.
+   c. Settle every row: `added S-<nnn>` (a unit now carries it), `in S-<nnn> (<why the match missed it>)`,
+      `not a point (<why>)`, or `owner (<the question>)` for what only the owner can settle.
+   d. `capture.py check`. A source whose latest round added units gets another round (only the sources that are
+      still yielding); a round that adds nothing ends the reading of that source. After three rounds that keep
+      finding, change the method (smaller portions, a reader told what kind of point was being missed), never
+      stop.
+4. **Fidelity**: the isolated reader compares the dossier with the sources for distortion, misattribution, lost
+   evolution, and tensions closed that the owner left open: `run_isolated.py cold-reader --dir auto --out
+   .evidence/capture/fidelity --project <project> --render --mode fidelity --docs <transcript> --`. Fix every
+   material item, then read again with `--previous .evidence/capture/fidelity/cold-reader.result.md` (and a new
+   `--out`) until a read finds nothing material in what it was given.
+5. **Tell the owner**, plainly: what the material says, what changed position, the open questions and tensions
+   (the rounds' owner rows among them), any file that could not be read and what would fix it, and whether it
+   looks ready to plan. Offer nothing they did not ask about.
 
 ## status
 `docs/project/sources/index.md`, the unit counts by category and status, the open questions, and the last
 check and fidelity results.
 
 ## check
-Steps 3 and 4 on the current dossier.
+`capture.py check`, then the rounds (step 3) for any source not yet read by an independent extraction or still
+yielding, and the fidelity reads (step 4), on the current dossier.
 
 ## prompt
 Print the optional ChatGPT project instructions from `references/chatgpt.md`, for the owner to paste once into

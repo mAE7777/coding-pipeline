@@ -38,13 +38,17 @@ Fields of a unit line, in order, separated by " · ":
 - Category: problem, vision, narrative, product, user, implementation, research, constraint, decision,
   rejected, term, other.
 - Attribution: `owner` (the owner said it), `owner-agreed` (the assistant proposed it and a later owner turn
-  agreed), `assistant` (the assistant's, not endorsed), `document` (from an imported document), `transcribed`
-  (the owner's words through machine transcription).
+  agreed), `assistant` (the assistant's, not endorsed), `document` (from an imported document), `record` (from a
+  log or record: what happened, not what anyone wants), `transcribed` (the owner's words through machine
+  transcription).
 - Status: `current`, `open` (undecided), `not taken up`, `rejected`, `superseded by S-<nnn>`.
 - References: `SRC-<n> T<nnn>`, ranges `T012-T015`, lists `T003, T017`, several sources separated by "; ",
   branch turns `B1-T002`.
 
 Quotes (`> "..." (SRC-n Tnnn)`) must be verbatim from the cited turn. `owner`, `owner-agreed`, and
 `transcribed` units need at least one quote from an owner turn. A hedge stays a hedge ("maybe", "not sure",
-"could"): write the unit as open, never as a decision. Every owner turn on a main line is cited by some unit or
-listed under No-content turns.
+"could"): write the unit as open, never as a decision. Every owner turn (edited-away branches included), every
+document section, and every log window is cited by some unit or listed under No-content turns (ranges such as
+`SRC-4 T001-T040` say "read, nothing to keep"); assistant turns need not be, though their suggestions get units
+when the owner reacted to them. Independent extraction rounds (the skill's step 3) are recorded under
+`sources/rounds/` and settled there, not in this file.
