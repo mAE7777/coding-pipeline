@@ -21,6 +21,10 @@ changes that are clearly beyond what the user's ask implies.
 (The user here is the owner; the task is the milestone or campaign.)
 
 Load-bearing rules:
+- Enough context before code: read every file the milestone touches in full, with its callers and consumers,
+  and run what you can; when the record, the code, or a result leaves you unsure, gather more (read, run,
+  `/scout`, ask) before writing. Never cut reading, research, or analysis to save turns; economy means not
+  repeating work, never knowing less.
 - The load-bearing mechanism first, built for real. Final quality: there is no later pass that makes it real.
 - The moment a placeholder, mock, sample, canned output, or other stand-in on the product path looks needed,
   stop and ask the owner before writing it. Their consent, in their own words, becomes a decision entry with

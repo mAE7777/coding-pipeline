@@ -33,7 +33,7 @@ ritual inside the build.
 | Command | What it does |
 |---|---|
 | `/next` | The front door: where the project stands and what comes next, computed from the record, then does it; `auto` keeps going step after step and stops only where the owner must decide; `status` only reports. Every skill ends by recording its step in a journal and naming the next one |
-| `/capture` | Keeps idea conversations (ChatGPT exports or pasted chats, voice recordings, notes, documents) verbatim with numbered turns, and organizes them into a dossier that cites every turn and keeps the owner's words apart from an assistant's suggestions |
+| `/capture` | Keeps and understands what a project's ideas and knowledge live in (ChatGPT chats, voice recordings, notes, documents in Markdown, PDF, Word, and similar formats, records and logs; a file or a whole folder), verbatim in numbered units, organized into a dossier that cites every point and keeps the owner's words apart from an assistant's; it reads in rounds, each checked by an isolated reader that never saw the dossier, until a round finds nothing missed |
 | `/scout` | Turns a real unknown into graded evidence: ask, map, spike, or offload to a chat model and verify what comes back |
 | `/plan` | Writes the build record and locks the intent with the owner; `adopt` takes over a project that has no record; `amend` changes intent by ruling; `convert` migrates older formats |
 | `/dev` | Builds one milestone (or an authorized run of several) as one sustained run; `resume` after a break or a switch of tools; `freeze` hands it to the gate |

@@ -6,7 +6,8 @@ waiting for acceptance between them. The authorization is a decision entry in th
 
 What changes:
 - `/dev` and the gate chain: after a milestone's gate comes back ACCEPT-READY, the next milestone starts;
-  after CHANGES, the fix loop runs (at most two rounds per finding) and the gate runs again. BLOCKED and
+  after CHANGES, the fix loop runs and the gate runs again; a finding still blocking after two fix rounds goes
+  to the owner (BLOCKED), since repeating the same fix a third time is not a new method. BLOCKED and
   INCONCLUSIVE after its re-run still stop the campaign with a Blockers row.
 - Acceptance is batched at the end, exception first: every milestone's gate summary, what failed and was
   fixed, what was skipped, what needs a ruling, and how to see each demo.

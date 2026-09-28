@@ -96,6 +96,18 @@ class AdoptTest(unittest.TestCase):
         (self.root / "docs/project/sources/dossier.md").write_text(
             "# Dossier: lists\nStatus: exploring\nSources: " + ", ".join(ids.values()) + "\n\n## Where it stands\nAs the "
             "documents say.\n\n## Units\n" + "\n".join(units) + "\n")
+        # The independent extraction round over the documents, finding nothing the dossier missed.
+        ex = self.root / ".evidence/capture/extract-1"
+        ex.mkdir(parents=True)
+        (ex / "cold-reader.pack.md").write_text("".join(f"## Document: docs/project/sources/{s}-x/transcript.md\n"
+                                                        for s in ids.values()))
+        points = [{"refs": [u.split(" · ")[4].split("\n")[0]], "quote": u.split('> "')[1].rsplit('" (', 1)[0]}
+                  for u in units]
+        (ex / "cold-reader.result.md").write_text("```json\n" + json.dumps({"points": points}) + "\n```\n")
+        out = subprocess.run([sys.executable, str(capture), "reconcile", str(self.root), str(ex / "cold-reader.result.md")],
+                             capture_output=True, text=True, env=self.env)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("0 not carried", out.stdout)
         return ids
 
     def complete(self, doc_status="read"):
@@ -153,6 +165,28 @@ class AdoptTest(unittest.TestCase):
         self.assertIn("src/export.py: in the inventory but has no ledger row", out.stdout)
         ledger.write_text(re.sub(r"(\| README\.md \| doc \| \d+ \| read \|) SRC-\d+ \|", r"\1 |", text))
         self.assertIn("README.md: marked read, but its note cites no imported source", self.adopt("check").stdout)
+
+    def test_load_bearing_areas_are_read_twice_and_reconciled(self):
+        self.adopt("inventory")
+        self.complete()
+        self.adopt("commands")
+        areas = self.root / "docs/project/research/adoption/areas"
+        areas.mkdir(parents=True, exist_ok=True)
+        (areas / "store.md").write_text("# store\nThe list store.\n")
+        self.assertIn("does not open with 'Load-bearing", self.adopt("check").stdout)
+        (areas / "store.md").write_text("# store\nLoad-bearing: yes (every list lives here)\nThe list store.\n")
+        out = self.adopt("check").stdout
+        self.assertIn("without a second, independent reading", out)
+        (areas / "store.second.md").write_text("# store\nLoad-bearing: yes\nWrites the file in place.\n")
+        self.assertIn("not reconciled", self.adopt("check").stdout)
+        with open(areas / "store.md", "a") as f:
+            f.write("\n## Reconciled\n- the second reading says writes are in place · open\n")
+        self.assertIn("not settled", self.adopt("check").stdout)
+        (areas / "store.md").write_text("# store\nLoad-bearing: yes (every list lives here)\n\n## Reconciled\n"
+                                        "- writes are in place, not atomic · note corrected\n")
+        self.assertEqual(self.adopt("check").returncode, 0, self.adopt("check").stdout)
+        (areas / "ui.md").write_text("# ui\nLoad-bearing: no (display only)\n")
+        self.assertEqual(self.adopt("check").returncode, 0)
 
     def test_unlabeled_reconstruction_and_unmarked_legacy_fail(self):
         self.adopt("inventory")

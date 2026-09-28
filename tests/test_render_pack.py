@@ -197,6 +197,18 @@ class RenderPackTest(unittest.TestCase):
         self.assertNotIn("### docs/project/intent.md", context, "a document under review is not repeated as context")
         self.assertIn("which phone wins a conflict", text)
 
+    def test_extraction_mode_carries_the_sources_and_never_the_dossier(self):
+        src = self.root / "docs/project/sources/SRC-1-notes"
+        src.mkdir(parents=True)
+        (src / "transcript.md").write_text("### T001 · document\nDeletes reach both phones.\n")
+        (self.root / "docs/project/sources/dossier.md").write_text("# Dossier\n- S-001 the summary itself\n")
+        code, text = render(self.root, "cold-reader", "--mode", "extract", "--docs",
+                            "docs/project/sources/SRC-1-notes/transcript.md")
+        self.assertEqual(code, 0, text)
+        self.assertIn("Cold read, extraction mode", text)
+        self.assertIn("Deletes reach both phones", text)
+        self.assertNotIn("the summary itself", text, "an extraction that saw the dossier would only confirm it")
+
     def test_missing_input_is_named_not_guessed(self):
         (self.root / "docs/project/intent.md").unlink()
         code, text = render(self.root, "code-verifier", "--milestone", "M1")

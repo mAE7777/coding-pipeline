@@ -26,7 +26,8 @@ Roles and what their pack contains (nothing else reaches the checker):
                    findings a re-read settles. Understanding mode (--inputs understanding):
                    state.md's Understanding with the Goal, Must not lose, and the milestone's section.
                    Fidelity mode (--mode fidelity): the --docs transcripts verbatim and the dossier
-                   (docs/project/sources/dossier.md).
+                   (docs/project/sources/dossier.md). Extraction mode (--mode extract): the --docs
+                   transcripts only, never the dossier.
   claim-verifier   the --inputs claims file verbatim.
 
 The builder never writes a pack by hand: whatever the builder believes about the work is absent unless it
@@ -277,6 +278,11 @@ def render(role, opts):
                 pack.need(f"Transcript: {f}", pack.read(f), f)
             pack.need("Dossier", pack.read("docs/project/sources/dossier.md"), "docs/project/sources/dossier.md")
             title = "Cold read, fidelity mode"
+        elif mode == "extract":
+            # The sources only: an extraction that saw the dossier would confirm it instead of finding what it lacks.
+            for f in opts.get("docs", []):
+                pack.need(f"Document: {f}", pack.read(f), f)
+            title = "Cold read, extraction mode"
         else:
             docs = opts.get("docs", [])
             for f in docs:

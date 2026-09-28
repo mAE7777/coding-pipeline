@@ -55,15 +55,16 @@ If that file is missing, stop with BLOCKED: this is a venture project and its ru
    how, and why for each.
 5. **Mechanism cards** for every load-bearing mechanism (purpose, observable guarantee, rejected
    imitation, discriminating probe), and the **placeholder manifest** in the brief.
-6. **Cold read, at most twice.** Run the documents cold reader in the background and wait for its summary:
-   `python3 run_isolated.py cold-reader --dir auto --out .evidence/plan --project <project> --render
+6. **Cold read, until it comes back clear.** Run the documents cold reader in the background and wait for its
+   summary: `python3 run_isolated.py cold-reader --dir auto --out .evidence/plan --project <project> --render
    --with-record --docs docs/project/intent.md --docs docs/project/brief.md --docs docs/project/milestones.md
    --`. Resolve every material divergence in the files (asking the owner where the files cannot settle it).
-   If you changed anything load-bearing, read once more with the first result, so the second read checks
-   those findings and the changed text instead of hunting afresh: the same command with `--out
-   .evidence/plan-r2` and `--previous .evidence/plan/cold-reader.result.md` before the closing `--`.
-   There is no third read: whatever the second leaves open goes into the lock playback as a question for
-   the owner, with both readings.
+   Then read again with the previous result, so each read checks the earlier findings and the changed text
+   instead of hunting afresh (each one smaller than the last): the same command with a new `--out`
+   (`.evidence/plan-r2`, `-r3`, ...) and `--previous <the last result>` before the closing `--`. Stop when a
+   read comes back clear on everything it was given; what only the owner can settle goes into the lock
+   playback as a question, with both readings. When reads keep finding new material in text you did not
+   change, the documents lack something: gather it (ask, `/scout`) rather than rewording.
 7. **Lint**: `intent_lock.py lint`, `milestone_lint.py`, and for a dossier `capture.py closure`.
 8. **The lock.** Play back, standalone and in plain words, exceptions first: the promise, the done
    examples, the mechanism cards with their rejected imitations, the must-not-lose items, the assumptions,
@@ -86,7 +87,8 @@ before the lock, and the lock playback names every unit that became a non-goal o
 
 A project that exists without a complete record. The procedure, the ledger rules, and the checks are in
 `references/adopt.md`; in short: `adopt.py inventory`, read with a coverage ledger (documents fully
-through `/capture`, code by area, large areas to at most 3 read-only explorers writing notes to disk),
+through `/capture` in rounds until nothing is missed, code by area with large areas to read-only explorers,
+at most 3 at once, writing notes to disk, and every load-bearing area read a second time independently),
 reconstruct the record with evidence labels, the product as found becomes M0 with a demo verified by
 running it, `adopt.py commands`, `adopt.py check`, the cold reads, a characterization gate on M0 (`/gate
 M0`), then the lock with discrepancies first. The owner's acceptance of M0 is the baseline every later

@@ -64,6 +64,28 @@ none
 """
 
 
+def tiny_pdf(pages):
+    """A valid PDF with one line of text per page (Helvetica), built by hand so the test needs no PDF library."""
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>", None, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for text in pages:
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET"
+        objs.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+        content = len(objs)
+        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> "
+                    f"/Contents {content} 0 R >>")
+        kids.append(f"{len(objs)} 0 R")
+    objs[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(kids)} >>"
+    out, offsets = "%PDF-1.4\n", []
+    for i, body in enumerate(objs, 1):
+        offsets.append(len(out.encode()))
+        out += f"{i} 0 obj\n{body}\nendobj\n"
+    xref = len(out.encode())
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n" + "".join(f"{o:010d} 00000 n \n" for o in offsets)
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    return out.encode()
+
+
 class CaptureTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -76,6 +98,28 @@ class CaptureTest(unittest.TestCase):
 
     def cap(self, *args):
         return subprocess.run([sys.executable, str(CAP), *args], capture_output=True, text=True)
+
+    def extract(self, points, sources=("SRC-1",), n=1):
+        """Stand in for the isolated reader in extraction mode: its pack names the sources it read."""
+        d = self.project / f".evidence/capture/extract-{n}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "cold-reader.pack.md").write_text("".join(f"## Document: docs/project/sources/{sid}-x/transcript.md\n"
+                                                       for sid in sources))
+        (d / "cold-reader.result.md").write_text("Read.\n```json\n" + json.dumps({"mode": "extraction",
+                                                                                 "points": points}) + "\n```\n")
+        out = self.cap("reconcile", str(self.project), str(d / "cold-reader.result.md"))
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return out.stdout
+
+    def settle(self, n, row, resolution):
+        f = self.project / f"docs/project/sources/rounds/round-{n}.md"
+        lines = f.read_text().splitlines()
+        lines = [l[:l.rstrip().rstrip("|").rstrip().rfind("|") + 1] + f" {resolution} |"
+                 if l.startswith(f"| {row} |") else l for l in lines]
+        f.write_text("\n".join(lines) + "\n")
+
+    CARRIED = [{"refs": ["SRC-1 T001"], "quote": "I keep losing grocery lists", "point": "lists get lost"},
+               {"refs": ["SRC-1 T003"], "quote": "deleting must reach both phones", "point": "deletion syncs"}]
 
     def add_export(self, extra=False, name="conversations.json"):
         f = self.d / name
@@ -172,7 +216,83 @@ class CaptureTest(unittest.TestCase):
         self.add_export()
         self.write_dossier(DOSSIER)
         out = self.cap("check", str(self.project))
+        self.assertEqual(out.returncode, 1, "no independent extraction has read the source yet")
+        self.assertIn("SRC-1 has not been read by an independent extraction", out.stdout)
+        self.assertIn("to settle: 0", self.extract(self.CARRIED) + (self.project /
+                      "docs/project/sources/rounds/round-1.md").read_text())
+        out = self.cap("check", str(self.project))
         self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_rounds_run_until_one_finds_nothing_missed(self):
+        self.add_export()
+        self.write_dossier(DOSSIER)
+        missed = {"refs": ["SRC-1 T003"], "quote": "and an image of the list", "point": "the owner attached a photo"}
+        self.extract(self.CARRIED + [missed])
+        out = self.cap("check", str(self.project))
+        self.assertIn("round 1 row 1 is not settled", out.stdout)
+        self.write_dossier(DOSSIER.replace("## No-content turns", "- S-005 · product · document · open · SRC-1 T003\n"
+                                           "  The owner attached a picture of the list.\n\n## No-content turns"))
+        self.settle(1, 1, "added S-005")
+        out = self.cap("check", str(self.project))
+        self.assertIn("found 1 point(s) the dossier had missed; another round is due", out.stdout)
+        self.extract(self.CARRIED, n=2)
+        self.assertEqual(self.cap("check", str(self.project)).returncode, 0, "a round that finds nothing missed ends it")
+        for n in (3, 4, 5):
+            self.extract(self.CARRIED + [dict(missed, quote=f"missed point {n}")], n=n)
+            self.settle(n, 1, "added S-005")
+        out = self.cap("check", str(self.project))
+        self.assertIn("change the method", out.stdout, "a count never ends the reading; it changes how it is done")
+        self.assertEqual(out.returncode, 1)
+
+    def test_a_source_that_grew_is_extracted_again(self):
+        self.add_export()
+        self.write_dossier(DOSSIER)
+        self.extract(self.CARRIED)
+        self.add_export(extra=True)
+        self.write_dossier(DOSSIER.replace("## No-content turns\nnone", "## No-content turns\nSRC-1 T005-T006"))
+        self.assertIn("grew after its last independent extraction", self.cap("check", str(self.project)).stdout)
+
+    def test_a_folder_of_documents_logs_and_office_files(self):
+        docs = self.d / "pile"
+        (docs / "notes").mkdir(parents=True)
+        (docs / "notes/plan.md").write_text("# Goal\nShared lists.\n\n# Risks\nOffline edits.\n")
+        (docs / "server.log").write_text("\n".join(f"2026-09-2{i % 9} 10:00 event {i}" for i in range(250)) + "\n")
+        (docs / "config.json").write_text('{"retries": 3}')
+        (docs / "app.py").write_text("print('hi')\n")
+        (docs / "logo.png").write_bytes(b"\x89PNG\0\0binary")
+        (docs / "spec.pdf").write_bytes(tiny_pdf(["Deletes reach both phones", "Works offline"]))
+        (docs / "memo.txt").write_text("The memo says keep it simple.\n")
+        subprocess.run(["textutil", "-convert", "docx", str(docs / "memo.txt"), "-output", str(docs / "memo.docx")],
+                       check=True, capture_output=True)
+        (docs / "memo.txt").unlink()
+        out = self.cap("add", str(self.project), str(docs))
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        ledger = (self.project / "docs/project/sources/import-ledger.md").read_text()
+        for name, result in (("app.py", "code"), ("logo.png", "binary"), ("server.log", "imported"),
+                             ("spec.pdf", "imported"), ("memo.docx", "imported"), ("config.json", "imported")):
+            row = next(l for l in ledger.splitlines() if l.startswith(f"| {name} "))
+            self.assertIn(result, row)
+        metas = {json.loads(m.read_text())["title"]: json.loads(m.read_text())
+                 for m in (self.project / "docs/project/sources").glob("SRC-*/meta.json")}
+        self.assertEqual(metas["server"]["kind"], "log")
+        self.assertEqual(metas["server"]["counts"]["turns"], 2, "250 lines in windows of 200")
+        self.assertEqual(metas["spec"]["counts"]["turns"], 2, "one turn per page")
+        self.assertIn("pandoc", metas["memo"]["converter"])
+        again = self.cap("add", str(self.project), str(docs))
+        self.assertIn("0 imported", again.stdout, "unchanged files are not imported twice")
+        self.write_dossier("# Dossier\n\n## Units\n\n## No-content turns\nnone\n")
+        out = self.cap("check", str(self.project)).stdout
+        for where in ("a document section", "a log window"):
+            self.assertIn(where, out, "every section and log window is accounted for, not only the owner's words")
+
+    def test_an_unreadable_file_is_named_not_skipped(self):
+        docs = self.d / "pile"
+        docs.mkdir()
+        (docs / "scan.pdf").write_bytes(tiny_pdf([]))
+        out = self.cap("add", str(self.project), str(docs))
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("scan.pdf: not read", out.stdout)
+        self.assertIn("NOT READ", (self.project / "docs/project/sources/import-ledger.md").read_text())
 
     def test_check_catches_an_uncovered_owner_turn(self):
         self.add_export()
@@ -194,6 +314,7 @@ class CaptureTest(unittest.TestCase):
     def test_no_content_turns_and_removed_units(self):
         self.add_export()
         self.write_dossier(DOSSIER)
+        self.extract(self.CARRIED)
         self.assertEqual(self.cap("check", str(self.project)).returncode, 0)
         without = DOSSIER.split("- S-003")[0] + "\n## No-content turns\nnone\n"
         self.write_dossier(without)
