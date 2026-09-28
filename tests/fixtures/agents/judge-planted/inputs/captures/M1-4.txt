@@ -1,0 +1,7 @@
+$ printf '{broken' > expenses.json
+$ python3 app.py add food 1
+added 1.00 to food
+$ echo $?
+0
+$ cat expenses.json
+[{"category": "food", "amount": 1.0}]

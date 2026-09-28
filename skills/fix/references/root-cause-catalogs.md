@@ -8,13 +8,13 @@ Loaded at Stage 1 after initial root cause hypothesis. Match the observed sympto
 
 ### "Works locally, fails in production"
 1. Environment variables: `Grep` for hardcoded `localhost`, missing env vars in deployment config
-2. Module format: ESM/CJS mismatch — Vite uses ESM, serverless often expects CJS. Check for separate tsconfig in API directory
+2. Module format: ESM/CJS mismatch: Vite uses ESM, serverless often expects CJS. Check for separate tsconfig in API directory
 3. CORS: Missing `Origin` header on server-initiated requests; browser sees no `Access-Control-Allow-Origin` on subsequent requests
 4. Build output: Tree-shaking removed used code; dynamic imports not followed by bundler. Compare local vs production bundle
 
 ### "Worked before, now broken"
-1. Diff recent changes: `git log --oneline -10` + `git diff HEAD~5` — cause is usually in the last 3 commits
-2. Dependency drift: `git diff package-lock.json` — lockfile drift, auto-updates, peer dep conflicts, major version bumps
+1. Diff recent changes: `git log --oneline -10` + `git diff HEAD~5`; the cause is usually in the last 3 commits
+2. Dependency drift: `git diff package-lock.json`: lockfile drift, auto-updates, peer dep conflicts, major version bumps
 3. Stale state: Cached values from previous version, stale service workers, browser cache. Hard refresh + clear storage to rule out
 
 ### "Works sometimes / intermittent"
@@ -47,5 +47,5 @@ Loaded at Stage 1 after initial root cause hypothesis. Match the observed sympto
 
 When root cause is unclear after reading the code path:
 - Add targeted `console.log` at decision points (not blanket logging)
-- Reproduce with minimal input — strip context until the bug disappears, then add back
+- Reproduce with minimal input: strip context until the bug disappears, then add back
 - Check BOUNDARIES: function inputs/outputs, API request/response, component props/state

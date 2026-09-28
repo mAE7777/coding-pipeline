@@ -1,120 +1,90 @@
-# Pipeline Charter
+# Pipeline charter
 
-Principles for the coding pipeline (scout, plan, dev, qa, loyal, explain, fix, integrate, polish,
-deploy). Principles, not prescriptions. Rebuilt 2026-06-20, hardened 2026-07-12, for frontier
-agents at high reasoning effort (Fable 5 and Codex GPT-5.6 first; Opus 4.8 xhigh and GPT-5.5
-xhigh run it too).
+The principles behind the coding pipeline: `/capture`, `/scout`, `/plan`, `/dev`, `/gate`, `/loyal`,
+`/fix`, `/handoff`, `/inbox`, `/deploy`, `/explain`, `/polish`. Written for frontier agents (Claude Opus 5.5 and
+GPT-6 Astra class), in Claude Code and in Codex. Each skill carries its own rules; this file is the reason
+they are shaped the way they are, and the tie-breaker when a situation is not covered.
 
-## The governing test
-A skill or rule earns its place ONLY if a frontier model at high reasoning effort does
-meaningfully worse without it. Everything else is a cage: it scripts the model's thinking and
-breaks on the next model upgrade. When in doubt, hand it to the model.
+## Why the pipeline looks like this
+Current models plan, decompose, write tests, and check their own work well, and they sustain multi-hour
+runs. Scripting those steps now makes results worse: step choreography, verification rituals, and
+pressure language are the patterns vendors tell you to delete. What still goes wrong is judgment:
+drifting toward a familiar imitation of what was meant, quietly narrowing or widening scope, hiding
+failure behind a fallback, leaving built parts unwired, claiming "done" early, and losing decisions across
+compaction, handoffs, and switches between tools. The pipeline controls those failure points and nothing
+else. A rule earns its place only if a strong model does measurably worse without it, and anything a script
+can enforce is enforced by a script or a hook rather than asked for in prose.
 
-## The thesis
-**Thick intent, thin code.** Freeze the intent after interrogating it to completeness and
-explicitly confirming it; never assume anything material. Keep the plan fluid. Let the model write
-the code freely and hidden. Spend human attention on the intent layer (capture + confirm), on an
-isolated evidence-grounded verification stack, and on a few hard safety gates. The model writes
-freely downstream because intent was pinned upstream.
+## The five laws
+1. **Brief, don't script.** Give the situation (goal, users, expectations, constraints with their reasons,
+   the verified starting state, context, trade-offs, unknowns, when to stop) and the finish line.
+2. **Milestones are the unit of truth.** A milestone is a complete product state a real person can use end to
+   end, with a demo that proves it; built as one sustained run, verified at its gate, accepted by the owner.
+   The builder's own task list lives inside it and is never gated.
+3. **Prove at the joints, isolated by process where not knowing is the point.** The joints: the intent lock,
+   the builder's restated understanding, load-bearing checkpoints, the milestone gate, irreversible actions.
+   Self-checking during the build is the model's own loop and is never instructed or delegated. Independent
+   checks run as separate processes in prepared copies under an OS sandbox, with inputs rendered by script
+   from files, so isolation never depends on prompt text or on the builder's wording.
+4. **Nothing silent.** Every non-success has a name and a count; every built part is wired and proven, or
+   parked and unreachable; every fact carries its source and date; evidence from another fingerprint is STALE.
+5. **Disk is truth, context is cache.** Decisions, state, and evidence are written when they happen; the
+   owner's instructions count once written down, in their own words, proven against the transcript;
+   handoffs pass references and fingerprints; after a compaction, writes wait until the state files are read.
 
-## The loop
-`(scout? optional) → plan [interrogate intent → EARS anchor + contracts → CONFIRM gate] → for each
-slice: dev [build hidden, hard-part-first, self-verify, ask-don't-guess] → verify [loyal intent +
-qa correctness/security with converge + DoD, run concurrently where the harness allows, all
-isolated/evidence-bound/escalate-by-exception, plus the deterministic gate script owned by qa; a
-clean pass continues to the next slice automatically] → integrate [whole-product converge +
-analyze + DoD] → deploy [back-translation gate].` `fix` = off-loop targeted change. `explain` = the
-4-mode (engineer/founder/investor/user) layer that keeps code hidden, on demand and after the
-final slice. `polish` = optional product scrutiny, not part of the coding loop.
+## The flow
+Ideas from conversations are kept whole by `/capture` until the owner decides to build. `/plan` turns an
+idea, a dossier, or an existing project (`/plan adopt`) into the build record and locks the intent with the
+owner. `/dev` builds one milestone; `/gate` accepts or rejects it through isolated checkers; the owner
+accepts it by watching the demo. Input that arrives while building (other people's opinions, proposed
+changes, new ideas) waits in the inbox, verbatim, until `/inbox` weighs it and the owner rules; it enters the
+record only through a decision. `/scout` answers real unknowns, `/fix` makes targeted changes, `/handoff`
+moves work between sessions and tools on purpose (switching tools is automatic), `/deploy` ships, `/explain`
+tells any audience what exists, `/polish` scrutinizes a product from outside.
 
-## Artifacts (the whole state)
-- `intent-anchor.md` — immutable frozen intent: goal; definition-of-done as **EARS statements,
-  each with a grounding example**; the single load-bearing behavior; persona; design-intent (UI);
-  the **Assumptions Index** (signed off at the CONFIRM gate); resolved hidden-details. Written by
-  `/loyal freeze` via `/plan`'s interrogation. THIS is the spec; there is no `phases.md`.
-- `contracts.md` — the interface/module boundaries and data shapes the build honors.
-- `slices.md` — the living, riskiest-first list of vertical slices with a `current:` marker.
-  Re-sliced after each build. Replaces `phases.md`.
-- `intent-ledger.md` — append-only drift history (loyal).
-- `AGENTS.md` (+ a `CLAUDE.md` that imports it) — lean hand-written project memory, under ~200
-  lines, only the non-obvious.
-- `fix-log.md` — off-loop change log.
+## The build record
+`AGENTS.md` (the map: labeled commands, conventions, a working agreement both tools read) plus
+`docs/project/`: `intent.md` (locked and hashed; changed only by an owner-ruled re-freeze), `milestones.md`,
+`interfaces.md`, `decisions.md` (append-only), `fix-log.md`, `inbox.md` (all committed); `brief.md`, `state.md`,
+`gate.md`, `handoffs/`, `reviews/`, `research/`, `sources/`, `.evidence/`, and by default `AGENTS.md` and
+`CLAUDE.md` (local-only, through git's local exclude file written by `local_only.py`, never `.gitignore`). One concern, one file: new input goes into the right file with its
+source, the old entry marked superseded. Templates are in `_shared/templates/`.
 
-## Decision authority — escalate by exception, not per-transition
-- The deterministic gate resolves first → the isolated evidence-bound verifier self-certifies →
-  the human sees ONLY real failures, genuine gray-zone calls, and irreversible/credentialed
-  actions. Blanket per-transition approval is measurably less safe (it trains rubber-stamping);
-  do not reinstate it.
-- **Never assume material context.** Any decision that could change the observable result is
-  asked, not guessed (recommended defaults are allowed; nothing material is assumed silently). This
-  binds `/plan` interrogation and `/dev` mid-build alike.
-- **Two mandatory human gates**: (1) the **CONFIRM gate** in `/plan` — explicit confirmation of the
-  frozen intent, played back as EARS statements + grounding examples + the Assumptions Index,
-  before any code; (2) a plain-English back-translation confirmation before any irreversible or
-  credentialed action (`/deploy`).
+Authority when sources disagree: the owner's latest instruction once written down, then `intent.md`, then
+active constraints, then the milestone contract, then `interfaces.md`, then code and tests (facts about the
+tree, not proof of intent). A conflict is reported, never settled by picking the convenient side.
 
-## Verification doctrine
-- **Isolation**: a verifier runs in a fresh context that did not write the code; prefer a
-  different model. Self-review is biased toward its own work.
-- **Evidence over assertion**: every verdict is backed by a real command + output, trace, or
-  screenshot. "Looks done" / "tests pass" without evidence is rejected.
-- **Four verification layers per slice, isolated and evidence-bound**: (1) intent drift → `/loyal`
-  (behavior reconstruction vs the frozen anchor); (2) correctness + security → `/qa` (isolated,
-  ideally a different model; falsifies each EARS criterion; classifies gaps as
-  missing/partial/contradicts/unrequested); (3) rot + secrets → the deterministic gate, an actual
-  script (`~/.claude/skills/_shared/gate.sh`, sole owner `/qa`): secrets, lint, typecheck,
-  dependency audit, AI traces, complexity/clones when the project's tools exist; deterministic
-  means a script runs it, not a model re-deriving it; (4) the Definition-of-Done exit gate. Keep
-  them separate; a clean intent pass does not mean clean internals. `integrate` runs the whole-product versions
-  (converge + analyze + full DoD).
-- **No quotas**: never force a minimum finding count. Manufactured findings train the eye to skim.
+## Statuses
+Checks: PASS · FAIL · WARN · SKIP (does not apply, with the reason) · NOT_RUN (could not run, with the
+reason) · BLOCKED (owner and unblock condition) · INCONCLUSIVE (the checker could not ground itself) ·
+STALE · QUARANTINED (a flaky test, with owner, reason, expiry). Behavior: HOLDS · FAILS · UNGROUNDED. Intent
+diff: HOLDS · DRIFT · MISSING · EXTRA · ORPHAN · INACCURATE (the right name with a changed causal role).
+Wiring: UNWIRED · UNCONSUMED · PHANTOM. Gate: ACCEPT-READY · CHANGES · BLOCKED · INCONCLUSIVE. Milestone:
+planned · building · gate · changes · accepted · dropped. Readiness: built · gate-passed · accepted ·
+released · live-verified, five different facts. A report shows counts; one green word never covers a NOT_RUN.
 
-## Build doctrine
-- A "phase" is a **vertical slice** (steel thread): one user-facing capability cut end-to-end,
-  sized to what the model builds reliably and a human verifies in one pass. Not a layer, not a
-  formula.
-- **Riskiest / load-bearing first**: slice #1 threads the behavior that, if wrong, makes the
-  whole thing pointless. Never defer the hard part to "a later slice or version"; that is
-  distraction, not sequencing.
-- **Anti-tech-debt layer**: contract-first interfaces, a clean blessed first thread, lean
-  `AGENTS.md`, small slices. Quality is never lowered; thin means thin in SCOPE. Every slice is
-  production-grade for its scope.
-- Don't over-build: a senior engineer should not call the result overcomplicated.
-- **Scales by slice count, not by harness.** A 5-slice CLI and a 60-slice full-stack app run the
-  same loop. The large build just has a richer `contracts.md` (the system architecture), a
-  walking-skeleton first slice, and nested `AGENTS.md`. "Thin" is thin in scaffolding, not in the
-  size of thing it can build. Regulated/multi-team/audited codebases add spec-anchored governance
-  on top; solo and small-team full-stack is this loop's sweet spot.
+## Human gates
+The owner is asked only where their judgment cannot be replaced: the intent lock; any stand-in on the product
+path; milestone acceptance (watching the demo); each irreversible or credentialed action; a material fork the
+documents do not settle; a finding that survived two fix rounds; a real change of scope; a change of intent;
+declining or reshaping someone's input.
+Routine choices are made and logged.
 
-## On-demand curated depth
-The thin skill bodies stay lean; curated references load ONLY when the specific case applies
-(progressive disclosure), so the v1 knowledge is preserved without re-bloating: `/scout` →
-brownfield-mapping guide; `/qa` → UI-UX, regression, and game protocols; `/fix` → root-cause
-catalog; `/deploy` → platform targets + failure patterns. The **steal protocol**
-(`_shared/references/steal-protocol.md`) is wired across `/plan → /dev → /qa` for verbatim porting
-from a known source: read the source (never reimplement from a summary), preserve every constant
-and invariant exactly, classify by tier, and a Tier-1 deviation needs approval; a STEAL_DEVIATION
-surfaces in qa's converge check. This restores the v1 curated capability and the steal-tier system
-as a true superset, on demand.
+## Resources
+Model thinking is remote and costs tokens; builds, tests, servers, browsers, and simulators are local and cost
+heat. Per session at most 3 agent contexts at once (subagents plus isolated runs), at most 5 subagents at
+once, nesting depth 2; workflows run at most 3 agents at once. Machine-wide at most 1 heavy job, through the
+kernel lock and leases in `_shared/scripts/heavy.py`, enforced by a hook. Subagents are for isolation or for
+large independent work that would flood the context, never for double-checking one's own work.
 
-## Security is continuous
-Write-time hooks, the per-slice gate script (SCA/secrets), the verifier's security lens,
-and the pre-deploy audit + back-translation gate. Not just at deploy. Untrusted input and
-credentials are where models still fail regardless of capability.
+## Writing the skills
+Each SKILL.md stays under about 200 lines with its load-bearing rules first, states outcomes and
+constraints with their reasons, keeps curated knowledge in references loaded on demand, and names the one
+failure each checker exists to catch. Owner-facing text decodes on its own: plain meaning first, any ID only
+in parentheses after it.
 
-## Taste: stand with users, leave no AI traces
-Every decision traces to "what happens when a real person uses this." Output (code, commits,
-READMEs, changelogs) reads as human-written: no AI attribution lines, no generated-with banners,
-no AI-styled prose tics.
-
-## Deprecated (rebuilt 2026-06-20)
-Superseded and no longer used by the pipeline: `phases.md` and the phase-decomposition machinery
-(four lenses, mandatory Phase 0, 6-task split, cross-validation phase, version-decomposition);
-the dev orchestrator + `dev-planner` + `task-implementer` split + multi-section plan file +
-complexity tiers; qa's category taxonomy + `qa-planner` + `category-executor` + find-N-findings
-quota; forced classifications (investigation type, testing archetypes A-G, AI-determinism
-tiers); `pipeline-state.md` ceremony; mandatory key-learnings; blanket per-transition approval.
-The shared references `decomposition-framework.md`, `phase-design-principles.md`,
-`testing-strategy-archetypes.md`, `ai-output-determinism.md`, `user-journey-simulation.md` and
-the agents `dev-planner`/`task-implementer`/`qa-planner`/`category-executor` are retained for
-reference but unwired.
+## Output that leaves the machine
+Commits, READMEs, changelogs, and shipped text read as written by a human developer: no AI or tooling
+traces, no skill or agent names, and no spaced em-dashes. Committed planning files use neutral labels
+(`[owner <date>]`, `[proposed]`, `[research <ref> <grade>]`, `[environment <date>]`); files that name models
+and tools stay local.

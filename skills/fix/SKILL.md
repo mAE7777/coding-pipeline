@@ -1,43 +1,44 @@
 ---
 name: fix
-description: "Make a targeted change that isn't a whole slice: a bug fix, a qa finding, a small tweak. Use this skill when the user says /fix, 'fix this', 'fix bug', 'patch this', 'address this qa finding', or wants a change scoped to a handful of files. Triage, change the smallest thing that works, verify with a real check shown as evidence, log it. Redirects to /plan and /dev if the change turns out to be a whole slice."
-argument-hint: "<description of the fix or a qa finding reference>"
+description: "Make a targeted change outside a milestone's build run: a bug, a blocking gate finding, a production hotfix, a flaky test, a small tweak. Reproduce first, change the smallest thing that fixes it, turn the reproduction into a regression test, re-run what the change touches, log it in the fix log. Redirects to /plan amend or a milestone when the change grows past a fix. Use for /fix, 'fix this', 'patch', or a finding the gate sent back."
+argument-hint: "<the problem, or a gate finding ID such as M2-F03>"
 ---
 
-# fix — Targeted Change
+# /fix
 
-> EXECUTABLE WORKFLOW. The off-loop quick path. The smallest change that works, proven by a real
-> check.
+Load-bearing rules:
+- Reproduce before changing anything: a real failing trace (command and output), or for a gate finding its
+  quoted evidence reproduced in this tree. No reproduction, no fix: say what you tried.
+- The smallest change that fixes it. Every changed line traces to this fix; no adjacent refactor, no new
+  scope. The same standing rules as `/dev` apply: loud failure at boundaries, no invented defaults, no
+  stand-in on the product path without the owner's consent in their words, tests never weakened.
+- The reproduction becomes a regression test that fails before the change and passes after.
+- Three failed attempts: stop and report what was tried and what you learned, as a Blockers row.
+- A fix that turns into a new capability, a contract change, or many files is not a fix: stop and route it
+  to `/plan amend` (intent changes) or into a milestone.
+- Venture projects: when the project has a `truth/` folder, read
+  `~/.claude/skills/_shared/references/venture-mode.md` before changing anything; if it is missing, stop with BLOCKED (this is a
+  venture project and its rules are not installed).
 
-For a change that is not a whole slice. If it grows into one (a new capability, a contract change,
-many files), stop and redirect to `/plan` + `/dev`.
+When `record_check.py` does not report `complete`, a fix still goes ahead when the owner asked for it; the
+fix log is created, and the missing record is named in your report (adoption is `/plan adopt`).
 
-## Workflow
+## Steps
+1. **Classify** the origin: code, plan (the contract was wrong), interface, environment, or test. A plan or
+   interface origin means the fix also needs a decision entry, and possibly the owner.
+2. **Reproduce.** When the cause is not obvious after reproducing, match the symptom in
+   `references/root-cause-catalogs.md`.
+3. **Change** the smallest thing; heavy commands go through the machine lock.
+4. **Prove it**: the regression test red then green; every checkpoint the change touches re-run (their checks
+   are in `milestones.md`); for a diff of a few files, the bundled `/code-review` gives a cheap fresh look.
+5. **Log** in `docs/project/fix-log.md` (template in `~/.claude/skills/_shared/templates/fix-log.md`):
+   symptom, origin, reproduction and its test, change, checks re-run with evidence paths, attempts.
+6. **Hand back.** For a gate finding: say which finding is fixed and what shows it (its `fixed_when`); the
+   milestone is frozen again and the next gate round runs (`/dev freeze`, then `/gate`). For a production
+   hotfix: `/deploy` next, and the fix joins the next milestone's regression demo.
 
-### Stage 1 — Triage
-If it's a bug, reproduce it first (a real failing trace). If it's a qa finding, read it. If the
-root cause isn't obvious after reproducing, load `references/root-cause-catalogs.md` and match the
-symptom to a likely cause. Scope it: if this is actually a new capability or needs a contract
-change, REDIRECT to `/plan` + `/dev` and stop.
-
-### Stage 2 — Change
-Make the smallest change that fixes it. Scope guard: every changed line traces to this fix; don't
-refactor adjacent code or add unrequested scope.
-
-### Stage 3 — Verify (evidence)
-Run a real check that proves it's fixed (the reproduction now passes, the behavior works), shown
-as command + output. For a bug, the reproduction trace going from red to green is the proof. Three
-strikes: if three attempts don't fix it, stop and surface why rather than thrashing.
-
-### Stage 4 — Log
-Append a one-line entry to `fix-log.md` (what was wrong, what changed, the evidence). If the fix
-touched a load-bearing behavior, suggest a `/loyal check`.
-
-### Success: the problem is fixed, proven by a real check; `fix-log.md` updated.
-### Failure: three attempts failed, or scope exceeded a targeted change (redirect).
-
-## Ecosystem
-- **Reads**: the qa finding / bug report, `contracts.md`, `AGENTS.md`.
-- **Writes**: code; `fix-log.md`.
-- **Redirects to**: `/plan` + `/dev` when the change is really a slice. Re-verified by `/qa` if
-  non-trivial.
+## Flaky tests
+Never skip a flaky test silently or raise its timeout to hide it. Find the cause (shared state, timing,
+order, network). If it cannot be fixed now, quarantine it explicitly: in the fix log, `Quarantined: <test> ·
+owner <who> · reason <why> · expires <date>`, and mark it in the test itself so the runner reports it as
+QUARANTINED, not passing.

@@ -59,4 +59,4 @@ Platform-specific failure patterns with symptoms, diagnosis, and resolution. Loa
 ### 11. DNS/SSL Propagation Delay
 - **Symptom**: Intermittent 404 or SSL certificate errors immediately after deploy with custom domain.
 - **Diagnosis**: DNS changes or SSL certificate provisioning not yet propagated. Can take 5-60 minutes.
-- **Resolution**: Wait and retry. Check `dig` or `nslookup` for DNS status. Verify SSL cert status in platform dashboard. Not a code issue — do not redeploy.
+- **Resolution**: Wait and retry. Check `dig` or `nslookup` for DNS status. Verify SSL cert status in platform dashboard. Not a code issue; do not redeploy.

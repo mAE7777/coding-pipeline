@@ -1,0 +1,7 @@
+$ printf '{broken' > expenses.json
+$ python3 app.py add food 1
+error: cannot read expenses.json: Expecting property name enclosed in double quotes; the file was left untouched
+$ echo $?
+2
+$ cat expenses.json
+{broken

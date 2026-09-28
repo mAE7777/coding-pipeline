@@ -1,88 +1,107 @@
-# Claude Code Pipeline II
+# Coding Pipeline
 
-A development harness for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), built for frontier agents at high reasoning effort (Fable 5 and Codex GPT-5.6 first; Opus 4.8 and GPT-5.5 at xhigh run it too). It replaces the earlier [coding-team](https://github.com/mAE7777/coding-team) pipeline, which froze a heavy `phases.md` up front and asked for approval at every transition.
+A set of skills, checker agents, hooks, and scripts for building software with coding agents (Claude Code,
+and Codex alongside it). It is written for current frontier models, which plan, test, and check their own
+work well and can run for hours. So it does not script the work. It controls the places where agent-built
+software still goes wrong: drifting toward a familiar imitation of what was meant, quietly narrowing or
+widening scope, hiding failures behind fallbacks, leaving built parts unwired, calling things done too early,
+and losing decisions when context is compacted or work moves between sessions and tools.
 
-One position drives the whole thing: **thick intent, thin code**. The field answers AI-code drift with more specs, but a spec is feedforward, it sets the target once and hopes. What actually bounds drift is a sensor. So the rigor goes to two layers and nowhere else: the intent layer (interrogate what to build until it is complete, play it back, freeze it) and the verification layer (isolated, evidence-bound checks that reconstruct behavior from the finished code alone). The code layer is left to the model, written freely and kept hidden.
+The principles are in [`skills/_shared/references/pipeline-constitution.md`](skills/_shared/references/pipeline-constitution.md).
 
-The governing test for every rule in here: a skill or constraint earns its place only if a frontier model at high reasoning effort does meaningfully worse without it. Everything else is a cage that scripts the model's thinking and breaks on the next upgrade. When in doubt, hand it to the model. The full charter lives in [`skills/_shared/references/pipeline-constitution.md`](skills/_shared/references/pipeline-constitution.md).
-
-## The loop
+## How work flows
 
 ```
-(scout?) → plan → for each slice:  dev → verify → integrate → deploy
-                                            │
-  plan    = interrogate intent, EARS anchor, CONFIRM gate    └→ fix (off-loop)
-  verify  = loyal (intent drift) + qa (correctness/security) + the gate script,
-            run concurrently; a clean pass rolls straight into the next slice
-  explain = on-demand recap in the reader's register (engineer/founder/investor/user)
+ conversations, voice notes ──/capture──> dossier ──┐
+ an existing codebase ────────────/plan adopt───────┤
+ an idea ────────────────────────────/plan──────────┴──> intent locked with the owner
+                                                              │
+    /dev M1  (one sustained run: understanding checked, hard part first, wired as it goes)
+      │ freeze
+    /gate M1 (copies → deterministic checks → review → blind reconstruction → demo → judge)
+      ├─ CHANGES      → /fix or /dev, then the next round
+      └─ ACCEPT-READY → the owner watches the demo and accepts → /dev M2 ...
 ```
 
-A "phase" here is not a layer or a formula. It is a vertical slice, one user-facing capability cut end to end, sized to what the model builds reliably and a human verifies in one pass. The riskiest, load-bearing slice goes first; the hard part is never deferred to a later slice or version.
+Work is cut into **milestones**: complete product states a person can use end to end, each with a demo
+that proves it. Verification happens only at the joints (the intent lock, the builder's restated
+understanding, a few load-bearing checkpoints, the milestone gate, and irreversible actions), never as a
+ritual inside the build.
 
-## The skills
+## Skills
 
-| Command | Role |
-|---------|------|
-| `/scout` | Optional pre-build research: feasibility, tech choices, mapping an unfamiliar codebase |
-| `/plan` | Frame the build. Interrogate intent to completeness, ground it in examples, freeze it behind an explicit CONFIRM gate. Never assume anything material |
-| `/dev` | Build one vertical slice, hidden, hard-part-first, self-verified before it calls itself done |
-| `/qa` | Isolated correctness and security verification that tries to refute each acceptance criterion, then converges the gaps |
-| `/loyal` | Intent-drift sensor. Reconstructs what the code actually does from behavior and diffs it against the frozen intent |
-| `/explain` | Re-derives the change for a chosen reader: engineer, founder, investor, or user. Keeps the code hidden |
-| `/fix` | Off-loop targeted change scoped to a handful of files, with real root-cause analysis |
-| `/integrate` | Whole-product convergence and the full definition-of-done pass |
-| `/polish` | Optional external stress-test before a real launch. Not part of the coding loop |
-| `/deploy` | Release safety gates, a thin changelog, and a plain-English confirmation before any irreversible action |
+| Command | What it does |
+|---|---|
+| `/capture` | Keeps idea conversations (ChatGPT exports or pasted chats, voice recordings, notes, documents) verbatim with numbered turns, and organizes them into a dossier that cites every turn and keeps the owner's words apart from an assistant's suggestions |
+| `/scout` | Turns a real unknown into graded evidence: ask, map, spike, or offload to a chat model and verify what comes back |
+| `/plan` | Writes the build record and locks the intent with the owner; `adopt` takes over a project that has no record; `amend` changes intent by ruling; `convert` migrates older formats |
+| `/dev` | Builds one milestone (or an authorized run of several) as one sustained run; `resume` after a break or a switch of tools; `freeze` hands it to the gate |
+| `/gate` | Accepts or rejects a milestone through isolated checkers and a computed verdict; `accept` records the owner's acceptance |
+| `/loyal` | Checks mid-build whether what was built is still the thing that was meant |
+| `/fix` | Makes a targeted change outside a milestone, reproduction first |
+| `/handoff` | Hands work over on purpose, to another session, another tool, or an outside reviewer |
+| `/inbox` | Keeps other people's opinions, proposed changes, and new ideas in their own words until they are weighed: each is checked against the locked intent and earlier decisions, researched where it rests on a claim, adopted whole, in part, reshaped, placed in a milestone, or rejected (by the owner unless it is a whole adoption inside the current contract), written where it belongs, and cleared with a decision entry; the gate fails on any item that vanished |
+| `/deploy` | Ships behind a plain-English confirmation of each irreversible action, then verifies the live product |
+| `/explain` | Explains what exists to an engineer, founder, investor, or user |
+| `/polish` | Optional outside-in scrutiny before real users see it |
 
-## Verification doctrine
+## Checkers
 
-Every slice passes through four layers, kept separate on purpose, because a clean intent pass says nothing about the internals:
+Each runs as a separate headless process in a prepared copy of the project, under the operating system's
+sandbox, with its inputs rendered by a script from files. None sees the builder's conversation.
 
-1. **Intent drift** via `/loyal`: behavior reconstructed from the finished code, diffed against the frozen anchor.
-2. **Correctness and security** via `/qa`: isolated, ideally a different model, falsifying each acceptance criterion and classifying every gap as missing, partial, contradicting, or unrequested.
-3. **Rot and secrets** via the deterministic gate, a real script ([`skills/_shared/gate.sh`](skills/_shared/gate.sh), owned by `/qa`): secret scan, lint, typecheck, dependency audit, leftover-debug and AI-trace scan, complexity/clones when the project's tools exist. Every check reports PASS, FAIL, WARN, or SKIP; a skipped check is named, never implied as a pass. Deterministic means a script runs it, not a model re-deriving it.
-4. **The definition-of-done** exit gate.
+| Agent | Catches |
+|---|---|
+| `code-verifier` | a build that passes its own tests while the core mechanism is a familiar imitation, or failure paths quietly degrade; also runs the demo from a clean start |
+| `loyal-evaluator` | a product that works but is no longer the thing that was meant: it describes what the product does and guesses its purpose before it is told the goal |
+| `gate-judge` | a verdict that grades the builder's story instead of the evidence |
+| `cold-reader` | a document clear to its author that admits several builds; a restatement that shifted the promise; a summary that lost or bent its source |
+| `claim-verifier` | a research claim resting on one reprinted, misread, or outdated source |
 
-Two rules hold across all of it. Isolation: a verifier runs in a fresh context that did not write the code, preferably a different model, because self-review is biased toward its own work. Evidence over assertion: every verdict is backed by a real command and its output, a trace, or a screenshot. "Looks done" is rejected. There are no finding quotas; a forced minimum trains the eye to skim.
+## The build record
 
-## Decision authority
+`AGENTS.md` (the map: labeled commands, conventions, a working agreement every agent reads) plus
+`docs/project/`: `intent.md` (locked and hashed), `milestones.md`, `interfaces.md`, `decisions.md`,
+`fix-log.md`, `inbox.md` (input waiting to be weighed), and local-only working files (`brief.md`, `state.md`, `gate.md`, handoff notes, gate reviews,
+research, captured sources, evidence). Templates are in `skills/_shared/templates/`.
 
-Attention is spent by exception, not per transition. The deterministic gate resolves first, then the isolated verifier self-certifies, and the human sees only real failures, genuine gray-zone calls, and irreversible or credentialed actions. Blanket per-transition approval is measurably less safe because it trains rubber-stamping.
+## Guarantees enforced in code
 
-There are exactly two mandatory human gates: the CONFIRM gate in `/plan`, where the frozen intent is played back as acceptance statements plus grounding examples plus the assumptions index before any code is written, and a plain-English back-translation before `/deploy` does anything irreversible.
-
-## Artifacts
-
-The whole state of a build lives in a few files, not a ceremony:
-
-- `intent-anchor.md`, the immutable frozen intent, written by `/loyal freeze` through `/plan`'s interrogation. This is the spec; there is no `phases.md`.
-- `contracts.md`, the interface and module boundaries the build honors.
-- `slices.md`, the living, riskiest-first list of vertical slices with a current marker, re-sliced after each build.
-- `intent-ledger.md`, the append-only drift history.
-- `AGENTS.md` (imported by a `CLAUDE.md`), lean hand-written project memory, only the non-obvious.
-- `fix-log.md`, the off-loop change log.
-
-## Architecture
-
-**Skills.** Each skill is a `SKILL.md` that instructs Claude how to behave at one stage, loading references on demand and delegating heavy work to isolated subagents. Curated depth loads only when the case applies: `/scout` pulls a brownfield-mapping guide, `/qa` pulls UI, regression, and game protocols, `/fix` pulls a root-cause catalog, `/deploy` pulls platform targets and failure patterns.
-
-**Agents.** Two isolated verifiers do the evidence-bound work:
-
-| Agent | Used by | Role |
-|-------|---------|------|
-| `code-verifier` | `/qa` | Fresh-context correctness and security review, grounded in real command output |
-| `loyal-evaluator` | `/loyal` | Reconstructs user-facing behavior from the code alone, never the build conversation |
-
-**The steal protocol** (`skills/_shared/references/steal-protocol.md`) is wired across `/plan → /dev → /qa` for verbatim porting from a known source: read the source rather than reimplement from a summary, preserve every constant and invariant exactly, classify by tier, and surface any tier-1 deviation for approval.
+- **Isolation.** Checkers run with no user settings, no plugins or MCP servers, only the tools they need,
+  reads fenced to their own copy and toolchains, writes fenced to the copy and caches, network limited to
+  localhost (a Codex-family checker also reaches HTTPS, because its own model call runs inside the same fence),
+  and a canary planted in the real project for every round: a checker that reads it fails the round.
+- **Owner's words.** Only messages the owner typed count: agent reports and harness notices that arrive in
+  the user role are never taken as the owner's ruling, and a quoted ruling must equal the words recorded.
+- **Owner rulings.** The intent lock, milestone acceptance, and any consent to a stand-in quote the owner's
+  own words, and a script proves those words are a whole sentence (or the whole message) the owner typed, so a
+  cut quote cannot drop a "no". An acceptance names the
+  exact candidate that passed its gate, and a release ships only that candidate.
+- **Nothing silent.** Every non-success has a name (FAIL, NOT_RUN, BLOCKED, INCONCLUSIVE, STALE, and the rest),
+  missing inputs are named, and the verdict is recomputed from the evidence.
+- **Handoffs.** A handoff note is rewritten at every stop and checked for anything dropped; a new session in
+  either tool is told who worked last, what changed since, and what is next.
+- **Compaction.** After a compaction, edits wait until the state files have been read again.
+- **Machine load.** One heavy job (build, test suite, browser, simulator) runs at a time on the machine, through
+  a kernel lock; subagent concurrency and depth are capped.
 
 ## Install
 
-These are Claude Code skills and agents. To use them, copy the trees into your Claude config:
-
-```bash
-git clone <this-repo> coding-team-II
-cp -R coding-team-II/skills/*   ~/.claude/skills/
-cp -R coding-team-II/agents/*   ~/.claude/agents/
+```
+python3 install.py plan          # every action, nothing changed
+python3 install.py apply         # install into ~/.claude, archive retired pieces, write a manifest
+python3 settings_patch.py        # show the hook registrations; add --apply to write them (with a backup)
+python3 codex_hooks_patch.py     # the same for Codex; Codex asks you to trust new hooks once
+python3 install.py check         # prove the installed files match this repository, with no shadow copies
 ```
 
-Then invoke any stage by its slash command (`/plan`, `/dev`, `/qa`, and so on) inside Claude Code.
+Tests: `bash tests/pipeline-selftest.sh` runs every script and hook suite and the static checks.
+`python3 tests/agent_fixtures.py` runs each checker against planted-defect and clean projects, three times each.
+
+Requirements: macOS (the sandbox and copy-on-write clones), Python 3.9+, Claude Code 2.1.283 or later,
+Playwright for Python with Chromium (the checkers' browser), and `playwright-cli` (the builder's browser);
+`install.py check` fails when one is missing. Optional: Codex CLI (the other model family for code review),
+whisper (audio capture).
+
+A local `private/` folder, if present, is installed over the same paths (the owner's standing requirements
+and any private rules) and carries its own tests, which the self-test runs; it is never published.
