@@ -131,8 +131,10 @@ def with_inbox(steps, inbox):
     return steps
 
 
-def step(who, action, why):
-    return {"who": who, "action": action, "why": why}
+def step(who, action, why, fresh=False):
+    """fresh: the step opens a new phase, best begun in a new session (the record carries everything; the last
+    phase's detours and rejected options stay behind)."""
+    return {"who": who, "action": action, "why": why, "fresh": fresh}
 
 
 def next_steps(s, root):
@@ -170,7 +172,8 @@ def next_steps(s, root):
             if inbox_between:
                 out.append(step("builder", "/inbox review", "weigh what is waiting before the next milestone starts: "
                                 + ", ".join(inbox_between[:5])))
-            return out + [step("builder", f"/dev {mid}", f"{mid} ({m['name']}) is the next milestone to build")]
+            return out + [step("builder", f"/dev {mid}", f"{mid} ({m['name']}) is the next milestone to build",
+                               fresh=True)]
         if m["status"] == "gate" and m["gate_passed"]:
             return out + [step("owner", f"watch the {mid} demo and accept it (/gate accept {mid}), or say what is wrong",
                                "the gate passed; only the owner accepts a milestone")]
@@ -209,7 +212,9 @@ def render(s):
              f"Blockers: {s['blockers'] or 'none'} · In flight: {s['in_flight'] or 'none'}",
              f"Last step: {s['last_step']}"]
     for i, n in enumerate(s["next"]):
-        lines.append(f"{'Next' if i == 0 else 'Then'} ({n['who']}): {n['action']} · {n['why']}")
+        lines.append(f"{'Next' if i == 0 else 'Then'} ({n['who']}): {n['action']} · {n['why']}"
+                     + (" · best begun in a new session (type /next there; the record carries everything)"
+                        if n.get("fresh") else ""))
     return "\n".join(lines)
 
 
@@ -246,7 +251,9 @@ def record(root, skill, arg, outcome):
     except Exception:
         pass  # not a git checkout; nothing to keep out of commits
     print(f"recorded: {last}")
-    print(f"Next ({nxt['who']}): {nxt['action']} · {nxt['why']}" if nxt else "Next: nothing")
+    print(f"Next ({nxt['who']}): {nxt['action']} · {nxt['why']}"
+          + (" · best begun in a new session (type /next there; the record carries everything)" if nxt.get("fresh")
+             else "") if nxt else "Next: nothing")
     return 0
 
 

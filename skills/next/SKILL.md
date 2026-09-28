@@ -32,6 +32,14 @@ question. It never takes an owner step on the owner's behalf, never treats an ea
 decision, and never skips a skill's own checks to go faster. The owner can stop it at any time; the record is
 current after every step, so `/next` picks up exactly there.
 
+## Sessions
+Work inside one phase (a milestone's build through its gate, a plan up to its lock, a batch of capture rounds)
+stays in one session: its working knowledge is not worth rebuilding. A step marked "best begun in a new session"
+opens a new phase (the next milestone, the first build after the lock): the record carries everything, and the
+last phase's detours and rejected options stay behind. Under `/next`, tell the owner and let them choose; under
+`/next auto`, keep going unless this session is already long (much of its context used), and then stop at that
+step with the suggestion. Never start another session yourself. In the new session the owner types `/next`.
+
 ## Rules
 - The status script is the authority on what comes next. When it and your own reading disagree (the record
   looks wrong, a note is stale), fix the record first (state.md, a stale In flight line, a missing decision),

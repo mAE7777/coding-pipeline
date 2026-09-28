@@ -99,6 +99,7 @@ class ProjectStatusTest(unittest.TestCase):
     def test_the_next_milestone_is_built_after_the_inbox_is_weighed(self):
         self.record()
         self.assertEqual(self.first(), ("builder", "/dev M1"))
+        self.assertTrue(self.status()["next"][0]["fresh"], "a new milestone is a joint: best begun in a new session")
         subprocess.run([sys.executable, str(INBOX), "add", str(self.root), "--from", "Sam", "--kind", "idea",
                         "--text", "Show the longest streak"], check=True, capture_output=True)
         steps = self.status()["next"]
@@ -110,6 +111,7 @@ class ProjectStatusTest(unittest.TestCase):
                         "--text", "Show the longest streak"], check=True, capture_output=True)
         steps = self.status()["next"]
         self.assertEqual(steps[0]["action"], "/dev resume")
+        self.assertFalse(steps[0]["fresh"], "a milestone under way stays in its session")
         self.assertIn("IN-001", steps[-1]["why"])
 
     def test_a_gate_passed_candidate_waits_for_the_owner(self):
