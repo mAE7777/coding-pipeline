@@ -23,7 +23,8 @@ Load-bearing rules:
    milestone in progress (from `state.md`) unless named.
 2. In the background: `python3 ~/.claude/skills/_shared/scripts/gate_run.py <project> --milestone M<k>
    --intent-only`. It copies the live tree (no freeze needed), strips everything that states intent from the
-   blind copy, runs the evaluator (pass 1 without the goal, pass 2 with it) and the judge, and logs the result
+   blind copy, runs the evaluator (pass 1 without the goal, pass 2 with it, then pass 3 confirming every done
+   example, must-not-lose item, and mechanism card directly) and the judge, and logs the result
    in `docs/project/reviews/intent-ledger.md`.
 3. Read `.evidence/loyal/M<k>/r<n>/verdict.json` and the judge's result, and render the report in
    `references/delta-report-format.md`: the load-bearing verdict first, the goal next to the evaluator's purpose

@@ -38,7 +38,7 @@ Prints the verdict JSON, and for ACCEPT-READY the evidence line, built from what
   gate M<k> ACCEPT-READY=SHIP · code-verifier SHIP · loyal-evaluator SHIP · gate-judge SHIP · gate.sh 0-FAIL
 (the code-verifier part reads "code-verifier FAIL (overruled: ...)" when its FAIL was triaged as logged, and the
 gate.sh part names its status when it did not pass).
---intent-only (the standalone intent check): only the loyal-evaluator passes and the judge are required, the
+--intent-only (the standalone intent check): only the loyal-evaluator's three passes and the judge are required, the
 copies and deterministic layer are not, the two-round rule does not apply, the milestone's status is not
 changed, and the round is logged as one line in docs/project/reviews/intent-ledger.md instead of the review file.
 Exit 0 when a verdict was written (whatever it is), 1 when the evidence folder is unusable, 2 on bad usage.
@@ -100,7 +100,7 @@ def carried_ids(project, mid):
     return ids + list(eff["must_not_lose"])
 
 
-INTENT_CHECKERS = ("loyal-evaluator", "loyal-evaluator-pass2", "gate-judge")
+INTENT_CHECKERS = ("loyal-evaluator", "loyal-evaluator-pass2", "loyal-evaluator-pass3", "gate-judge")
 # Finding classes the judge must triage (block or log) at any severity but low; clarity is usually logged, but it
 # may never vanish between the reviewer and the verdict.
 REVIEW_BLOCKING = {"correctness", "requirement", "security", "wiring", "silent-degradation", "quality-substitution",

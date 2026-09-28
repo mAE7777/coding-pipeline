@@ -64,7 +64,9 @@ cut to save rounds: every reading loop ends when a round finds nothing new, not 
    ORPHAN. Where the draft was simply wrong, correct it and characterize again; repeat until a run finds
    nothing the draft should have said (`adopt.py check` fails while the latest run read an older draft). What
    remains is a real discrepancy between the documents, the code, and what the owner may want: list each row
-   in the brief's `## Discrepancies` with what it is and the owner's question. The full `/gate M0` round runs
+   and each finding the judge left for the owner in the brief's `## Discrepancies`, citing its ID as the judge
+   wrote it (`EXTRA-1`, `ORPHAN-2`, `M0-F01`; one entry may cite several), with what it is and the owner's
+   question. `adopt.py check` matches those IDs. The full `/gate M0` round runs
    after the lock, as the baseline the next milestone builds on.
 9. **The lock**, once `adopt.py check` passes in full, discrepancies first: what the documents claim that the code does not do, what the code does
    that nothing documents, conflicting documents and the proposed authority order, failing commands, stand-ins

@@ -114,16 +114,17 @@ class AdoptTest(unittest.TestCase):
         self.assertIn("0 not carried", self.capture("reconcile", str(self.root), str(ex / "cold-reader.result.md")))
         return closure
 
-    def characterize(self, rows=None, discrepancies=""):
+    def characterize(self, rows=None, discrepancies="", blocking=None):
         """Stand in for gate_run.py --intent-only on M0: a verdict on the current draft and the judge's rows."""
         import hashlib
         d = self.root / ".evidence/loyal/M0/r1"
         d.mkdir(parents=True, exist_ok=True)
         intent = (self.root / "docs/project/intent.md").read_bytes()
         rows = rows or [{"id": "I-D1", "status": "HOLDS"}]
-        (d / "verdict.json").write_text(json.dumps({"verdict": "ACCEPT-READY" if all(r["status"] == "HOLDS" for r in rows)
-                                                    else "CHANGES", "intent_sha": hashlib.sha256(intent).hexdigest()}))
-        (d / "gate-judge.result.md").write_text("```json\n" + json.dumps({"intent_diff": rows}) + "\n```\n")
+        verdict = "BLOCKED" if blocking else ("ACCEPT-READY" if all(r["status"] == "HOLDS" for r in rows) else "CHANGES")
+        (d / "verdict.json").write_text(json.dumps({"verdict": verdict, "intent_sha": hashlib.sha256(intent).hexdigest()}))
+        (d / "gate-judge.result.md").write_text("```json\n" + json.dumps({"intent_diff": rows, "blocking": blocking or []})
+                                                + "\n```\n")
         if discrepancies:
             with open(self.root / "docs/project/brief.md", "a") as f:
                 f.write("\n## Discrepancies\n" + discrepancies + "\n")
@@ -216,6 +217,16 @@ class AdoptTest(unittest.TestCase):
             subprocess.run(["git", "init", "-q", d], check=True)
             out = subprocess.run([sys.executable, str(ADOPT), "check", d], capture_output=True, text=True, env=self.env)
             self.assertNotIn("commit history was not read", out.stdout)
+
+    def test_what_only_the_owner_can_settle_goes_on_the_discrepancy_list(self):
+        self.adopt("inventory")
+        self.complete()
+        self.adopt("commands")
+        ask = [{"id": "M0-F01", "summary": "delete promises a restore that does not exist", "needs_owner": True}]
+        self.characterize(blocking=ask)
+        self.assertIn("raised M0-F01", self.adopt("check").stdout)
+        self.characterize(blocking=ask, discrepancies="- M0-F01 delete's help promises restore · owner (build it or fix the text?)")
+        self.assertEqual(self.adopt("check").returncode, 0, self.adopt("check").stdout)
 
     def test_the_history_must_be_read(self):
         self.adopt("inventory")

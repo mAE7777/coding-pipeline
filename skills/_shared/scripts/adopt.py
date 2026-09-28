@@ -31,8 +31,8 @@ decisions, state, gate); AGENTS.md has no labeled Commands; the commands were ne
 milestones.md has no M0 (the product as found); a reconstructed done example or must-not-lose item carries no
 evidence label ([code ...], [doc ...], [git ...], [owner ...], [capture ...]); an earlier pipeline's file is not
 marked superseded; the characterization of M0 (gate_run.py --intent-only) never ran, ran on an older draft of
-the intent, or did not finish, or a discrepancy it found (a row not HOLDS) is missing from brief.md's
-"## Discrepancies" section.
+the intent, or could not conclude (INCONCLUSIVE or ERROR), or a discrepancy it found (a row not HOLDS, or a
+finding only the owner can settle) is missing from brief.md's "## Discrepancies" section.
 Exit 0 on success, 1 on a FAIL, 2 on bad usage.
 """
 import datetime
@@ -274,9 +274,9 @@ def characterization_problems(project, brief_text):
         return ["the characterization of M0 never ran (gate_run.py <project> --milestone M0 --intent-only)"]
     last = finished[-1]
     verdict = json.loads((last / "verdict.json").read_text())
-    if verdict.get("verdict") in ("INCONCLUSIVE", "ERROR", "BLOCKED"):
-        return [f"the latest characterization ({last.name}) ended {verdict.get('verdict')}: "
-                + "; ".join(verdict.get("reasons") or [])[:300]]
+    if verdict.get("verdict") in ("INCONCLUSIVE", "ERROR"):
+        return [f"the latest characterization ({last.name}) ended {verdict.get('verdict')}; run it again once the "
+                "cause is cleared: " + "; ".join(verdict.get("reasons") or [])[:300]]
     intent = Path(project) / "docs/project/intent.md"
     now_sha = hashlib.sha256(intent.read_bytes()).hexdigest() if intent.is_file() else None
     if verdict.get("intent_sha") != now_sha:
@@ -297,7 +297,21 @@ def characterization_problems(project, brief_text):
         if str(r.get("status", "")).upper() != "HOLDS" and str(r.get("id", "")) not in listed:
             out.append(f"characterization found {r.get('id')} {str(r.get('status', '')).upper()}, which brief.md's "
                        "## Discrepancies does not list for the owner")
+    # A finding only the owner can settle (the round ends BLOCKED) is exactly a discrepancy for the lock.
+    for b in judge_blocking(judge):
+        if b.get("id") and str(b["id"]) not in listed:
+            out.append(f"characterization raised {b['id']} ({str(b.get('summary', ''))[:60]}), which brief.md's "
+                       "## Discrepancies does not list for the owner")
     return out
+
+
+def judge_blocking(judge_text):
+    for b in reversed(re.findall(r"```json\s*(\{.*?\})\s*```", judge_text or "", flags=re.S)):
+        try:
+            return json.loads(b).get("blocking") or []
+        except ValueError:
+            continue
+    return []
 
 
 def check(project):

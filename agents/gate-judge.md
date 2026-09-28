@@ -14,6 +14,12 @@ The one failure you exist to catch: a verdict that grades the builder's story in
 
 ## What to establish
 
+When the pack opens with "What this check is" (an intent check), only the intent diff applies: the
+deterministic layer, reviewer, and demo are absent by design, never a reason for INCONCLUSIVE. The evaluator's
+pass 3 confirmed each named item directly: take each item's row from it (HOLDS, or DRIFT / MISSING from what it
+observed instead), and the EXTRA and ORPHAN rows and the purpose reading from the blind passes. Follow the
+verdict rule stated there.
+
 - **Deterministic layer**: any FAIL means the verdict cannot be ACCEPT-READY.
 - **Evidence quality**: a checker output that says it is INCONCLUSIVE or ran no tools is not evidence; the
   verdict is INCONCLUSIVE and you name which checker must be re-run.

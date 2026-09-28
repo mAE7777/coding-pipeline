@@ -209,6 +209,23 @@ class RenderPackTest(unittest.TestCase):
         self.assertIn("Deletes reach both phones", text)
         self.assertNotIn("the summary itself", text, "an extraction that saw the dossier would only confirm it")
 
+    def test_an_intent_check_tells_the_judge_what_it_is(self):
+        (self.root / "docs/project/state.md").write_text("# State\n")
+        code, text = render(self.root, "gate-judge", "--milestone", "M1", "--intent-only")
+        self.assertIn("What this check is", text)
+        self.assertIn("absence is not a gap", text)
+        self.assertNotIn("NOT PROVIDED: state.md Understanding", text, "an adoption has no builder's Understanding yet")
+        code, text = render(self.root, "gate-judge", "--milestone", "M1")
+        self.assertNotIn("What this check is", text)
+        self.assertIn("NOT PROVIDED: state.md Understanding", text, "a milestone gate still requires it")
+
+    def test_pass_three_lists_every_item_to_confirm(self):
+        code, text = render(self.root, "loyal-evaluator", "--pass", "3", "--milestone", "M1")
+        self.assertEqual(code, 0, text)
+        for item in ("I-D1", "I-D2", "M1.D1", "L-01", "L-02", "MECH-Sync: two edits within one second"):
+            self.assertIn(item, text)
+        self.assertIn("MECH-Undo: (no probe written)", text, "a card with no probe is named, not dropped")
+
     def test_missing_input_is_named_not_guessed(self):
         (self.root / "docs/project/intent.md").unlink()
         code, text = render(self.root, "code-verifier", "--milestone", "M1")
