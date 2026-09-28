@@ -28,8 +28,9 @@ when heavy.py says BUSY, BLOCKED, or TIMEOUT, or this runner stopped it; any oth
 A round that breaks writes verdict ERROR with the cause. Exit 0 when a verdict was written, 1 when the
 round could not start (not frozen, another gate running) or broke, 2 on bad usage.
 
---intent-only runs steps 1, 4, 6, and 7 on the live tree (no freeze needed): the blind reconstruction and the
-judge's intent diff, written to .evidence/loyal/M<k>/r<n>/ and a line in docs/project/reviews/intent-ledger.md;
+--intent-only runs steps 1, 4, 6, and 7 on the live tree (no freeze needed): the blind reconstruction, then a
+third pass in the same session that confirms every done example, must-not-lose item, and mechanism card directly
+(no reviewer runs in an intent check), and the judge's intent diff, written to .evidence/loyal/M<k>/r<n>/ and a line in docs/project/reviews/intent-ledger.md;
 the milestone's status is not touched.
 """
 import datetime
@@ -196,7 +197,9 @@ def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, at
         cmd += ["--resume", resume]
     if r.agents_dir:
         cmd += ["--agent-file", str(Path(r.agents_dir) / f"{role}.md")]
-    stem = f"{role}{'-demo' if mode == 'demo' else ''}{'-pass2' if resume else ''}"
+    pass_no = render_args[render_args.index("--pass") + 1] if "--pass" in render_args[:-1] else None
+    stem = f"{role}{'-demo' if mode == 'demo' else ''}" + \
+        ((f"-pass{pass_no}" if pass_no and pass_no != "1" else "-pass2") if resume else "")
     summary = {}
     for attempt in range(1, attempts + 1):
         run(cmd, timeout=4000)
@@ -299,8 +302,13 @@ def main(argv):
             p1 = isolated(r, "loyal-evaluator", blind, ["--project", str(project), "--pass", "1"],
                           extra=["--canary", token])
             if p1.get("status") == "OK" and p1.get("session_id"):
-                isolated(r, "loyal-evaluator", blind, ["--project", str(project), "--pass", "2"],
-                         extra=["--canary", token], resume=p1["session_id"])
+                p2 = isolated(r, "loyal-evaluator", blind, ["--project", str(project), "--pass", "2"],
+                              extra=["--canary", token], resume=p1["session_id"])
+                if intent_only and p2.get("status") == "OK":
+                    # No reviewer runs in an intent check, so after the blind passes the same evaluator confirms
+                    # every named item directly: completeness never depends on what a blind run happened to try.
+                    isolated(r, "loyal-evaluator", blind, ["--project", str(project), "--pass", "3", "--milestone", mid],
+                             extra=["--canary", token], resume=p1["session_id"])
             demo = Path(copies["demo"]["path"])
             if not intent_only:
                 r.say("demo:")
@@ -310,7 +318,8 @@ def main(argv):
             verdict_dir.mkdir()
             inputs = []
             for name in ("layer1.json", "code-verifier.result.md", "loyal-evaluator.result.md",
-                         "loyal-evaluator-pass2.result.md", "code-verifier-demo.result.md"):
+                         "loyal-evaluator-pass2.result.md", "loyal-evaluator-pass3.result.md",
+                         "code-verifier-demo.result.md"):
                 if (r.ev / name).exists():
                     shutil.copy(r.ev / name, verdict_dir / name)
                     inputs += ["--inputs", str(r.ev / name)]

@@ -610,7 +610,10 @@ def main(argv):
     workdir = Path(opts["dir"]).resolve()
     out = Path(opts["out"])
     out.mkdir(parents=True, exist_ok=True)
-    suffix = ("-demo" if opts.get("mode") == "demo" else "") + ("-pass2" if opts.get("resume") else "")
+    render = opts.get("render") or []
+    pass_no = render[render.index("--pass") + 1] if "--pass" in render[:-1] else None
+    suffix = ("-demo" if opts.get("mode") == "demo" else "") + \
+        ((f"-pass{pass_no}" if pass_no and pass_no != "1" else "-pass2") if opts.get("resume") else "")
     stem = out / f"{role}{suffix}"
     pack_path = Path(str(stem) + ".pack.md")
     if "render" in opts:

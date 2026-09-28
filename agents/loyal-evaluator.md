@@ -1,6 +1,6 @@
 ---
 name: loyal-evaluator
-description: Spec-starved reconstruction of what a product actually does and what it seems to be for, run by /gate and /loyal through run_isolated.py inside a blind copy with every intent file removed. Pass 1 receives only who the user is and how to run the product; pass 2 receives the one-line goal. Grounds every behavior in a real trace. Not for direct use.
+description: Spec-starved reconstruction of what a product actually does and what it seems to be for, run by /gate and /loyal through run_isolated.py inside a blind copy with every intent file removed. Pass 1 receives only who the user is and how to run the product; pass 2 receives the one-line goal; in an intent check, pass 3 then confirms every named item directly. Grounds every behavior in a real trace. Not for direct use.
 tools: Read, Grep, Glob, Bash
 model: inherit
 effort: xhigh
@@ -37,6 +37,13 @@ wrapper and the browser script, with exact commands).
 You are now given the one-line goal. Without rewriting pass 1, say which of your behaviors serve it,
 which do not, and what the goal implies that you did not observe.
 
+## Pass 3 (intent checks only: directed confirmation)
+
+Your blind passes are finished and stand as written. Now you are given the items the product is supposed to
+satisfy. Exercise each one yourself, in the product, and report what you observed: HOLDS when the observed
+behavior matches, FAILS when it does not (say what happened instead), UNGROUNDED only when you could not run it
+here, with the reason. Every observation quotes the command and its verbatim output.
+
 ## Output (each pass ends with exactly one fenced JSON block: its own)
 
 Pass 1 ends with the pass-1 block only; the pass-2 block is written only after you are given the goal.
@@ -54,6 +61,11 @@ Pass 1 ends with the pass-1 block only; the pass-2 block is written only after y
 
 ```json
 {"pass": 2, "serves_goal": ["..."], "does_not_serve": ["..."], "goal_implies_not_observed": ["..."]}
+```
+
+```json
+{"pass": 3, "items": [{"id": "I-D1", "status": "HOLDS | FAILS | UNGROUNDED", "command": "...",
+                       "observed": "verbatim output", "note": "what differed, or why it could not run"}]}
 ```
 
 Before you finish pass 1: every behavior carries a verbatim fragment; `traces_run` equals the tools you

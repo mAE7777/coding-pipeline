@@ -15,7 +15,9 @@ Roles and what their pack contains (nothing else reaches the checker):
                    --extra blocks.
                    demo mode: the milestone's demo ending plus the demo endings of every accepted or gate-passed
                    milestone (regression), the labeled commands, and the stack pack.
-  loyal-evaluator  pass 1: the "Persona (blind)" line and the labeled commands; pass 2: the Goal only.
+  loyal-evaluator  pass 1: the "Persona (blind)" line and the labeled commands; pass 2: the Goal only; pass 3
+                   (intent checks, after the blind passes): every done example, the milestone's done examples,
+                   every must-not-lose item, and each mechanism card's probe, to confirm one by one.
   gate-judge       every --inputs file verbatim (deterministic results, checker outputs, demo evidence); the
                    intent with re-freezes applied; the milestone's section; the builder's Understanding; from
                    round 2 on, the findings ledger reviews/M<k>.findings.json.
@@ -137,6 +139,18 @@ def labeled_commands(project):
     return "\n".join(f"{k}: {v}" for k, v in cmds.items()) or None
 
 
+INTENT_ONLY = (
+    "An intent check, not a milestone gate: the standalone check during a build, or the characterization of a "
+    "project as found during adoption. By design it has no deterministic layer, no reviewer results, no demo run, "
+    "and possibly no builder's Understanding; their absence is not a gap and is not reported as not run. Judge "
+    "the intent diff from the evaluator's passes: the two blind passes for what the product does unasked (EXTRA, "
+    "ORPHAN) and what it seems to be for, and pass 3, which confirmed every named item directly, for a row on "
+    "every done example, must-not-lose item, and mechanism card. The verdict follows from those rows: ACCEPT-READY when every row "
+    "holds or is an EXTRA or ORPHAN you logged, CHANGES when a row is DRIFT, MISSING, or INACCURATE, BLOCKED when "
+    "only the owner can settle what you found (mark it needs_owner), and INCONCLUSIVE only when the evaluator's "
+    "own output cannot ground the rows.")
+
+
 def reference(name):
     for base in (Path.home() / ".claude/skills/_shared/references", HERE.parent / "references"):
         if (base / name).is_file():
@@ -179,7 +193,8 @@ def render(role, opts):
     intent = pack.read("docs/project/intent.md", required=needs_intent) if needs_intent else None
     eff = effective(intent) if intent else {"done_examples": {}, "must_not_lose": {}, "mechanisms": [],
                                             "goal": "", "persona_blind": None}
-    needs_ms = role in ("code-verifier", "gate-judge") or understanding
+    needs_ms = role in ("code-verifier", "gate-judge") or understanding or \
+        (role == "loyal-evaluator" and opts.get("pass") == "3")
     ms_text = pack.read("docs/project/milestones.md", required=needs_ms) if needs_ms else None
     ms = milestone_section(ms_text, mid) if (ms_text and mid) else None
     agents_needed = role in ("code-verifier", "loyal-evaluator")
@@ -243,10 +258,24 @@ def render(role, opts):
             pack.need("Who uses this", eff.get("persona_blind"), "intent.md 'Persona (blind):' line")
             pack.need("Commands", labeled_commands(project), "AGENTS.md Commands section (labeled lines)")
             title = "Reconstruction pack, pass 1"
+        elif opts.get("pass") == "3":
+            items = [f"- {k} {v}" for k, v in eff["done_examples"].items()]
+            items += re.findall(rf"^- ({re.escape(mid)}\.D\d+[a-z]? .*)$", ms or "", flags=re.M) if mid else []
+            items += [f"- {k} {v}" for k, v in eff["must_not_lose"].items()]
+            cards = section(intent or "", "Mechanism cards") or ""
+            for name, body in re.findall(r"^### (.+?)\s*$(.*?)(?=^### |\Z)", cards, flags=re.M | re.S):
+                probe = re.search(r"^Discriminating probe:\s*(.+)$", body, flags=re.M)
+                items.append(f"- MECH-{name.strip()}: {probe.group(1).strip() if probe else '(no probe written)'}")
+            pack.need("What to confirm, item by item", "\n".join(items) or None,
+                      "done examples, must-not-lose items, and mechanism cards (docs/project/intent.md)")
+            pack.need("Commands", labeled_commands(project), "AGENTS.md Commands section (labeled lines)")
+            title = "Reconstruction pack, pass 3 (directed confirmation)"
         else:
             pack.need("The one-line goal", eff.get("goal"), "intent.md Goal")
             title = "Reconstruction pack, pass 2"
     elif role == "gate-judge":
+        if opts.get("intent_only"):
+            pack.add("What this check is", INTENT_ONLY)
         for f in opts.get("inputs", []):
             pack.need(f"Input: {Path(f).name}", pack.read(f), f)
         pack.need("Intent (re-freezes applied)", json.dumps({k: eff[k] for k in ("goal", "done_examples",
@@ -256,14 +285,17 @@ def render(role, opts):
         pack.need("Mechanism cards", section(intent or "", "Mechanism cards"), "intent.md Mechanism cards")
         pack.need("Milestone contract", ms, f"the {mid} section of docs/project/milestones.md")
         state = pack.read("docs/project/state.md")
-        pack.need("The builder's Understanding", section(state or "", "Understanding"), "state.md Understanding")
+        if opts.get("intent_only"):
+            pack.add("The builder's Understanding", section(state or "", "Understanding"))
+        else:
+            pack.need("The builder's Understanding", section(state or "", "Understanding"), "state.md Understanding")
         if opts.get("intent_only"):
             # A standalone intent check has no gate ledger of its own; an existing gate ledger is context only.
             pack.add("Findings ledger (gate rounds)", pack.read(f"docs/project/reviews/{mid}.findings.json"))
         elif int(opts.get("round", "1")) > 1:
             pack.need("Findings ledger (earlier rounds)", pack.read(f"docs/project/reviews/{mid}.findings.json"),
                       f"docs/project/reviews/{mid}.findings.json")
-        title = f"Judgment pack: {mid}"
+        title = f"Judgment pack: {mid}" + (" (intent check)" if opts.get("intent_only") else "")
     elif role == "cold-reader":
         if understanding:
             state = pack.read("docs/project/state.md", required=True)
