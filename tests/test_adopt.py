@@ -76,58 +76,79 @@ class AdoptTest(unittest.TestCase):
         for must in ("not accounted for yet", "docs/project/intent.md is missing", "never run"):
             self.assertIn(must, out.stdout)
 
-    def import_documents(self):
-        """The real flow: each document becomes a capture source, organized in a dossier quoting it verbatim."""
-        capture = ROOT / "skills/_shared/scripts/capture.py"
-        units, n, ids = [], 0, {}
-        for doc in ("README.md", "docs/architecture.md"):
-            out = subprocess.run([sys.executable, str(capture), "add", str(self.root), str(self.root / doc), "--kind", "doc"],
-                                 capture_output=True, text=True, env=self.env)
-            self.assertEqual(out.returncode, 0, out.stderr)
-            src = out.stdout.split()[0]
-            ids[doc] = src
-            folder = next((self.root / "docs/project/sources").glob(f"{src}-*"))
-            for line in (folder / "turns.jsonl").read_text().splitlines():
+    def capture(self, *args):
+        out = subprocess.run([sys.executable, str(ROOT / "skills/_shared/scripts/capture.py"), *args], capture_output=True,
+                             text=True, env=self.env)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return out.stdout
+
+    def read_everything(self):
+        """The real flow: the whole inventory and the history become sources; the dossier accounts for every unit (a
+        unit per document section, the code and history read with nothing more to keep); an independent extraction
+        round finds nothing missed; every unit lands in the record."""
+        self.capture("add", str(self.root), "--inventory")
+        self.capture("add", str(self.root), "--git-log")
+        sources = self.root / "docs/project/sources"
+        units, skip, closure, points, n = [], [], [], [], 0
+        for meta_path in sorted(sources.glob("SRC-*/meta.json")):
+            meta = json.loads(meta_path.read_text())
+            src = meta["id"]
+            for line in (meta_path.parent / "turns.jsonl").read_text().splitlines():
                 turn = json.loads(line)
-                n += 1
-                line_text = turn["text"].strip().splitlines()[-1]
-                units.append(f"- S-{n:03d} · product · document · current · {src} {turn['id']}\n  {line_text[:40]}\n"
-                             f"  > \"{line_text}\" ({src} {turn['id']})")
-        (self.root / "docs/project/sources/dossier.md").write_text(
-            "# Dossier: lists\nStatus: exploring\nSources: " + ", ".join(ids.values()) + "\n\n## Where it stands\nAs the "
-            "documents say.\n\n## Units\n" + "\n".join(units) + "\n")
-        # The independent extraction round over the documents, finding nothing the dossier missed.
+                if turn["role"] == "document":
+                    n += 1
+                    text = turn["text"].strip().splitlines()[-1]
+                    units.append(f"- S-{n:03d} · product · document · current · {src} {turn['id']}\n  {text[:40]}\n"
+                                 f"  > \"{text}\" ({src} {turn['id']})")
+                    closure.append(f"| S-{n:03d} | {text[:20]} | intent (Goal) |")
+                    points.append({"refs": [f"{src} {turn['id']}"], "quote": text})
+                else:
+                    skip.append(f"{src} {turn['id']}")
+        (sources / "dossier.md").write_text("# Dossier\n\n## Units\n" + "\n".join(units) + "\n\n## No-content turns\n"
+                                            + ", ".join(skip).replace(", SRC", "; SRC") + "\n")
         ex = self.root / ".evidence/capture/extract-1"
         ex.mkdir(parents=True)
-        (ex / "cold-reader.pack.md").write_text("".join(f"## Document: docs/project/sources/{s}-x/transcript.md\n"
-                                                        for s in ids.values()))
-        points = [{"refs": [u.split(" · ")[4].split("\n")[0]], "quote": u.split('> "')[1].rsplit('" (', 1)[0]}
-                  for u in units]
+        (ex / "cold-reader.pack.md").write_text("".join(f"## Document: docs/project/sources/{m.parent.name}/transcript.md\n"
+                                                        for m in sorted(sources.glob("SRC-*/meta.json"))))
         (ex / "cold-reader.result.md").write_text("```json\n" + json.dumps({"points": points}) + "\n```\n")
-        out = subprocess.run([sys.executable, str(capture), "reconcile", str(self.root), str(ex / "cold-reader.result.md")],
-                             capture_output=True, text=True, env=self.env)
-        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        self.assertIn("0 not carried", out.stdout)
-        return ids
+        self.assertIn("0 not carried", self.capture("reconcile", str(self.root), str(ex / "cold-reader.result.md")))
+        return closure
 
-    def complete(self, doc_status="read"):
+    def characterize(self, rows=None, discrepancies=""):
+        """Stand in for gate_run.py --intent-only on M0: a verdict on the current draft and the judge's rows."""
+        import hashlib
+        d = self.root / ".evidence/loyal/M0/r1"
+        d.mkdir(parents=True, exist_ok=True)
+        intent = (self.root / "docs/project/intent.md").read_bytes()
+        rows = rows or [{"id": "I-D1", "status": "HOLDS"}]
+        (d / "verdict.json").write_text(json.dumps({"verdict": "ACCEPT-READY" if all(r["status"] == "HOLDS" for r in rows)
+                                                    else "CHANGES", "intent_sha": hashlib.sha256(intent).hexdigest()}))
+        (d / "gate-judge.result.md").write_text("```json\n" + json.dumps({"intent_diff": rows}) + "\n```\n")
+        if discrepancies:
+            with open(self.root / "docs/project/brief.md", "a") as f:
+                f.write("\n## Discrepancies\n" + discrepancies + "\n")
+
+    def complete(self, doc_status=None):
+        closure = self.read_everything()
         d = self.root / "docs/project/research/adoption"
-        ids = self.import_documents() if doc_status == "read" else {}
         ledger = (d / "coverage.md").read_text()
-        for doc in ("README.md", "docs/architecture.md"):
-            ledger = re.sub(rf"\| ({re.escape(doc)}) \| doc \| (\d+) \| todo \| \|",
-                            lambda m: f"| {m.group(1)} | doc | {m.group(2)} | {doc_status} | {ids.get(doc, '')} |", ledger)
-        ledger = ledger.replace("| slices.md | legacy-record | 2 | todo |", "| slices.md | legacy-record | 2 | superseded (milestones.md) |")
-        ledger = ledger.replace("| todo |", "| read |")
+        if doc_status:
+            ledger = re.sub(r"\| (README\.md) \| doc \| (\d+) \| captured \|", rf"| \1 | doc | \2 | {doc_status} |", ledger)
+        ledger = re.sub(r"\| slices\.md \| legacy-record \| (\d+) \| \w+ \| [^|]* \|",
+                        r"| slices.md | legacy-record | \1 | superseded (milestones.md) | |", ledger)
         (d / "coverage.md").write_text(ledger)
         rec = self.root / "docs/project"
         (rec / "intent.md").write_text("# Intent\nStatus: draft\n## Done examples\n"
-                                       "- I-D1 Adding an item keeps it. Example: add a → [a] [code src/app.py:1]\n")
-        for f in ("brief.md", "interfaces.md", "decisions.md", "state.md", "gate.md"):
+                                       "- I-D1 Adding an item keeps it. Example: add a → [a] [code src/app.py:1]\n"
+                                       "## Must not lose\n- L-01 Items are never dropped [code src/app.py:2]\n")
+        for f in ("interfaces.md", "decisions.md", "state.md", "gate.md"):
             (rec / f).write_text(f"# {f}\n")
+        (rec / "brief.md").write_text("# Brief\n## Source closure\n| Unit | What | Where it lands |\n|---|---|---|\n"
+                                      + "\n".join(closure) + "\n")
         (rec / "milestones.md").write_text("# Milestones\n## M0 · As found\nStatus: gate\n")
         (self.root / "AGENTS.md").write_text("# Map\n\n## Commands\ntest: python3 -m pytest -q tests\nbuild: true\n")
         (self.root / "slices.md").write_text("> SUPERSEDED 2026-09-27: replaced by docs/project/milestones.md\n# Slices\n")
+        self.characterize()
 
     def test_complete_adoption_passes(self):
         self.adopt("inventory")
@@ -145,13 +166,18 @@ class AdoptTest(unittest.TestCase):
         (self.root / "docs/project/milestones.md").write_text("# Milestones\n## M1 · Next\nStatus: planned\n")
         self.assertIn("no M0", self.adopt("check").stdout)
 
-    def test_documents_cannot_be_skimmed(self):
+    def test_documents_and_code_cannot_be_skimmed(self):
         self.adopt("inventory")
         self.complete(doc_status="outlined (long)")
         self.adopt("commands")
         out = self.adopt("check")
         self.assertEqual(out.returncode, 1)
-        self.assertIn("a document must be read", out.stdout)
+        self.assertIn("a document must be read or captured", out.stdout)
+        ledger = self.root / "docs/project/research/adoption/coverage.md"
+        text = re.sub(r"\| (src/export\.py) \| code \| (\d+) \| captured \| [^|]* \|", r"| \1 | code | \2 | outlined (small) | |",
+                      ledger.read_text())
+        ledger.write_text(text)
+        self.assertIn("code, tests, and configuration are captured and read in full", self.adopt("check").stdout)
 
     def test_a_removed_ledger_row_or_an_uncited_read_fails(self):
         self.adopt("inventory")
@@ -163,39 +189,49 @@ class AdoptTest(unittest.TestCase):
         ledger.write_text("\n".join(l for l in text.splitlines() if not l.startswith("| src/export.py |")) + "\n")
         out = self.adopt("check")
         self.assertIn("src/export.py: in the inventory but has no ledger row", out.stdout)
-        ledger.write_text(re.sub(r"(\| README\.md \| doc \| \d+ \| read \|) SRC-\d+ \|", r"\1 |", text))
-        self.assertIn("README.md: marked read, but its note cites no imported source", self.adopt("check").stdout)
+        ledger.write_text(re.sub(r"(\| README\.md \| doc \| \d+ \| captured \|) SRC-\d+ \|", r"\1 |", text))
+        self.assertIn("README.md: marked captured, but its note cites no imported source", self.adopt("check").stdout)
 
-    def test_load_bearing_areas_are_read_twice_and_reconciled(self):
+    def test_history_closure_and_characterization_are_required(self):
         self.adopt("inventory")
         self.complete()
         self.adopt("commands")
-        areas = self.root / "docs/project/research/adoption/areas"
-        areas.mkdir(parents=True, exist_ok=True)
-        (areas / "store.md").write_text("# store\nThe list store.\n")
-        self.assertIn("does not open with 'Load-bearing", self.adopt("check").stdout)
-        (areas / "store.md").write_text("# store\nLoad-bearing: yes (every list lives here)\nThe list store.\n")
-        out = self.adopt("check").stdout
-        self.assertIn("without a second, independent reading", out)
-        (areas / "store.second.md").write_text("# store\nLoad-bearing: yes\nWrites the file in place.\n")
-        self.assertIn("not reconciled", self.adopt("check").stdout)
-        with open(areas / "store.md", "a") as f:
-            f.write("\n## Reconciled\n- the second reading says writes are in place · open\n")
-        self.assertIn("not settled", self.adopt("check").stdout)
-        (areas / "store.md").write_text("# store\nLoad-bearing: yes (every list lives here)\n\n## Reconciled\n"
-                                        "- writes are in place, not atomic · note corrected\n")
         self.assertEqual(self.adopt("check").returncode, 0, self.adopt("check").stdout)
-        (areas / "ui.md").write_text("# ui\nLoad-bearing: no (display only)\n")
-        self.assertEqual(self.adopt("check").returncode, 0)
+        brief = self.root / "docs/project/brief.md"
+        full = brief.read_text()
+        brief.write_text(full.rsplit("\n", 2)[0] + "\n")
+        self.assertIn("does not land in the record", self.adopt("check").stdout, "a point read but lost fails")
+        brief.write_text(full)
+        with open(self.root / "docs/project/intent.md", "a") as f:
+            f.write("- I-D2 Export joins items. Example: [a,b] → a,b [code src/export.py:2]\n")
+        self.assertIn("changed after the latest characterization", self.adopt("check").stdout)
+        self.characterize(rows=[{"id": "I-D1", "status": "HOLDS"}, {"id": "EXTRA-1", "status": "EXTRA"}])
+        self.assertIn("EXTRA-1 EXTRA, which brief.md's ## Discrepancies does not list", self.adopt("check").stdout)
+        self.characterize(rows=[{"id": "I-D1", "status": "HOLDS"}, {"id": "EXTRA-1", "status": "EXTRA"}],
+                          discrepancies="- EXTRA-1 the code exports to CSV; no document mentions it · owner (keep it?)")
+        self.assertEqual(self.adopt("check").returncode, 0, self.adopt("check").stdout)
+
+    def test_the_history_must_be_read(self):
+        self.adopt("inventory")
+        self.complete()
+        self.adopt("commands")
+        history = next(m.parent for m in (self.root / "docs/project/sources").glob("SRC-*/meta.json")
+                       if json.loads(m.read_text())["kind"] == "git-history")
+        meta = json.loads((history / "meta.json").read_text())
+        meta["kind"] = "doc"
+        (history / "meta.json").write_text(json.dumps(meta))
+        self.assertIn("the commit history was not read", self.adopt("check").stdout)
 
     def test_unlabeled_reconstruction_and_unmarked_legacy_fail(self):
         self.adopt("inventory")
         self.complete()
         self.adopt("commands")
-        (self.root / "docs/project/intent.md").write_text("# Intent\n## Done examples\n- I-D1 Adding keeps it. Example: a → [a]\n")
+        (self.root / "docs/project/intent.md").write_text("# Intent\n## Done examples\n- I-D1 Adding keeps it. Example: a → [a]\n"
+                                                          "## Must not lose\n- L-01 Items are never dropped\n")
         (self.root / "slices.md").write_text("# Slices\n")
         out = self.adopt("check")
-        self.assertIn("without an evidence label", out.stdout)
+        self.assertIn("without an evidence label: - I-D1", out.stdout)
+        self.assertIn("without an evidence label: - L-01", out.stdout)
         self.assertIn("not marked", out.stdout)
 
 

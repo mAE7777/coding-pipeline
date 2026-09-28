@@ -44,6 +44,7 @@ changed, and the round is logged as one line in docs/project/reviews/intent-ledg
 Exit 0 when a verdict was written (whatever it is), 1 when the evidence folder is unusable, 2 on bad usage.
 """
 import datetime
+import hashlib
 import json
 import re
 import sys
@@ -384,6 +385,10 @@ def main(argv):
               "intent_diff": diff_counts, "checkers": {c: (s or {}).get("status") for c, s in summaries.items()},
               "sessions": {c: (s or {}).get("session_id") for c, s in summaries.items()},
               "written": stamp}
+    if intent_only:
+        # Which draft of the intent this check read, so a later edit shows the check is out of date.
+        intent = project / "docs/project/intent.md"
+        result["intent_sha"] = hashlib.sha256(intent.read_bytes()).hexdigest() if intent.is_file() else None
     if verdict == "ACCEPT-READY" and not intent_only:
         result["evidence_line"] = evidence_line(mid, checker_json(ev, "code-verifier"), load(ev / "layer1.json") or {},
                                                 judge or {})

@@ -282,8 +282,62 @@ class CaptureTest(unittest.TestCase):
         self.assertIn("0 imported", again.stdout, "unchanged files are not imported twice")
         self.write_dossier("# Dossier\n\n## Units\n\n## No-content turns\nnone\n")
         out = self.cap("check", str(self.project)).stdout
-        for where in ("a document section", "a log window"):
-            self.assertIn(where, out, "every section and log window is accounted for, not only the owner's words")
+        for where in ("a document section", "a record (log window"):
+            self.assertIn(where, out, "every section and record is accounted for, not only the owner's words")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.project), *args], check=True, capture_output=True)
+
+    def test_history_is_read_commit_by_commit_and_grows_by_appending(self):
+        self.git("init", "-q")
+        for i, msg in enumerate(("start the list store", "keep deletes on both phones because Mia lost data")):
+            (self.project / f"f{i}.txt").write_text(str(i))
+            self.git("add", "-A")
+            self.git("-c", "user.name=Eric", "-c", "user.email=e@example.com", "commit", "-q", "-m", msg)
+        out = self.cap("add", str(self.project), "--git-log")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        folder = next((self.project / "docs/project/sources").glob("SRC-*"))
+        turns = [json.loads(l) for l in (folder / "turns.jsonl").read_text().splitlines()]
+        self.assertEqual([t["role"] for t in turns], ["record", "record"])
+        self.assertIn("because Mia lost data", turns[1]["text"], "the reason in a commit message is kept verbatim")
+        (self.project / "f2.txt").write_text("2")
+        self.git("add", "-A")
+        self.git("-c", "user.name=Eric", "-c", "user.email=e@example.com", "commit", "-q", "-m", "add offline queue")
+        self.cap("add", str(self.project), "--git-log")
+        turns = [json.loads(l) for l in (folder / "turns.jsonl").read_text().splitlines()]
+        self.assertEqual([t["id"] for t in turns], ["T001", "T002", "T003"], "new commits append; earlier IDs stay")
+        self.assertEqual(len(list((self.project / "docs/project/sources").glob("SRC-*"))), 1)
+
+    def test_a_tracker_that_cannot_be_read_says_so(self):
+        self.git("init", "-q")
+        out = self.cap("add", str(self.project), "--tracker")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("tracker: not read", out.stdout)
+
+    def test_the_whole_inventory_is_captured_and_the_ledger_updated(self):
+        (self.project / "src").mkdir()
+        (self.project / "src/store.py").write_text("\n".join(f"line {i}" for i in range(320)) + "\n")
+        (self.project / "README.md").write_text("# Lists\nShared lists.\n")
+        (self.project / "package-lock.json").write_text("{}")
+        adoption = self.project / "docs/project/research/adoption"
+        adoption.mkdir(parents=True)
+        (adoption / "inventory.json").write_text(json.dumps({"files": [
+            {"path": "src/store.py", "class": "code"}, {"path": "README.md", "class": "doc"},
+            {"path": "package-lock.json", "class": "lockfile"}]}))
+        (adoption / "coverage.md").write_text("| Path | Class | Lines | Status | Note |\n|---|---|---|---|---|\n"
+                                              "| src/store.py | code | 320 | todo | |\n| README.md | doc | 2 | todo | |\n")
+        out = self.cap("add", str(self.project), "--inventory")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        ledger = (adoption / "coverage.md").read_text()
+        self.assertRegex(ledger, r"\| src/store\.py \| code \| 320 \| captured \| SRC-\d+ \|")
+        self.assertRegex(ledger, r"\| README\.md \| doc \| 2 \| captured \| SRC-\d+ \|")
+        metas = {json.loads(m.read_text())["title"]: json.loads(m.read_text())
+                 for m in (self.project / "docs/project/sources").glob("SRC-*/meta.json")}
+        self.assertEqual(metas["src/store.py"]["kind"], "code")
+        self.assertEqual(metas["src/store.py"]["counts"]["turns"], 3, "320 lines in windows of 150")
+        self.assertNotIn("package-lock.json", metas, "lock files are not read")
+        self.write_dossier("# Dossier\n\n## Units\n\n## No-content turns\nnone\n")
+        self.assertIn("a code window", self.cap("check", str(self.project)).stdout.replace("an owner turn", ""))
 
     def test_an_unreadable_file_is_named_not_skipped(self):
         docs = self.d / "pile"
