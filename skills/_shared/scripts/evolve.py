@@ -65,7 +65,9 @@ compare applies this rule, never judgment:
 record refuses a change missing any part of its proof: existing incidents, a reproduction, two or more options
 with the session's own workaround weighed among them, a BETTER comparison recomputed from the stored
 measurements at the branch's current commit, an acceptance computed from the isolated change reviewer's
-fields for that same commit (cause fixed, reproduction faithful, the workaround weighed, no check weakened,
+fields for that change (a review of an earlier commit still covers it when the change's own diff, by git's patch
+id, is the same and no file it touches changed underneath: a rebase onto unrelated work keeps the review) (cause
+fixed, reproduction faithful, the workaround weighed, no check weakened,
 the kind confirmed, no high or medium finding), and, for a capability or rule change, the owner's words
 proven in their transcript. check proves the whole ledger, including that every fixed incident's change reached main.
 Exit 0 on success, 1 on a failed check or a verdict other than BETTER, 2 on bad usage.
@@ -974,6 +976,34 @@ def last_json(text):
     return read_verdict(text)[0]
 
 
+def fingerprint(base, head):
+    """What a review covers: the change's own diff (git's patch id, the same whichever base it sits on) and each file it
+    touches as it was at the base."""
+    diff = subprocess.run(["git", "-C", str(repo()), "diff", f"{base}..{head}"], capture_output=True, text=True).stdout
+    pid = subprocess.run(["git", "-C", str(repo()), "patch-id", "--stable"], input=diff, capture_output=True,
+                         text=True).stdout.split()
+    touched = [f for f in git("diff", "--name-only", f"{base}..{head}").splitlines() if f]
+    return {"patch_id": pid[0] if pid else "", "touched": {f: git("rev-parse", f"{base}:{f}") for f in touched}}
+
+
+def review_covers(meta, base, head):
+    """(covered, why not): a review of one commit still covers another when the change's own diff is the same and no
+    file it touches changed underneath it; a rebase onto unrelated work does not buy a second review."""
+    if meta.get("head") == head:
+        return True, ""
+    if not meta.get("patch_id"):
+        return False, "the review recorded no fingerprint of the change"
+    now = fingerprint(base, head)
+    if now["patch_id"] != meta["patch_id"]:
+        return False, "the change's own diff is different"
+    if set(now["touched"]) != set(meta.get("touched", {})):
+        return False, "it touches other files now"
+    moved = sorted(f for f, blob in meta["touched"].items() if now["touched"].get(f) != blob)
+    if moved:
+        return False, f"{', '.join(moved)} changed underneath it"
+    return True, ""
+
+
 def review_problems(data):
     """Why the reviewer's own fields do not add up to an acceptance (empty when they do). The reviewer's
     headline verdict alone never accepts a change."""
@@ -1055,7 +1085,8 @@ def cmd_review(argv):
     finally:
         shutil.rmtree(tree, ignore_errors=True)
     (out / "meta.json").write_text(json.dumps({"base": base, "head": head, "reviewed": now(),
-                                               "pack_sha256": hashlib.sha256((out / "pack.md").read_bytes()).hexdigest()}))
+                                               "pack_sha256": hashlib.sha256((out / "pack.md").read_bytes()).hexdigest(),
+                                               **fingerprint(base, head)}))
     result = out / "change-reviewer.result.md"
     data, why = read_verdict(result.read_text(encoding="utf-8")) if result.is_file() else (None, "no result file")
     body = re.sub(r"^Result:.*$", f"Result: {result}", text, count=1, flags=re.M)
@@ -1116,8 +1147,9 @@ def change_problems(cid, need_merged=False):
     rp = review_problems(data)
     if rp:
         out.append(f"{cid}: the isolated change review does not accept it: " + "; ".join(rp)[:400])
-    elif meta.get("head") != head:
-        out.append(f"{cid}: the review was of {str(meta.get('head'))[:12]}, the branch is at {head[:12]}: review again")
+    elif not review_covers(meta, base, head)[0]:
+        out.append(f"{cid}: the review was of {str(meta.get('head'))[:12]}, the branch is at {head[:12]}, and "
+                   f"{review_covers(meta, base, head)[1]}: review again")
     elif data.get("kind") != field(text, "Kind"):
         out.append(f"{cid}: recorded as {field(text, 'Kind')}, the reviewer reads it as {data.get('kind')}")
     if field(text, "Kind") in OWNER_KINDS:

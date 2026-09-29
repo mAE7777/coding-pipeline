@@ -100,7 +100,9 @@ frequent first). Work through them one cause at a time.
    sides.
 8. **Review**: `evolve.py review CHG-<nnnn>` runs the change reviewer (`change-reviewer`) in isolation on the
    branch. Its findings
-   are addressed on the branch, then measured and reviewed again; the review covers the exact commit.
+   are addressed on the branch, then measured and reviewed again. A review covers the change's own diff: rebased
+   onto unrelated work (same diff, no file it touches changed underneath) it still stands, and only the
+   measurements run again.
 9. **Record**: `evolve.py record CHG-<nnnn>` refuses any missing proof; on success the incidents are fixed.
 10. **Release**: fast-forward main to the branch, `python3 install.py apply`, the Codex sync that
     `install.py check` names when Codex's copies are behind, `python3 install.py check` until it passes, push,

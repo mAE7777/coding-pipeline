@@ -476,7 +476,9 @@ class Loop(unittest.TestCase):
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-qm", "meanwhile on main")
         self.base = git(self.repo, "rev-parse", "HEAD")
-        git(self.repo, "rebase", "-q", "main", "evolve/chg-0001")
+        r = subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                            "rebase", "-q", "main", "evolve/chg-0001"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, "the rebase itself must succeed: " + r.stdout + r.stderr)
         self.head = git(self.repo, "rev-parse", "HEAD")
         git(self.repo, "switch", "-q", "main")
         record = self.ledger / "changes/CHG-0001.md"
@@ -492,6 +494,38 @@ class Loop(unittest.TestCase):
         self.bench_both()
         r = run("record", "CHG-0001", env=self.env)
         self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_a_review_does_not_follow_a_change_whose_ground_or_diff_moved(self):
+        self.bench_both()
+        self.change()
+        self.review()
+        meta = self.ledger / "changes/CHG-0001-review/meta.json"
+        meta.write_text(json.dumps({"base": self.base, "head": self.head, **self.fingerprint(self.base, self.head)}))
+        # A file the change touches changed underneath it: the reviewer never saw that combination.
+        self.rebase_onto_new_main("tests/test_calc.py", '"""The mean of a report."""\n' + TEST_BASE)
+        self.bench_both()
+        r = run("record", "CHG-0001", env=self.env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("tests/test_calc.py changed underneath it", r.stdout)
+        # The change's own diff changed: a different change.
+        meta.write_text(json.dumps({"base": self.base, "head": self.head, **self.fingerprint(self.base, self.head)}))
+        git(self.repo, "switch", "-q", "evolve/chg-0001")
+        (self.repo / "calc.py").write_text((self.repo / "calc.py").read_text().replace("else 0.0", "else 0"))
+        git(self.repo, "commit", "-qam", "a different answer")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "switch", "-q", "main")
+        r = run("record", "CHG-0001", env=self.env)
+        self.assertIn("the change's own diff is different", r.stdout)
+
+    def test_the_judge_fingerprints_what_it_reviews(self):
+        saved = os.environ.get("PIPELINE_REPO")
+        os.environ["PIPELINE_REPO"] = str(self.repo)
+        try:
+            fp = evolve.fingerprint(self.base, self.head)
+        finally:
+            os.environ.pop("PIPELINE_REPO") if saved is None else os.environ.__setitem__("PIPELINE_REPO", saved)
+        self.assertEqual(fp, self.fingerprint(self.base, self.head))
+        self.assertEqual(sorted(fp["touched"]), ["calc.py", "tests/test_calc.py"])
 
     def test_a_proven_change(self):
         self.bench_both()
