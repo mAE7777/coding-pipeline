@@ -1,4 +1,5 @@
 """Tests for gate.sh's modes: the check run, --fingerprint, --inventory, and bad options."""
+import os
 import subprocess
 import sys
 import unittest
@@ -7,10 +8,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "skills/_shared/gate.sh"
 FIX = ROOT / "tests/fixtures"
+# Git without this machine's global settings: a global ignore rule must not decide what a test stages or sees.
+GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull}
 
 
 def gate(*args):
-    return subprocess.run(["bash", str(GATE), *args], capture_output=True, text=True, timeout=300)
+    return subprocess.run(["bash", str(GATE), *args], capture_output=True, text=True, timeout=300, env=GIT_ENV)
 
 
 class GateShTest(unittest.TestCase):
@@ -52,8 +55,8 @@ class GateShTest(unittest.TestCase):
             docs.mkdir(parents=True)
             (docs / "decisions.md").write_text("## D-001\nDecided after the code-verifier run in /gate.\n")
             (docs / "state.md").write_text("local notes about /dev and heavy.py\n")
-            subprocess.run(["git", "init", "-q", d], check=True)
-            subprocess.run(["git", "-C", d, "add", "docs/project/decisions.md"], check=True)
+            subprocess.run(["git", "init", "-q", d], check=True, env=GIT_ENV)
+            subprocess.run(["git", "-C", d, "add", "docs/project/decisions.md"], check=True, env=GIT_ENV)
             out = gate(d)
             self.assertIn("FAIL   pipeline-traces", out.stdout)
             self.assertIn("decisions.md", out.stdout)
@@ -64,7 +67,7 @@ class GateShTest(unittest.TestCase):
             self.assertIn("PASS   pipeline-traces", out.stdout)
             (docs / "interfaces.md").write_text("## API\n- POST /capture stores a photo\n- GET /plan returns the week\n"
                                                 "The extension talks to Claude Code through a subagent.\n")
-            subprocess.run(["git", "-C", d, "add", "docs/project/interfaces.md"], check=True)
+            subprocess.run(["git", "-C", d, "add", "docs/project/interfaces.md"], check=True, env=GIT_ENV)
             out = gate(d)
             self.assertIn("PASS   pipeline-traces", out.stdout, "product routes and product words are not tooling")
             (docs / "decisions.md").write_text("## D-002\nAccepted after /gate M1 and /plan adopt.\n")
@@ -84,8 +87,10 @@ class GateShTest(unittest.TestCase):
             for name in ("intent.md", "milestones.md", "decisions.md", "interfaces.md", "fix-log.md"):
                 (docs / name).write_text((templates / name).read_text())
             (docs / "inbox.md").write_text(inbox.HEADER)
-            subprocess.run(["git", "init", "-q", d], check=True)
-            subprocess.run(["git", "-C", d, "add", "docs/project"], check=True)
+            subprocess.run(["git", "init", "-q", d], check=True, env=GIT_ENV)
+            subprocess.run(["git", "-C", d, "add", "docs/project"], check=True, env=GIT_ENV)
+            staged = subprocess.run(["git", "-C", d, "ls-files"], capture_output=True, text=True, env=GIT_ENV).stdout
+            self.assertIn("docs/project/fix-log.md", staged, "every template is checked, the fix log included")
             out = gate(d)
             self.assertIn("PASS   pipeline-traces", out.stdout, out.stdout[-600:])
             for trace in ("Weighed with /inbox review.", "Proven with rulings.py record.", "Run /next auto.",
