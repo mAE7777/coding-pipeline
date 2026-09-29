@@ -957,15 +957,21 @@ def change_text(cid):
     return f.read_text(encoding="utf-8") if f.is_file() else None
 
 
+def read_verdict(text):
+    """(verdict, why there is none): the last fenced JSON block of a checker's message, and only that one. A raw
+    control character inside a string (a quoted command's tab or newline) does not void it; a last block that is not
+    JSON is no verdict, never an earlier block (a draft, a quote) standing in for it."""
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text or "", flags=re.S)
+    if not blocks:
+        return None, "the message holds no fenced json block"
+    try:
+        return json.loads(blocks[-1], strict=False), ""
+    except ValueError as exc:
+        return None, f"its last json block does not parse ({exc})"
+
+
 def last_json(text):
-    """The last JSON block of a checker's message. A raw control character inside a string (a quoted command's tab
-    or newline) does not void the verdict; what is not JSON still reads as no verdict."""
-    for b in reversed(re.findall(r"```json\s*(\{.*?\})\s*```", text or "", flags=re.S)):
-        try:
-            return json.loads(b, strict=False)
-        except ValueError:
-            continue
-    return None
+    return read_verdict(text)[0]
 
 
 def review_problems(data):
@@ -1051,11 +1057,11 @@ def cmd_review(argv):
     (out / "meta.json").write_text(json.dumps({"base": base, "head": head, "reviewed": now(),
                                                "pack_sha256": hashlib.sha256((out / "pack.md").read_bytes()).hexdigest()}))
     result = out / "change-reviewer.result.md"
-    data = last_json(result.read_text(encoding="utf-8")) if result.is_file() else None
+    data, why = read_verdict(result.read_text(encoding="utf-8")) if result.is_file() else (None, "no result file")
     body = re.sub(r"^Result:.*$", f"Result: {result}", text, count=1, flags=re.M)
     (HOME / "changes" / f"{cid}.md").write_text(body, encoding="utf-8")
     if not data:
-        return fail(f"{cid}: the reviewer returned no verdict ({(r.stdout + r.stderr)[-300:]})")
+        return fail(f"{cid}: the reviewer returned no verdict: {why} ({(r.stdout + r.stderr)[-300:]})")
     problems = review_problems(data)
     print(f"{cid}: reviewer {data.get('verdict')}, {'accepted' if not problems else 'not accepted: ' + '; '.join(problems)} "
           f"-> {result}")
