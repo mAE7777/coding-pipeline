@@ -536,10 +536,13 @@ class Loop(unittest.TestCase):
         self.bench_both()
         self.change()
         self.review()
-        # What the judge records at review time, reproductions' failure reasons included.
+        # What this version's review records: its fingerprint with the reproductions' failure reasons, or, before
+        # reviews carried one, the head alone.
         meta = self.ledger / "changes/CHG-0001-review/meta.json"
-        fp = self.in_repo(evolve.fingerprint, self.base, self.head, [REPRO])
-        self.assertIn("<id>", fp["repro_failures"][REPRO])
+        fp = {}
+        if hasattr(evolve, "fingerprint"):
+            fp = self.in_repo(evolve.fingerprint, self.base, self.head, [REPRO])
+            self.assertIn("<id>", fp["repro_failures"][REPRO])
         meta.write_text(json.dumps({"base": self.base, "head": self.head, **fp}))
         self.rebase_onto_new_main("notes.txt", "an unrelated file\n")
         self.bench_both()
