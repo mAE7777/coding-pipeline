@@ -6,14 +6,23 @@ Usage:
   capture.py add <project> <file or folder> [--kind auto|chatgpt-export|chat-text|doc|log|pdf|office|code|audio]
                  [--chat <id or title>] [--title <title>] [--speaker owner|document] [--language <code>]
                  [--model <whisper model>]
-  capture.py add <project> --inventory          every file adoption's inventory lists (code, tests, config,
-                                                documents), each a source, the coverage ledger updated
+  capture.py add <project> --inventory          the files adoption's inventory lists, by tier: documents,
+                                                small configuration, and reports become sources to read; code
+                                                and tests are left to the code map (mapped); data, raw output,
+                                                and logs are registered with a script summary (bulk.md), not read
   capture.py add <project> --git-log            the project's commit history, one unit per commit, oldest first
   capture.py add <project> --tracker            its GitHub issues and pull requests with their comments
   capture.py list <conversations.json>          the conversations in a ChatGPT export
+  capture.py draft <project> <extraction result.md>
+                                                an independent extraction becomes dossier units (quotes checked,
+                                                attribution and status kept); turns it drew nothing load-bearing
+                                                from are listed as read with nothing to keep
   capture.py reconcile <project> <extraction result.md>
-                                                an independent extraction against the dossier: every point it
-                                                found that no unit carries becomes a row to settle in a round
+                                                an independent extraction against a dossier the builder wrote:
+                                                every point no unit carries becomes a row to settle in a round
+  capture.py audit <project> <fidelity result.md>
+                                                an independent fidelity read of some sources against the units
+                                                citing them: its material problems become rows to settle
   capture.py check <project>                    coverage, quotes, attribution, references, stable IDs, rounds
   capture.py closure <project>                  every dossier unit lands somewhere in the plan (brief.md)
 
@@ -47,17 +56,18 @@ Inputs.
   git history and the tracker are records (speaker "record"): one unit per commit, issue, or pull request. The
   tracker needs the gh command signed in and a GitHub remote; without them the import says so and fails.
 A folder is walked (hidden folders, dependencies, builds, and the sources folder itself left out): every file
-it can read becomes a source, a file unchanged since an earlier import is skipped, code files are left to the
+it can read becomes a source (a log over 200 KB is registered with a script summary instead), a file unchanged since an earlier import is skipped, code files are left to the
 code reading of /plan adopt, and every file it could not read is named with the reason. The walk is recorded in
 sources/import-ledger.md.
 A second import of the same conversation (same conversation id, or pasted text whose turns begin with an
 existing source's turns) appends only the new turns to that source, keeping every earlier turn ID.
 
-check FAILs when: a raw file's sha256 no longer matches; an owner turn, a document section, or a log window is
-neither cited by a unit nor listed under "## No-content turns" (assistant turns need not be); a source has not
-been read by an independent extraction, or grew after its last one; a round has a row not settled; a source's
-latest extraction found points the dossier had missed (another round is due, however many came before: the
-reading ends when a round finds nothing missed, and after three that keep finding, the method changes); a quote is not verbatim in the turn it cites, or an owner or
+check FAILs when: a raw file's sha256 no longer matches; an owner turn, a document section, or a record is
+neither cited by a unit nor listed under "## No-content turns" (assistant turns and code need not be); a source
+has not been read by an independent extraction, or grew after its last one; a round or an audit has a row not
+settled; a source has not been audited, or its latest audit found a material problem (it is audited again,
+with the previous read, until an audit finds none; after two that keep finding, audit smaller portions or ask
+the owner); a quote is not verbatim in the turn it cites, or an owner or
 owner-agreed unit rests on no quote from an owner turn; a reference names a source or turn that does not
 exist; a "superseded by" target is missing; a unit ID recorded by an earlier passing check has disappeared;
 a unit line does not parse.
@@ -84,11 +94,19 @@ CATEGORIES = {"problem", "vision", "narrative", "product", "user", "implementati
               "decision", "rejected", "term", "other"}
 ATTRIBUTION = {"owner", "owner-agreed", "assistant", "document", "transcribed", "record", "code"}
 CODE_WINDOW = 150
-INVENTORY_KINDS = {"doc": None, "legacy-record": None, "code": "code", "test": "code", "config": "code",
-                   "other": "code"}  # None: detected (doc, pdf, office); lockfile, vendored, generated, binary: not read
-COVERED_ROLES = ("document", "record", "code")  # besides owner turns: every section and log window is read and accounted for
+INVENTORY_KINDS = {"doc": None, "legacy-record": None, "config": "code"}  # None: detected (doc, pdf, office)
+# Code and tests are understood through adoption's code map, the reading of the modules that matter, and the
+# characterization; they are not read as sources. Data, raw output, and logs are registered, not read.
+MAPPED_CLASSES = ("code", "test")
+BULK_DIRS = re.compile(r"(^|/)(raw|runs?|outputs?|responses?|logs?|dumps?|fixtures?|samples?|data|datasets?|cache|"
+                       r"tmp|artifacts?|snapshots?)/", re.I)
+KEEP_IN_BULK = re.compile(r"(readme|report|handoff|review|decision|plan|summary|notes?|brief|spec)[^/]*\.(md|txt)$", re.I)
+SMALL_CONFIG = 20_000
+COVERED_ROLES = ("document", "record")  # besides owner turns: every section and record is carried or read-with-nothing
+AUDIT_METHOD_AFTER = 2  # audits that keep finding material problems: smaller portions, or ask the owner
 AUDIO_SUFFIX = {".m4a", ".mp3", ".wav", ".aac", ".ogg", ".flac", ".mp4", ".mov", ".webm"}
 LOG_SUFFIX = {".log", ".jsonl", ".ndjson", ".out", ".err"}
+BIG_LOG = 200_000  # bytes: a larger log is registered with a script summary, not read window by window
 PANDOC_SUFFIX = {".docx", ".odt", ".rtf", ".html", ".htm", ".epub"}
 TEXTUTIL_SUFFIX = {".doc", ".docx", ".rtf", ".html", ".htm", ".odt", ".webarchive"}
 TEXT_SUFFIX = {".md", ".markdown", ".txt", ".text", ".csv", ".tsv", ".org", ".rst", ".adoc"}
@@ -553,6 +571,10 @@ def add_folder(project, folder, opts):
         if reason:
             rows.append((str(rel), f"not a source: {reason}"))
             continue
+        if path.suffix.lower() in LOG_SUFFIX and path.stat().st_size > BIG_LOG:
+            rows.append((str(rel), f"registered, not read (a large log: {bulk_summary(path)}); read the windows a "
+                                   "question points to"))
+            continue
         digest = sha(path.read_bytes())
         if digest in known:
             rows.append((str(rel), f"unchanged since {known[digest]}"))
@@ -608,13 +630,25 @@ def add_inventory(project):
         raise Unreadable("no adoption inventory yet (adopt.py inventory)")
     files = json.loads(inv.read_text()).get("files", [])
     known = {rev["sha256"]: meta["id"] for _, meta in existing_sources(project) for rev in meta["revisions"]}
-    rows, failed = {}, 0
+    rows, failed, bulk = {}, 0, []
     for f in files:
-        if f["class"] not in INVENTORY_KINDS:
+        cls = f["class"]
+        if cls not in INVENTORY_KINDS and cls not in MAPPED_CLASSES and cls != "other":
             continue
         path = Path(project) / f["path"]
         if not path.is_file():
             rows[f["path"]] = ("todo", "missing on disk")
+            continue
+        if cls in MAPPED_CLASSES:
+            rows[f["path"]] = ("mapped (code map)", "understood through the code map, the reading of its area where "
+                                                    "its role is not settled by the map, and the characterization")
+            continue
+        size = path.stat().st_size
+        if cls == "other" or (cls == "config" and size > SMALL_CONFIG) or \
+                (BULK_DIRS.search(f["path"]) and not KEEP_IN_BULK.search(f["path"])):
+            summary = bulk_summary(path)
+            rows[f["path"]] = ("registered (bulk)", summary)
+            bulk.append(f"| {f['path']} | {cls} | {summary} |")
             continue
         digest = sha(path.read_bytes())
         if digest in known:
@@ -636,6 +670,11 @@ def add_inventory(project):
         else:
             rows[f["path"]] = ("todo", "import failed (see above)")
             failed += 1
+    if bulk:
+        (Path(project) / "docs/project/research/adoption/bulk.md").write_text(
+            "# Registered, not read\n\nData, raw output, logs, and generated files, summarized by script. The files "
+            "stay as they are; read one when a question points to it, and say so in the brief.\n\n"
+            "| Path | Class | Summary |\n|---|---|---|\n" + "\n".join(bulk) + "\n", encoding="utf-8")
     ledger = Path(project) / "docs/project/research/adoption/coverage.md"
     if ledger.is_file():
         out = []
@@ -647,9 +686,42 @@ def add_inventory(project):
             out.append(line)
         ledger.write_text("\n".join(out) + "\n", encoding="utf-8")
     done = sum(1 for s_, _ in rows.values() if s_ == "captured")
-    print(f"inventory: {done} of {len(rows)} readable file(s) captured · {failed} not read" +
+    mapped = sum(1 for s_, _ in rows.values() if s_.startswith("mapped"))
+    print(f"inventory: {done} file(s) captured to read · {mapped} code file(s) mapped · {len(bulk)} registered "
+          f"(research/adoption/bulk.md) · {failed} not read" +
           (" (named above; each stays todo in the coverage ledger)" if failed else ""))
     return 1 if failed else 0
+
+
+def bulk_summary(path):
+    """Size, lines, time range, error lines, and the shape of JSON or CSV, without a model."""
+    size = path.stat().st_size
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(4_000_000 if size <= 4_000_000 else 1_000_000)
+            if size > 4_000_000:
+                fh.seek(-1_000_000, 2)
+                raw += b"\n" + fh.read()
+    except OSError as exc:
+        return f"{size:,} bytes; unreadable ({exc.__class__.__name__})"
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    parts = [f"{size:,} bytes", f"{len(lines):,} lines" + ("+" if size > 4_000_000 else "")]
+    if path.suffix.lower() == ".json" and size <= 4_000_000:
+        try:
+            obj = json.loads(text)
+            parts.append("keys: " + ", ".join(list(obj)[:12]) if isinstance(obj, dict) else f"a list of {len(obj)}")
+        except ValueError:
+            pass
+    elif path.suffix.lower() in (".csv", ".tsv") and lines:
+        parts.append("header: " + lines[0][:120])
+    stamps = re.findall(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", text)
+    if stamps:
+        parts.append(f"{min(stamps)} to {max(stamps)}")
+    errors = sum(1 for line in lines if re.search(r"\b(ERROR|FAIL(ED)?|Traceback|Exception)\b", line))
+    if errors:
+        parts.append(f"{errors} error line(s)")
+    return "; ".join(parts).replace("|", "/")
 
 
 def add_file(project, src, opts, preset=None):
@@ -891,13 +963,14 @@ def cmd_check(argv):
             if (t["role"].startswith("owner") or t["role"] in COVERED_ROLES) and (src, tid) not in cited \
                     and (src, tid) not in skip:
                 where = "an edited-away owner turn (branch)" if tid.startswith("B") else \
-                    {"document": "a document section", "record": "a record (log window, commit, issue)",
-                     "code": "a code window"}.get(t["role"], "an owner turn")
+                    {"document": "a document section", "record": "a record (log window, commit, issue)"}.get(
+                        t["role"], "an owner turn")
                 fails.append(f"{src} {tid}: {where} no unit cites and not listed as no-content: "
                              f"\"{t['text'][:60]}\"")
     round_fails, round_warns = check_rounds(project, srcs, units)
     fails += round_fails
     warns += round_warns
+    fails += check_audits(project, srcs, units)
     ids_file = sources_dir(project) / ".unit-ids.json"
     known = set(json.loads(ids_file.read_text())) if ids_file.is_file() else set()
     for uid in sorted(known - set(units)):
@@ -911,7 +984,8 @@ def cmd_check(argv):
         owner_total = sum(1 for s in srcs.values() for t in s.values() if t["role"].startswith("owner"))
         other = sum(1 for s in srcs.values() for t in s.values() if t["role"] in COVERED_ROLES)
         print(f"PASS   capture     {len(units)} unit(s) cover {owner_total} owner turn(s) and {other} document section(s) "
-              f"or log window(s) across {len(srcs)} source(s), each read by an independent extraction")
+              f"or record(s) across {len(srcs)} source(s), each read by an independent extraction and cleared by an "
+              "independent audit")
     return 1 if fails else 0
 
 
@@ -983,7 +1057,8 @@ def cmd_reconcile(argv):
             if not refs & set(u["refs"]):
                 continue
             unit_words = content_words(u["line"] + " " + " ".join(q[0] for q in u["quotes"]))
-            if not words or len(words & unit_words) / len(words) >= 0.5:
+            quoted = norm(quote) and any(norm(quote) in norm(q[0]) or norm(q[0]) in norm(quote) for q in u["quotes"])
+            if quoted or not words or len(words & unit_words) / len(words) >= 0.5:
                 carried = True
                 break
         if not carried:
@@ -1031,16 +1106,220 @@ def check_rounds(project, srcs, units):
         size = len(srcs[sid])  # every turn, branches included, as reconcile counted them
         if size > latest["sources"][sid]:
             fails.append(f"{sid} grew after its last independent extraction (round {latest['n']}); extract it again")
-        added = sum(1 for row in latest["rows"] if row["resolution"].startswith("added")
-                    and any(ref[0] == sid for ref in row["refs"]))
-        if added:
-            # The reading ends when a round finds nothing missed, never at a count.
-            how = (" The last rounds keep finding more: change the method (smaller portions per reader, a lens aimed "
-                   "at what was missed) rather than repeat it; never stop reading." if len(reading) >= CHANGE_METHOD_AFTER
-                   else "")
-            fails.append(f"{sid}: its latest independent extraction (round {latest['n']}) found {added} point(s) the "
-                         f"dossier had missed; another round is due until one finds none.{how}")
+        # One extraction per source: what the dossier still lacks or bends is the audit's to find (check_audits).
     return fails, warns
+
+
+def turn_ranges(tids):
+    """T001, T002, T003, T007 -> T001-T003, T007 (branch turns listed one by one)."""
+    plain = sorted(int(t[1:]) for t in tids if re.match(r"^T\d+$", t))
+    out, i = [], 0
+    while i < len(plain):
+        j = i
+        while j + 1 < len(plain) and plain[j + 1] == plain[j] + 1:
+            j += 1
+        out.append(f"T{plain[i]:03d}" + (f"-T{plain[j]:03d}" if j > i else ""))
+        i = j + 1
+    return out + sorted(t for t in tids if not re.match(r"^T\d+$", t))
+
+
+def pack_sources(result):
+    pack = result.with_name(result.name.replace(".result.md", ".pack.md"))
+    return sorted(set(re.findall(r"sources/(SRC-\d+)-", pack.read_text(encoding="utf-8")))) if pack.is_file() else []
+
+
+def cmd_draft(argv):
+    """An independent extraction becomes dossier units: the reader drafts, the builder edits."""
+    if len(argv) < 2:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    project, result = Path(argv[0]).resolve(), Path(argv[1])
+    data = last_json_block(result.read_text(encoding="utf-8")) if result.is_file() else None
+    if not data or not isinstance(data.get("points"), list):
+        print(f"FAIL   capture     {result}: no extraction JSON with a points list (cold reader, extraction mode)")
+        return 1
+    read = pack_sources(result)
+    if not read:
+        print(f"FAIL   capture     {result}: its pack names no source, so its coverage cannot be credited")
+        return 1
+    srcs = {meta["id"]: {t["id"]: t for t in read_turns(folder)} for folder, meta in existing_sources(project)}
+    path = sources_dir(project) / "dossier.md"
+    if not path.is_file():
+        path.write_text(f"# Dossier: {project.name}\nStatus: exploring\nSources: see index.md\n\n## Where it stands\n"
+                        "(to write once the sources are drafted)\n\n## Units\n\n## Open questions\n\n## Tensions\n\n"
+                        "## No-content turns\n", encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    units, _ = parse_dossier(text)
+    ids_file = sources_dir(project) / ".unit-ids.json"
+    taken = set(units) | (set(json.loads(ids_file.read_text())) if ids_file.is_file() else set())
+    nxt = max((int(u[2:]) for u in taken), default=0) + 1
+    good, bad, ids = [], [], {}
+    for i, pt in enumerate(data["points"], 1):
+        refs = parse_refs(" ".join(pt.get("refs") or []))
+        quote = norm(pt.get("quote") or "")
+        why = None
+        if not refs or any(tid not in srcs.get(src, {}) for src, tid in refs):
+            why = "cites a unit that does not exist"
+        qref = next(((src, tid) for src, tid in refs if quote and quote in norm(srcs[src][tid]["text"])), None) \
+            if not why else None
+        if not why and not qref:
+            why = "the quote is not verbatim in the unit it cites"
+        attr = pt.get("attribution") if pt.get("attribution") in ATTRIBUTION else None
+        if not why:
+            role = srcs[qref[0]][qref[1]]["role"]
+            attr = attr or ("owner" if role.startswith("owner") else role if role in ATTRIBUTION else "document")
+            if attr == "owner" and role == "owner (transcribed)":
+                attr = "transcribed"
+            if attr in ("owner", "owner-agreed", "transcribed") and not role.startswith("owner"):
+                why = f"attributed to the owner but quotes the {role}'s turn"
+        if why:
+            bad.append((i, pt, why))
+            continue
+        ids[i] = f"S-{nxt:03d}"
+        nxt += 1
+        good.append((i, pt, attr, qref, refs))
+    blocks = []
+    for i, pt, attr, qref, refs in good:
+        status = pt.get("status") if pt.get("status") in ("current", "open", "not taken up", "rejected") else "current"
+        if pt.get("status") == "superseded" and ids.get(pt.get("superseded_by")):
+            status = f"superseded by {ids[pt['superseded_by']]}"
+        by_src = {}
+        for src, tid in refs:
+            by_src.setdefault(src, set()).add(tid)
+        refstr = "; ".join(f"{src} {', '.join(turn_ranges(t))}" for src, t in sorted(by_src.items()))
+        cat = pt.get("category") if pt.get("category") in CATEGORIES else "other"
+        blocks.append(f"- {ids[i]} · {cat} · {attr} · {status} · {refstr}\n  {norm(pt.get('point') or '')}\n"
+                      f"  > \"{norm(pt.get('quote') or '')}\" ({qref[0]} {qref[1]})")
+    m = re.search(r"^## Units[ \t]*\n", text, re.M)
+    nxt_sec = re.search(r"^## ", text[m.end():], re.M) if m else None
+    cut = m.end() + (nxt_sec.start() if nxt_sec else len(text) - m.end()) if m else len(text)
+    body = text[:cut].rstrip("\n") + ("\n" + "\n".join(blocks) if blocks else "") + "\n\n" + text[cut:]
+    # Turns the reader read and drew nothing load-bearing from: read, nothing to keep.
+    new_units, _ = parse_dossier(body)
+    cited = {r for u in new_units.values() for r in u["refs"]} | no_content(body)
+    lines = []
+    for sid in read:
+        rest = [tid for tid, t in srcs.get(sid, {}).items()
+                if (t["role"].startswith("owner") or t["role"] in COVERED_ROLES) and (sid, tid) not in cited]
+        if rest:
+            lines.append(f"{sid} {', '.join(turn_ranges(rest))}")
+    if lines:
+        if not re.search(r"^## No-content turns[ \t]*$", body, re.M):
+            body = body.rstrip("\n") + "\n\n## No-content turns\n"
+        body = body.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
+    path.write_text(body, encoding="utf-8")
+    rounds_dir(project).mkdir(parents=True, exist_ok=True)
+    n = max((r["n"] for r in parse_rounds(project)), default=0) + 1
+    esc = lambda x: str(x).replace("|", "/").replace("\n", " ")
+    rec = [f"# Round {n} · {now()} · independent extraction, drafted into the dossier", "",
+           "Sources: " + ", ".join(f"{sid} ({len(srcs.get(sid, {}))} turns)" for sid in read),
+           f"Extraction: {result}",
+           f"Points: {len(data['points'])} · drafted: {len(good)} · to settle: {len(bad)}", "",
+           "Settle each row: added S-<nnn> (a unit now carries it), in S-<nnn> (<why>), not a point (<why>), or owner "
+           "(<the question>).", "", "## To settle", "", "| # | Point | Refs | Quote | Resolution |", "|---|---|---|---|---|"]
+    rec += [f"| {i} | {esc(pt.get('point', ''))[:160]} ({why}) | {esc(', '.join(pt.get('refs') or []))} | "
+            f"\"{esc(pt.get('quote', ''))[:200]}\" | open |" for i, pt, why in bad]
+    (rounds_dir(project) / f"round-{n}.md").write_text("\n".join(rec) + "\n", encoding="utf-8")
+    print(f"draft: {len(good)} unit(s) from {len(data['points'])} point(s) of {', '.join(read)}; {len(bad)} to settle in "
+          f"rounds/round-{n}.md; next, edit the dossier (merge, link supersessions, check attribution), then audit")
+    return 0
+
+
+AUDIT_ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*)\|\s*$")
+AUDIT_RESOLUTION = re.compile(r"^(fixed (S-\d{3,})(?: \(.+\))?|not an issue \(.+\)|owner \(.+\))$")
+
+
+def audits_dir(project):
+    return sources_dir(project) / "audits"
+
+
+def cmd_audit(argv):
+    """An independent fidelity read of some sources against the units citing them, recorded to be settled."""
+    if len(argv) < 2:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    project, result = Path(argv[0]).resolve(), Path(argv[1])
+    data = last_json_block(result.read_text(encoding="utf-8")) if result.is_file() else None
+    if not data or not isinstance(data.get("fidelity"), list):
+        print(f"FAIL   capture     {result}: no fidelity JSON (cold reader, fidelity mode)")
+        return 1
+    read = pack_sources(result)
+    if not read:
+        print(f"FAIL   capture     {result}: its pack names no source, so the audit cannot be credited")
+        return 1
+    turns = {meta["id"]: len(read_turns(folder)) for folder, meta in existing_sources(project)}
+    items = data["fidelity"]
+    material = [i for i in items if str(i.get("severity", "")).lower() == "material"]
+    minor = [i for i in items if i not in material]
+    audits_dir(project).mkdir(parents=True, exist_ok=True)
+    n = max((a["n"] for a in parse_audits(project)), default=0) + 1
+    esc = lambda x: str(x).replace("|", "/").replace("\n", " ")
+    row = lambda k, i: (f"| {k} | {esc(i.get('kind', ''))} | {esc(i.get('turn', ''))} | \"{esc(i.get('quote', ''))[:160]}\" | "
+                        f"{esc(i.get('unit', ''))} | {esc(i.get('dossier_says', ''))[:160]} |")
+    lines = [f"# Audit {n} · {now()} · independent fidelity read", "",
+             "Sources: " + ", ".join(f"{sid} ({turns.get(sid, 0)} turns)" for sid in read), f"Read: {result}",
+             f"Material: {len(material)} · minor: {len(minor)}", "",
+             "Settle each material row: fixed S-<nnn> (<what changed>), not an issue (<why>), or owner (<the question>).",
+             "", "## Material", "", "| # | Kind | Turn | Quote | Unit | Dossier says | Resolution |",
+             "|---|---|---|---|---|---|---|"]
+    lines += [row(k, i) + " open |" for k, i in enumerate(material, 1)]
+    lines += ["", "## Minor (listed; fixed when it costs little, no settling needed)", "",
+              "| # | Kind | Turn | Quote | Unit | Dossier says |", "|---|---|---|---|---|---|"]
+    lines += [row(k, i) for k, i in enumerate(minor, 1)]
+    out = audits_dir(project) / f"audit-{n}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"audit {n}: {len(material)} material and {len(minor)} minor problem(s) in {', '.join(read)} -> {out}")
+    return 0
+
+
+def parse_audits(project):
+    out = []
+    d = audits_dir(project)
+    for f in sorted(d.glob("audit-*.md"), key=lambda p: int(re.sub(r"\D", "", p.stem) or 0)) if d.is_dir() else []:
+        text = f.read_text(encoding="utf-8")
+        covered = dict((sid, int(k)) for sid, k in re.findall(r"(SRC-\d+) \((\d+) turns\)",
+                                                             (re.search(r"^Sources:(.*)$", text, re.M) or [None, ""])[1]))
+        rows = []
+        sec = re.search(r"^## Material\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+        for line in (sec.group(1) if sec else "").splitlines():
+            m = AUDIT_ROW.match(line.strip())
+            if m:
+                cells = [c.strip() for c in m.group(2).split("|")]
+                rows.append({"n": int(m.group(1)), "turn": cells[1] if len(cells) > 1 else "",
+                             "resolution": cells[-1]})
+        out.append({"n": int(re.sub(r"\D", "", f.stem)), "sources": covered, "material": rows})
+    return out
+
+
+def check_audits(project, srcs, units):
+    fails = []
+    audits = parse_audits(project)
+    for a in audits:
+        for row in a["material"]:
+            m = AUDIT_RESOLUTION.match(row["resolution"])
+            if not m:
+                fails.append(f"audit {a['n']} row {row['n']} is not settled ({row['resolution'][:40] or 'empty'}): fixed "
+                             "S-<nnn> (...), not an issue (...), or owner (...)")
+            elif m.group(2) and m.group(2) not in units:
+                fails.append(f"audit {a['n']} row {row['n']} names {m.group(2)}, which is not a unit")
+    auditable = {sid for sid, turns in srcs.items()
+                 if any(t["role"].startswith("owner") or t["role"] in COVERED_ROLES for t in turns.values())}
+    for sid in sorted(auditable, key=lambda x: int(x.split("-")[1])):
+        reading = [a for a in audits if sid in a["sources"]]
+        if not reading:
+            fails.append(f"{sid} has not been audited (cold reader in fidelity mode on it, then capture.py audit)")
+            continue
+        latest = reading[-1]
+        if len(srcs[sid]) > latest["sources"][sid]:
+            fails.append(f"{sid} grew after its last audit (audit {latest['n']}); audit it again")
+            continue
+        own = [r for r in latest["material"] if sid in r["turn"] or not re.search(r"SRC-\d+", r["turn"])]
+        if own:
+            how = (" Audits keep finding material problems here: audit smaller portions, or ask the owner what the "
+                   "source means." if len(reading) > AUDIT_METHOD_AFTER else "")
+            fails.append(f"{sid}: its latest audit (audit {latest['n']}) found {len(own)} material problem(s); once "
+                         f"settled, audit it again with --previous, until an audit finds none.{how}")
+    return fails
 
 
 CLOSURE_STATE = re.compile(r"^(intent \(.+\)|brief \(.+\)|interfaces \(.+\)|milestone M\d+|named non-goal \(.+\)|"
@@ -1086,7 +1365,7 @@ def main(argv):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     cmd = {"add": cmd_add, "list": cmd_list, "check": cmd_check, "closure": cmd_closure,
-           "reconcile": cmd_reconcile}.get(argv[0])
+           "reconcile": cmd_reconcile, "draft": cmd_draft, "audit": cmd_audit}.get(argv[0])
     if cmd is None:
         print(__doc__.strip(), file=sys.stderr)
         return 2

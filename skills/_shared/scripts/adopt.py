@@ -11,20 +11,23 @@ inventory writes docs/project/research/adoption/:
                     lines, last change; documents ranked by authority signals; discovered commands (package
                     scripts, Makefile targets, pyproject, Cargo, go, Xcode, CI steps); entry points; the
                     route, model-call, and degradation candidates (inventory.py); git facts; areas
-  reading-plan.md   areas in reading order with sizes; which to read directly and which to hand to a
-                    read-only explorer (at most 3 at once), each writing areas/<area>.md
+  reading-plan.md   areas in reading order with sizes, so the modules that carry the documented mechanisms
+                    and the entry points are read first
   coverage.md       the ledger: one row per document and code file ("todo"), with lock files, vendored,
                     generated, binary, and asset files pre-accounted as "skipped (<class>)"
-Ledger statuses: captured (SRC-<n>: imported by capture.py add --inventory and read through capture's rounds) ·
-read (a document, citing SRC-<n>) · skipped (<reason>) · stale (<evidence>) · superseded (<by what>). Documents,
-code, tests, and configuration are all captured and read in full; outlining is not reading.
+Ledger statuses: captured (SRC-<n>: imported by capture.py add --inventory, read by an independent extraction
+and cleared by an audit) · read (a document, citing SRC-<n>) · mapped (<how>: code and tests, understood through
+the code map, the reading of the modules that matter, and the characterization) · registered (<summary>: data,
+raw output, and logs, summarized by script in bulk.md) · skipped (<reason>) · stale (<evidence>) · superseded
+(<by what>).
 
 check FAILs when: a file the inventory lists (other than pre-accounted lock, vendored, generated, binary, and
-record files) has no ledger row, or a row still todo; a document is not read, captured, stale, or superseded; a
-code, test, configuration, or other file is not captured, stale, superseded, or skipped with a reason; a
-captured or read row cites no source the sources index holds; the dossier fails capture.py check (every unit
-of every source accounted for, every source read by independent extraction rounds until one found nothing
-missed) or capture.py closure (every point lands in the record); a git repository's history is not captured
+record files) has no ledger row, or a row still todo; a document is not read, captured, registered, stale, or
+superseded; a code, test, configuration, or other file is not captured, mapped, registered, stale, superseded, or
+skipped with a reason; a captured or read row cites no source the sources index holds; the dossier fails
+capture.py check (every unit of every source accounted for, every source extracted once and audited until an
+audit finds nothing material) or capture.py closure (every point lands in the record); a git repository's
+history is not captured
 (capture.py add --git-log); a GitHub project's issue tracker is neither captured (--tracker) nor recorded in
 brief.md as "Tracker: not read (<reason>)"; a record file is missing (intent, brief, milestones, interfaces,
 decisions, state, gate); AGENTS.md has no labeled Commands; the commands were never run (adopt.py commands);
@@ -210,12 +213,14 @@ def inventory(project):
     d = out_dir(project)
     (d / "inventory.json").write_text(json.dumps(data, indent=2, ensure_ascii=False))
     plan = ["# Reading plan", "", f"Files: {len(rows)} ({', '.join(f'{k} {v}' for k, v in data['counts'].items())}).",
-            "Read every document in the order below, then the areas. Write what you learn to disk as you go (area "
-            "notes, the record files); never read a file twice.", "", "## Documents (by authority signal)"]
+            "Documents are read by an independent extraction and audited (/capture's reading); read the highest in "
+            "this list yourself as well. Code is understood through the map: read the entry points and every module "
+            "that carries a documented mechanism in full, the rest where the map leaves its role open, and write what "
+            "you learn to areas/<area>.md as you go; never read a file twice.", "", "## Documents (by authority signal)"]
     plan += [f"- {d['path']} · {d['lines']} lines · last change {d.get('last_change') or 'unknown'}" for d in docs] or ["- none"]
     plan += ["", "## Areas", "| Area | Files | Lines | How |", "|---|---|---|---|"]
     for key, a in sorted(areas.items(), key=lambda kv: -kv[1]["lines"]):
-        how = f"explorer, writes areas/{re.sub(r'[^a-z0-9]+', '-', key.lower()).strip('-')}.md" \
+        how = f"map first, then its load-bearing modules; notes in areas/{re.sub(r'[^a-z0-9]+', '-', key.lower()).strip('-')}.md" \
             if a["lines"] > BIG_AREA_LINES else "read directly"
         plan.append(f"| {key} | {a['files']} | {a['lines']} | {how} |")
     (d / "reading-plan.md").write_text("\n".join(plan) + "\n")
@@ -329,13 +334,14 @@ def check(project):
             path, cls, status, note = m.groups()
             if status == "todo" or not status:
                 fails.append(f"{path}: not accounted for yet" + (f" ({note})" if note else ""))
-            elif cls in ("doc", "legacy-record") and not re.match(r"^(read|captured|stale \(.+\)|superseded \(.+\))$", status):
-                fails.append(f"{path}: a document must be read or captured (or marked stale/superseded with evidence), "
-                             f"not '{status}'")
+            elif cls in ("doc", "legacy-record") and not re.match(
+                    r"^(read|captured|registered \(.+\)|stale \(.+\)|superseded \(.+\))$", status):
+                fails.append(f"{path}: a document must be read or captured, or registered as bulk (or marked "
+                             f"stale/superseded with evidence), not '{status}'")
             elif cls not in ("doc", "legacy-record") and not re.match(
-                    r"^(captured|skipped \(.+\)|stale \(.+\)|superseded \(.+\))$", status):
-                fails.append(f"{path}: code, tests, and configuration are captured and read in full (capture.py add "
-                             f"--inventory), or skipped with a reason; '{status}' is not enough")
+                    r"^(captured|mapped \(.+\)|registered \(.+\)|skipped \(.+\)|stale \(.+\)|superseded \(.+\))$", status):
+                fails.append(f"{path}: code and tests are mapped, configuration captured, data registered (capture.py "
+                             f"add --inventory), or skipped with a reason; '{status}' is not enough")
     inv_path = d / "inventory.json"
     listed = set()
     if ledger.is_file():

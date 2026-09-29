@@ -111,6 +111,30 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         return out.stdout
 
+    def audit(self, items, sources=("SRC-1",), n=1):
+        """Stand in for the isolated reader in fidelity mode: its pack names the transcripts it read."""
+        d = self.project / f".evidence/capture/audit-{n}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "cold-reader.pack.md").write_text("".join(f"## Transcript: docs/project/sources/{sid}-x/transcript.md\n"
+                                                       for sid in sources))
+        (d / "cold-reader.result.md").write_text("Read.\n```json\n" + json.dumps({"mode": "fidelity",
+                                                                                 "fidelity": items}) + "\n```\n")
+        out = self.cap("audit", str(self.project), str(d / "cold-reader.result.md"))
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return out.stdout
+
+    def settle_audit(self, n, row, resolution):
+        f = self.project / f"docs/project/sources/audits/audit-{n}.md"
+        lines = f.read_text().splitlines()
+        lines = [l[:l.rstrip().rstrip("|").rstrip().rfind("|") + 1] + f" {resolution} |"
+                 if l.startswith(f"| {row} |") and l.rstrip().endswith("open |") else l for l in lines]
+        f.write_text("\n".join(lines) + "\n")
+
+    DROPPED = {"kind": "dropped", "turn": "SRC-1 T003", "quote": "and an image of the list", "unit": "",
+               "dossier_says": "nothing", "severity": "material"}
+    WORDING = {"kind": "distorted", "turn": "SRC-1 T001", "quote": "I keep losing", "unit": "S-001",
+               "dossier_says": "drift", "severity": "minor"}
+
     def settle(self, n, row, resolution):
         f = self.project / f"docs/project/sources/rounds/round-{n}.md"
         lines = f.read_text().splitlines()
@@ -221,28 +245,79 @@ class CaptureTest(unittest.TestCase):
         self.assertIn("to settle: 0", self.extract(self.CARRIED) + (self.project /
                       "docs/project/sources/rounds/round-1.md").read_text())
         out = self.cap("check", str(self.project))
-        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("SRC-1 has not been audited", out.stdout, "an extraction alone does not clear a source")
+        self.audit([self.WORDING])
+        out = self.cap("check", str(self.project))
+        self.assertEqual(out.returncode, 0, out.stdout + "(a minor problem is listed, never a blocker)")
 
-    def test_rounds_run_until_one_finds_nothing_missed(self):
+    def test_audits_run_until_one_finds_nothing_material(self):
         self.add_export()
         self.write_dossier(DOSSIER)
-        missed = {"refs": ["SRC-1 T003"], "quote": "and an image of the list", "point": "the owner attached a photo"}
-        self.extract(self.CARRIED + [missed])
+        self.extract(self.CARRIED)
+        self.assertIn("1 material", self.audit([self.DROPPED, self.WORDING]))
         out = self.cap("check", str(self.project))
-        self.assertIn("round 1 row 1 is not settled", out.stdout)
-        self.write_dossier(DOSSIER.replace("## No-content turns", "- S-005 · product · document · open · SRC-1 T003\n"
-                                           "  The owner attached a picture of the list.\n\n## No-content turns"))
-        self.settle(1, 1, "added S-005")
+        self.assertIn("audit 1 row 1 is not settled", out.stdout)
+        self.write_dossier(DOSSIER.replace("## No-content turns", "- S-005 · product · owner · open · SRC-1 T003\n"
+                                           "  The owner attached a picture of the list.\n"
+                                           "  > \"deleting must reach both phones\" (SRC-1 T003)\n\n## No-content turns"))
+        self.settle_audit(1, 1, "fixed S-005 (the photo is a unit now)")
         out = self.cap("check", str(self.project))
-        self.assertIn("found 1 point(s) the dossier had missed; another round is due", out.stdout)
-        self.extract(self.CARRIED, n=2)
-        self.assertEqual(self.cap("check", str(self.project)).returncode, 0, "a round that finds nothing missed ends it")
+        self.assertIn("found 1 material problem(s); once settled, audit it again", out.stdout,
+                      "a settled problem is proven fixed only by the next audit")
+        self.audit([self.WORDING], n=2)
+        self.assertEqual(self.cap("check", str(self.project)).returncode, 0, "an audit with nothing material ends it")
         for n in (3, 4, 5):
-            self.extract(self.CARRIED + [dict(missed, quote=f"missed point {n}")], n=n)
-            self.settle(n, 1, "added S-005")
+            self.audit([dict(self.DROPPED, quote=f"missed point {n}")], n=n)
+            self.settle_audit(n, 1, "not an issue (the transcript repeats S-002)")
         out = self.cap("check", str(self.project))
-        self.assertIn("change the method", out.stdout, "a count never ends the reading; it changes how it is done")
+        self.assertIn("audit smaller portions", out.stdout, "a count never ends the checking; it changes how it is done")
         self.assertEqual(out.returncode, 1)
+
+    def test_the_reader_drafts_the_dossier(self):
+        self.add_export()
+        self.write_dossier("# Dossier\n\n## Units\n- S-007 · other · owner · superseded by S-008 · SRC-1 T001\n"
+                           "  An earlier reading, kept.\n  > \"I keep losing grocery lists\" (SRC-1 T001)\n\n"
+                           "## No-content turns\n")
+        points = [
+            {"refs": ["SRC-1 T001"], "quote": "I keep losing grocery lists", "point": "lists get lost",
+             "category": "problem", "attribution": "owner", "status": "current"},
+            {"refs": ["SRC-1 T002"], "quote": "build a shared list that syncs", "point": "a synced shared list",
+             "category": "product", "attribution": "assistant", "status": "not taken up"},
+            {"refs": ["SRC-1 T003"], "quote": "deleting must reach both phones", "point": "deletion reaches both",
+             "category": "constraint", "attribution": "owner", "status": "current"},
+            {"refs": ["SRC-1 B1-T001"], "quote": "Actually, what about a fridge magnet?", "point": "a fridge magnet",
+             "category": "product", "attribution": "owner", "status": "superseded", "superseded_by": 3},
+            {"refs": ["SRC-1 T001"], "quote": "words the owner never typed", "point": "an invented quote"},
+            {"refs": ["SRC-1 T002"], "quote": "build a shared list that syncs", "point": "claimed as the owner's",
+             "attribution": "owner"},
+        ]
+        out = self.extract_draft(points)
+        self.assertIn("draft: 4 unit(s) from 6 point(s)", out)
+        dossier = (self.project / "docs/project/sources/dossier.md").read_text()
+        self.assertIn("- S-008 · problem · owner · current · SRC-1 T001", dossier, "a retired ID is never reused")
+        self.assertIn("- S-009 · product · assistant · not taken up · SRC-1 T002", dossier)
+        self.assertIn("- S-011 · product · owner · superseded by S-010 · SRC-1 B1-T001", dossier)
+        self.assertNotIn("an invented quote", dossier)
+        rnd = (self.project / "docs/project/sources/rounds/round-1.md").read_text()
+        self.assertIn("the quote is not verbatim", rnd)
+        self.assertIn("attributed to the owner but quotes the assistant's turn", rnd)
+        units = [l for l in dossier.splitlines() if l.startswith("- S-")]
+        self.assertEqual(len(units), 5, "the four drafted and the one already there")
+        self.settle(1, 5, "not a point (the reader misquoted T001, which S-008 carries)")
+        self.settle(1, 6, "in S-009 (the assistant's proposal)")
+        self.audit([])
+        out = self.cap("check", str(self.project))
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def extract_draft(self, points, n=1):
+        d = self.project / f".evidence/capture/extract-{n}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "cold-reader.pack.md").write_text("## Document: docs/project/sources/SRC-1-x/transcript.md\n")
+        (d / "cold-reader.result.md").write_text("Read.\n```json\n" + json.dumps({"mode": "extraction",
+                                                                                 "points": points}) + "\n```\n")
+        out = self.cap("draft", str(self.project), str(d / "cold-reader.result.md"))
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return out.stdout
 
     def test_a_source_that_grew_is_extracted_again(self):
         self.add_export()
@@ -314,30 +389,37 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("tracker: not read", out.stdout)
 
-    def test_the_whole_inventory_is_captured_and_the_ledger_updated(self):
+    def test_the_inventory_is_read_by_tier_and_the_ledger_updated(self):
         (self.project / "src").mkdir()
         (self.project / "src/store.py").write_text("\n".join(f"line {i}" for i in range(320)) + "\n")
         (self.project / "README.md").write_text("# Lists\nShared lists.\n")
         (self.project / "package-lock.json").write_text("{}")
+        (self.project / "config.toml").write_text("provider = 'x'\n")
+        (self.project / "data").mkdir()
+        (self.project / "data/rows.json").write_text(json.dumps({"rows": [1, 2], "at": "2026-09-01T10:00"}))
+        (self.project / "runs").mkdir()
+        (self.project / "runs/out.md").write_text("# raw output\nERROR once\n")
+        (self.project / "runs/report.md").write_text("# What the run found\n")
         adoption = self.project / "docs/project/research/adoption"
         adoption.mkdir(parents=True)
-        (adoption / "inventory.json").write_text(json.dumps({"files": [
-            {"path": "src/store.py", "class": "code"}, {"path": "README.md", "class": "doc"},
-            {"path": "package-lock.json", "class": "lockfile"}]}))
-        (adoption / "coverage.md").write_text("| Path | Class | Lines | Status | Note |\n|---|---|---|---|---|\n"
-                                              "| src/store.py | code | 320 | todo | |\n| README.md | doc | 2 | todo | |\n")
+        files = [("src/store.py", "code"), ("README.md", "doc"), ("package-lock.json", "lockfile"),
+                 ("config.toml", "config"), ("data/rows.json", "config"), ("runs/out.md", "doc"),
+                 ("runs/report.md", "doc")]
+        (adoption / "inventory.json").write_text(json.dumps({"files": [{"path": p, "class": c} for p, c in files]}))
+        (adoption / "coverage.md").write_text("| Path | Class | Lines | Status | Note |\n|---|---|---|---|---|\n" +
+                                              "".join(f"| {p} | {c} | 1 | todo | |\n" for p, c in files if c != "lockfile"))
         out = self.cap("add", str(self.project), "--inventory")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         ledger = (adoption / "coverage.md").read_text()
-        self.assertRegex(ledger, r"\| src/store\.py \| code \| 320 \| captured \| SRC-\d+ \|")
-        self.assertRegex(ledger, r"\| README\.md \| doc \| 2 \| captured \| SRC-\d+ \|")
-        metas = {json.loads(m.read_text())["title"]: json.loads(m.read_text())
-                 for m in (self.project / "docs/project/sources").glob("SRC-*/meta.json")}
-        self.assertEqual(metas["src/store.py"]["kind"], "code")
-        self.assertEqual(metas["src/store.py"]["counts"]["turns"], 3, "320 lines in windows of 150")
-        self.assertNotIn("package-lock.json", metas, "lock files are not read")
-        self.write_dossier("# Dossier\n\n## Units\n\n## No-content turns\nnone\n")
-        self.assertIn("a code window", self.cap("check", str(self.project)).stdout.replace("an owner turn", ""))
+        self.assertRegex(ledger, r"\| src/store\.py \| code \| 1 \| mapped \(code map\) \|")
+        self.assertRegex(ledger, r"\| README\.md \| doc \| 1 \| captured \| SRC-\d+ \|")
+        self.assertRegex(ledger, r"\| config\.toml \| config \| 1 \| captured \| SRC-\d+ \|")
+        self.assertRegex(ledger, r"\| data/rows\.json \| config \| 1 \| registered \(bulk\) \| .*keys: rows, at")
+        self.assertRegex(ledger, r"\| runs/out\.md \| doc \| 1 \| registered \(bulk\) \| .*1 error line")
+        self.assertRegex(ledger, r"\| runs/report\.md \| doc \| 1 \| captured \| SRC-\d+ \|", "a report is read")
+        self.assertIn("data/rows.json", (adoption / "bulk.md").read_text())
+        metas = {json.loads(m.read_text())["title"] for m in (self.project / "docs/project/sources").glob("SRC-*/meta.json")}
+        self.assertEqual(metas, {"README.md", "config.toml", "runs/report.md"}, "code is mapped, bulk registered")
 
     def test_an_unreadable_file_is_named_not_skipped(self):
         docs = self.d / "pile"
@@ -369,6 +451,7 @@ class CaptureTest(unittest.TestCase):
         self.add_export()
         self.write_dossier(DOSSIER)
         self.extract(self.CARRIED)
+        self.audit([])
         self.assertEqual(self.cap("check", str(self.project)).returncode, 0)
         without = DOSSIER.split("- S-003")[0] + "\n## No-content turns\nnone\n"
         self.write_dossier(without)

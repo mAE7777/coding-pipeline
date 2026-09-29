@@ -183,8 +183,12 @@ class Ledger(unittest.TestCase):
         self.incident(3, "not-pipeline (the design skill)")
         self.incident(4, "duplicate (INC-0001)")
         self.incident(5, "not-reproduced", repro="tried a unit test on the stop hook; the hook behaves")
+        head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "main"], capture_output=True, text=True).stdout.strip()
+        self.incident(6, f"resolved ({head[:12]} · the owner's direct order; unit tests and three fixture runs)")
         r = run("check", env=self.env)
         self.assertEqual(r.returncode, 0, r.stdout)
+        self.incident(6, "resolved (0000000000 · a commit that does not exist on main)")
+        self.assertIn("not on main", run("check", env=self.env).stdout)
         r = run("status", env=self.env)
         self.assertIn("INC-0001", r.stdout)
         self.assertNotIn("INC-0003", r.stdout)
@@ -279,6 +283,24 @@ class Rule(unittest.TestCase):
         # has no partner at base
         self.assertEqual(self.verdict([suite])[0], "INCOMPARABLE")
         self.assertEqual(self.verdict(["fixtures:cold-reader"])[0], "INCOMPARABLE")
+
+    def test_cost_is_measured_too(self):
+        suite = "fixtures:cold-reader"
+        runs = [True, True, True]
+        self.store(self.base, suite, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [100e3] * 3}})
+        self.store(self.head, suite, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [120e3] * 3}})
+        self.assertNotEqual(self.verdict([suite])[0], "WORSE", "a fifth more is inside run-to-run noise")
+        self.store(self.head, suite, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [140e3] * 3}})
+        verdict, reasons, _ = self.verdict([suite])
+        self.assertEqual(verdict, "WORSE")
+        self.assertIn("costs more", " ".join(reasons))
+        repro = "repro:cost:fixtures:cold-reader"
+        self.store(self.base, repro, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [100e3] * 3}})
+        self.store(self.head, repro, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [70e3] * 3}})
+        self.assertEqual(self.verdict([repro])[0], "BETTER", "cheaper by more than a fifth, passing as often")
+        self.store(self.head, repro, {"fixtures": {"cold-reader-clear": [True, False, True]},
+                                      "units": {"cold-reader-clear": [50e3] * 3}})
+        self.assertEqual(self.verdict([repro])[0], "SAME", "cheaper but worse is not an improvement")
 
     def test_a_stochastic_reproduction(self):
         suite = "repro:fixtures:probe-inbox"

@@ -28,10 +28,12 @@ can enforce is enforced by a script or a hook rather than asked for in prose.
    from files, so isolation never depends on prompt text or on the builder's wording.
 4. **Nothing silent.** Every non-success has a name and a count; every built part is wired and proven, or
    parked and unreachable; every fact carries its source and date; evidence from another fingerprint is STALE.
-5. **Enough context, then economy.** Gathering, reading, and analysis are never cut to save rounds or tokens:
-   every loop (reading rounds, cold reads, the fix loop) ends when it converges, never at a count, and a count
-   only signals that the method should change or the owner should be asked. Economy means never paying twice
-   for the same work.
+5. **Enough context, within the owner's budget.** Every load-bearing point is read and checked; a detail that
+   decides nothing stays one lookup away in the verbatim sources rather than being read again and again. Every
+   loop (audits, cold reads, the fix loop) ends when a pass finds nothing material, never at a count; a count
+   only changes the method or asks the owner. Spend is measured per phase (`spend.py`): capture and adoption
+   stay within 5 percent of the week and stop at 10 until the owner raises it, told plainly what a smaller plan
+   would leave unread. Economy also means never paying twice for the same work.
 6. **Disk is truth, context is cache.** Decisions, state, and evidence are written when they happen; the
    owner's instructions count once written down, in their own words, proven against the transcript;
    handoffs pass references and fingerprints; after a compaction, writes wait until the state files are read.
@@ -84,7 +86,8 @@ Model thinking is remote and costs tokens; builds, tests, servers, browsers, and
 heat. Per session at most 3 agent contexts at once (subagents plus isolated runs), at most 5 subagents at
 once, nesting depth 2; workflows run at most 3 agents at once. Machine-wide at most 1 heavy job, through the
 kernel lock and leases in `_shared/scripts/heavy.py`, enforced by a hook. Subagents are for isolation or for
-large independent work that would flood the context, never for double-checking one's own work.
+large independent work that would flood the context, never for double-checking one's own work, and not
+in capture or adoption, where reading is the builder's or an isolated run's so its cost stays bounded and measured.
 
 ## Writing the skills
 Each SKILL.md stays under about 200 lines with its load-bearing rules first, states outcomes and

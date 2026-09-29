@@ -118,6 +118,26 @@ class SettingsTest(unittest.TestCase):
             self.assertEqual(out.returncode, 0, out.stderr)
             self.assertIn("DRY_RUN", out.stdout)
 
+    def test_a_phase_over_its_budget_cap_starts_no_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            proj, home = Path(d) / "proj", Path(d) / "home"
+            (proj / "docs/project").mkdir(parents=True)
+            (proj / "docs/project/intent.md").write_text("# intent\nsome text\n")
+            env = {**os.environ, "HOME": str(home)}
+            subprocess.run([sys.executable, str(RI.parent / "spend.py"), "start", str(proj), "--phase", "adopt",
+                            "--cap", "0.000001"], capture_output=True, text=True, env=env, check=True)
+            ran = proj / ".evidence/capture/extract-1"
+            ran.mkdir(parents=True)
+            (ran / "cold-reader.summary.json").write_text(json.dumps({"usage": {"output": 100000}}))
+            out = subprocess.run([sys.executable, str(RI), "cold-reader", "--dir", "auto", "--out", str(proj / ".evidence/plan"),
+                                  "--project", str(proj), "--render", "--docs", "docs/project/intent.md", "--", "--dry-run"],
+                                 capture_output=True, text=True, env=env)
+            self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+            self.assertIn("BLOCKED", out.stdout)
+            self.assertIn("budget", out.stdout)
+            self.assertEqual(list((home / ".gate-copies").glob("tmp-*")) if (home / ".gate-copies").is_dir() else [], [],
+                             "the private folder made for the run is removed")
+
     def test_auto_folder_is_removed_when_the_pack_cannot_render(self):
         before = set((HOME / ".gate-copies").glob("tmp-*")) if (HOME / ".gate-copies").is_dir() else set()
         with tempfile.TemporaryDirectory() as d:
@@ -231,10 +251,14 @@ class StreamTest(unittest.TestCase):
             json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"},
                                                                      {"type": "text", "text": "x"}]}}),
             json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}}),
-            json.dumps({"type": "result", "result": "DONE", "num_turns": 3, "is_error": False,
+            json.dumps({"type": "result", "result": "DONE", "num_turns": 3, "is_error": False, "total_cost_usd": 0.5,
+                        "usage": {"input_tokens": 3, "cache_creation_input_tokens": 40, "cache_read_input_tokens": 900,
+                                  "output_tokens": 70},
                         "permission_denials": [{"tool_name": "Read", "tool_input": {"file_path": "/real/x"}}]}),
         ]
         info = ri.parse_claude_stream(lines)
+        self.assertEqual(info["usage"], {"input": 3, "cache_write": 40, "cache_read": 900, "output": 70,
+                                         "cost_usd": 0.5, "duration_ms": None})
         self.assertEqual(info["tool_uses"], 2)
         self.assertEqual(info["session_id"], "S")
         self.assertEqual(info["tools_seen"], ["Read", "Bash"])

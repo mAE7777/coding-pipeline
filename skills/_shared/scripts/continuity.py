@@ -11,8 +11,9 @@ Direct use:
                   (the session-start text, for a tool whose hooks are not active)
                   (the tool and session default to the ones this command runs in: session_env.py)
 
-session-start. A project whose record is not complete (record_check.py) gets one instruction: adopt it
-before building or fixing (`/plan adopt`). Whatever the Writer line says, the new session is also told about
+session-start. A project that uses the pipeline (it has docs/project) but whose record is not complete
+(record_check.py) gets one instruction: adopt it before building or fixing (`/plan adopt`); an ordinary
+repository gets none. Whatever the Writer line says, the new session is also told about
 work the record may not hold yet: it finds the latest other conversation in this project, in either tool (Claude
 Code transcripts under ~/.claude/projects, Codex sessions under ~/.codex/sessions, matched by working folder, so
 it works even when a tool's hooks never ran, as when a session ends because its usage limit ran out), and when
@@ -345,7 +346,9 @@ def session_start(data, tool):
     info = classify(root)
     invoke = "$plan adopt" if tool == "codex" else "/plan adopt"
     lines = []
-    if info["kind"] not in ("complete", "empty"):
+    # Only a project that already uses the pipeline (it has docs/project) is told to adopt: an ordinary repository
+    # is the owner's to decide about, and an adoption is too large to start on a hook's say-so.
+    if info["kind"] not in ("complete", "empty") and (root / "docs/project").is_dir():
         lines.append(f"This project has no complete build record (kind: {info['kind']}"
                      + (f"; missing: {', '.join(info['missing'])}" if info["missing"] else "") +
                      f"). Before building, fixing, or gating, adopt it with {invoke}: read the code and every "

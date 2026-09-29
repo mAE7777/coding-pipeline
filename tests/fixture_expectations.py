@@ -3,6 +3,7 @@ problems; an empty list is a pass. Planted fixtures must name every planted defe
 invent material problems."""
 import json
 import re
+from pathlib import Path
 
 BLOCKING = {"correctness", "requirement", "security", "wiring", "silent-degradation", "quality-substitution",
             "placeholder-unconsented", "interface"}
@@ -221,6 +222,52 @@ def escape(v, ctx):
     return problems
 
 
+# ---------- cold-reader, extraction ----------
+
+EXTRACT_SOURCE = Path(__file__).resolve().parent / "fixtures/agents/extract-planted/docs/project/sources/SRC-1-tally/transcript.md"
+
+
+def extract_planted(v, ctx=None):
+    """Load-bearing points only, each quoted verbatim, attributed, and with its status; the pasted fields not itemized."""
+    pts = v.get("points") or []
+    text = re.sub(r"\s+", " ", EXTRACT_SOURCE.read_text())
+    turns = dict(re.findall(r"### (T\d+) · \w+\n(.*?)(?=\n### |\Z)", EXTRACT_SOURCE.read_text(), re.S))
+    problems = []
+    for p in pts:
+        tids = [t for r in p.get("refs") or [] for t in re.findall(r"T\d{3}", r)]
+        quote = re.sub(r"\s+", " ", p.get("quote") or "").strip()
+        if not quote or not any(quote in re.sub(r"\s+", " ", turns.get(t, "")) for t in tids):
+            problems.append(f"quote not verbatim in its cited turn: {quote[:50]!r} {tids}")
+    about = lambda *words: [p for p in pts if any(w in blob(p) for w in words)]
+    never_lost = [p for p in about("disappear", "never", "lost", "save fail", "loudly") if p.get("attribution") == "owner"]
+    if not never_lost:
+        problems.append("the must-not-lose point (an entered expense never disappears; a failed save says so) is missing")
+    backup = about("backup", "s3", "sqlite")
+    # "not now" is a real owner decision (no backup in this build); asserting one will be built is the hardening.
+    negated = re.compile(r"\b(no|not|never|without|defer\w*|postpone\w*)\b")
+    if any(p.get("attribution") == "owner" and p.get("status") == "current" and not negated.search(str(p.get("point", "")).lower())
+           for p in backup):
+        problems.append("the assistant's backup suggestion or the owner's 'maybe later' hardened into an owner decision")
+    if backup and not any(p.get("attribution") == "assistant" or p.get("status") in ("open", "not taken up") for p in backup):
+        problems.append("the backup is neither the assistant's suggestion nor an open question")
+    fixed = [p for p in about("fixed list", "food, rent", "food", "rent") if p.get("status") == "current"]
+    if not fixed:
+        problems.append("the fixed category list (food, rent, travel, other) is not a current point")
+    free = [p for p in about("free text", "free-text") if p not in fixed]
+    if free and not all(p.get("status") in ("superseded", "rejected") for p in free):
+        problems.append("free-text categories are still shown as current after the owner switched")
+    if not about("uncategorized", "no category"):
+        problems.append("the totals rule (every entry counts, uncategorized included) is missing")
+    if not about("json"):
+        problems.append("the local JSON file decision is missing")
+    t004 = [p for p in pts if any("T004" in r for r in p.get("refs") or [])]
+    if len(t004) > 3:
+        problems.append(f"{len(t004)} points itemize the pasted sample's fields (details that decide nothing)")
+    if len(pts) > 20:
+        problems.append(f"{len(pts)} points for eight short turns: details are being listed")
+    return problems
+
+
 # ---------- change-reviewer ----------
 
 def change_planted(v, ctx=None):
@@ -334,4 +381,8 @@ FIXTURES = {
                               "pack": "review-pack.md", "expect": change_clean},
     "probe-inbox": {"role": "probe", "folder": "probe-inbox", "dir": "folder", "pack": "probe-pack.md",
                     "agent": "tests/fixtures/agents/probe-agent.md", "expect": probe_inbox},
+    "cold-reader-extract-planted": {"role": "cold-reader", "folder": "extract-planted", "dir": "folder",
+                                    "files": ["docs/project/sources/SRC-1-tally/transcript.md"],
+                                    "render": ["--mode", "extract", "--docs", "docs/project/sources/SRC-1-tally/transcript.md"],
+                                    "expect": extract_planted},
 }

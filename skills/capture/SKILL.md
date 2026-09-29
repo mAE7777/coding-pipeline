@@ -1,6 +1,6 @@
 ---
 name: capture
-description: "Keep and understand everything a project's ideas and knowledge live in: ChatGPT chats (export or pasted, voice included), voice recordings, notes, documents (Markdown, text, PDF, Word, OpenDocument, RTF, HTML, EPUB), and records and logs, one file or a whole folder at once. All of it is stored verbatim in numbered units and organized into a dossier where every point cites the units it came from and the owner's words stay apart from an assistant's suggestions. It reads in rounds until nothing is missed: after each organizing pass an isolated reader that never sees the dossier lists every point in the sources, a script diffs that list against the dossier, and every difference is settled; the rounds end only when one finds nothing missed, and an isolated fidelity reader then checks for distortion. Checked by script (every owner turn, document section, and log window accounted for; every quote verbatim; every source read by an independent extraction). Use for /capture, 'save this chat', 'read these documents or logs', 'understand this folder', and before /plan or /plan adopt."
+description: "Keep and understand everything a project's ideas and knowledge live in: ChatGPT chats (export or pasted, voice included), voice recordings, notes, documents (Markdown, text, PDF, Word, OpenDocument, RTF, HTML, EPUB), and records and logs, one file or a whole folder at once. All of it is stored verbatim in numbered units; an isolated reader that never saw anyone's summary drafts the dossier from them (every load-bearing point with its verbatim quote, who said it, and whether it still stands, the owner's words apart from an assistant's suggestions), and a second isolated reader audits the dossier against the sources for anything dropped, bent, or misattributed, again until an audit finds nothing material. Details that decide nothing stay one lookup away in the verbatim sources. Spend is measured and kept within the owner's budget. Checked by script (every owner turn and document section accounted for; every quote verbatim; every source extracted and cleared by an audit). Use for /capture, 'save this chat', 'read these documents or logs', 'understand this folder', and before /plan or /plan adopt."
 argument-hint: "add <file or folder> | status | check | prompt"
 ---
 
@@ -28,41 +28,47 @@ requirements file, `~/.claude/skills/_shared/references/owner-standing.md`, says
 becomes the project if the idea goes ahead.
 
 ## add <file or folder>
-Context comes before economy: every unit is read in full, and nothing is skimmed or cut to save a round. What
-keeps the cost sane is never reading the same thing twice without a reason, not reading less.
+Every load-bearing point is read, drafted, and checked; nothing that could change a decision is skimmed. What is
+not paid for is a detail that decides nothing (a field list, a format, an example): it stays in the verbatim
+source, one lookup away. The reading is done by isolated readers, whose spend is bounded and measured; there are
+no helper agents here.
 
+0. **Budget**: `python3 ~/.claude/skills/_shared/scripts/spend.py start <project> --phase capture` (unless a phase,
+   such as an adoption, is already active). After the import, `spend.py estimate <project>`: above the target
+   (5 percent of the week), tell the owner before reading, with what a smaller plan would leave unread, and let
+   them choose. After every step, `spend.py status <project>`: over the target, tell the owner at the next stop;
+   over the cap (10 percent), the runner refuses new reads, so stop and report what is done, what remains, and
+   what it would cost; only the owner raises the cap (`spend.py raise`, their words). `spend.py stop` at the end.
 1. **Import**: `capture.py add <project> <file or folder> [--chat <title or id>]`. Kinds are detected: a ChatGPT
    export (`capture.py list <file>` shows its chats), pasted chat text, documents (Markdown and text; PDF by
    page; Word, OpenDocument, RTF, HTML, EPUB converted, the converter recorded), logs and records (windows of
    200 lines), audio (whisper, through the heavy lock, labeled machine-transcribed). A folder is walked whole;
    `docs/project/sources/import-ledger.md` records every file and what became of it. A file that could not be
-   read is named there with the reason (a scanned PDF needs OCR): tell the owner, never pass over it. A second
+   read is named there with the reason (a scanned PDF needs OCR): tell the owner, never pass over it. A log over
+   200 KB is registered with a script summary (time range, error lines), not read window by window. A second
    import of a chat that grew adds only its new turns; an unchanged file is not imported again. How to get a
    chat out of ChatGPT without loss is in `references/chatgpt.md`.
-2. **Organize**: read the new units in full (`docs/project/sources/SRC-<n>-*/transcript.md`) and update
-   `docs/project/sources/dossier.md` in the grammar in `references/dossier.md`. Every owner turn, document
-   section, and log window is carried by a unit or listed under "No-content turns" (read, nothing to keep);
-   changed positions are marked `superseded by`, and both stay. For a large corpus, work in portions you can
-   take in fully, writing each portion's units before the next.
-3. **Rounds, until one finds nothing missed** (the dossier is checked against a reading that never saw it):
-   a. Extraction: in the background, `run_isolated.py cold-reader --dir auto --out .evidence/capture/extract-<n>
-      --project <project> --render --mode extract --docs docs/project/sources/<SRC folder>/transcript.md --`,
-      one `--docs` per source in the portion. Size each portion so the reader can take all of it in (split a
-      large corpus into several runs, at most three at once); the reader gets the sources only.
-   b. `capture.py reconcile <project> .evidence/capture/extract-<n>/cold-reader.result.md` writes
-      `sources/rounds/round-<n>.md` with every point the dossier does not carry.
-   c. Settle every row: `added S-<nnn>` (a unit now carries it), `in S-<nnn> (<why the match missed it>)`,
-      `not a point (<why>)`, or `owner (<the question>)` for what only the owner can settle.
-   d. `capture.py check`. A source whose latest round added units gets another round (only the sources that are
-      still yielding); a round that adds nothing ends the reading of that source. After three rounds that keep
-      finding, change the method (smaller portions, a reader told what kind of point was being missed), never
-      stop.
-4. **Fidelity**: the isolated reader compares the dossier with the sources for distortion, misattribution, lost
-   evolution, and tensions closed that the owner left open: `run_isolated.py cold-reader --dir auto --out
-   .evidence/capture/fidelity --project <project> --render --mode fidelity --docs <transcript> --`. Fix every
-   material item, then read again with `--previous .evidence/capture/fidelity/cold-reader.result.md` (and a new
-   `--out`) until a read finds nothing material in what it was given.
-5. **Tell the owner**, plainly: what the material says, what changed position, the open questions and tensions
+2. **Draft**: in the background, one extraction per portion: `run_isolated.py cold-reader --dir auto --out
+   .evidence/capture/extract-<n> --project <project> --render --mode extract --docs
+   docs/project/sources/<SRC folder>/transcript.md --`, one `--docs` per source in the portion (a portion is
+   what one reader takes in fully, up to about 150 thousand tokens; at most three runs at once). The reader lists
+   every load-bearing point in the dossier's own shape; `capture.py draft <project> <its result.md>` turns them
+   into units (quotes checked against the turns, attribution and status kept, turns with nothing load-bearing
+   listed as read) and puts any point it could not verify in `sources/rounds/` to settle. Each source is
+   extracted once.
+3. **Edit** `docs/project/sources/dossier.md` (grammar in `references/dossier.md`): merge the same point drafted
+   from two portions, link changed positions (`superseded by`, both kept), confirm every `owner-agreed` rests on
+   the owner's agreeing words, and write Where it stands, Open questions, and Tensions. Read a source yourself
+   where a unit is unclear or two units conflict; that is the reading this step pays for. A dossier you wrote
+   yourself first (a short chat) is checked with `capture.py reconcile` against the extraction instead.
+4. **Audit, until an audit finds nothing material**: one fidelity read per portion, which sees the transcripts and
+   only the units citing them: `run_isolated.py cold-reader --dir auto --out .evidence/capture/audit-<n> --project
+   <project> --render --mode fidelity --docs <transcript> ... --`, then `capture.py audit <project> <its
+   result.md>`. Settle every material row in `sources/audits/` (`fixed S-<nnn> (<what changed>)`, `not an issue
+   (<why>)`, `owner (<the question>)`); minor rows are listed and fixed when it costs little. A portion whose audit
+   found something material is audited again with `--previous <that result.md>`; the others are done.
+   `capture.py check` passes when every source is extracted and its latest audit found nothing material.
+5. **Tell the owner**, plainly: what the material says, what the reading cost (`spend.py status`), what changed position, the open questions and tensions
    (the rounds' owner rows among them), any file that could not be read and what would fix it, and whether it
    looks ready to plan. Offer nothing they did not ask about.
 
@@ -71,8 +77,8 @@ keeps the cost sane is never reading the same thing twice without a reason, not 
 check and fidelity results.
 
 ## check
-`capture.py check`, then the rounds (step 3) for any source not yet read by an independent extraction or still
-yielding, and the fidelity reads (step 4), on the current dossier.
+`capture.py check`, then the draft (step 2) for any source not yet extracted and the audits (step 4) for any
+source not yet cleared, on the current dossier.
 
 ## prompt
 Print the optional ChatGPT project instructions from `references/chatgpt.md`, for the owner to paste once into
