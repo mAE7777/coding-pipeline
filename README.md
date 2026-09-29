@@ -120,7 +120,8 @@ research, captured sources, evidence). Templates are in `skills/_shared/template
 
 ```
 python3 install.py plan          # every action, nothing changed
-python3 install.py apply         # install into ~/.claude, archive retired pieces, write a manifest
+python3 install.py apply         # install into ~/.claude, archive retired pieces, write a manifest,
+                                 # and bring Codex's copies up to date when a Codex package is installed
 python3 settings_patch.py        # show the hook registrations; add --apply to write them (with a backup)
 python3 codex_hooks_patch.py     # the same for Codex; Codex asks you to trust new hooks once
 python3 install.py check         # prove the installed files match this repository, with no shadow copies

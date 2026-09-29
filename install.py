@@ -4,8 +4,9 @@ repository's version.
 
 Usage:
   python3 install.py plan  [--home <dir>]     show every action, change nothing
-  python3 install.py apply [--home <dir>] [--overwrite-live-edits]
-                                              install, archive what the pipeline retired, write the manifest
+  python3 install.py apply [--home <dir>] [--overwrite-live-edits] [--no-codex]
+                                              install, archive what the pipeline retired, write the manifest,
+                                              and bring Codex's copies up to date in the same run
   python3 install.py check [--home <dir>]     compare the installed files with this repository and hunt shadows
 
 What is managed:
@@ -23,6 +24,12 @@ folder Claude Code loads from. Every file apply replaces or removes is first cop
 made under ~/.claude, by hand or by /update) stops apply, which lists it: port the change into this repository
 (or its private/ overlay) and apply again, or pass --overwrite-live-edits to replace it (the backup keeps it). The manifest (~/.claude/.pipeline-install.json) records the sha256 of every
 installed file and the repository revision.
+
+Codex. When ~/.agents/skills links into a Codex package (the folder holding scripts/convert_helm.py), apply then
+runs the package's converter, its acceptance, and its installer, so one command leaves both tools current
+(--no-codex skips it and says so). The acceptance is judged against its previous report: a gate that passed
+before and fails now fails the install; a gate that was already failing is named in every run, never hidden.
+Exit 0 only when Claude Code and Codex are both current.
 
 check FAILs when an installed file differs from the repository (or the overlay), a managed file is missing, a
 retired skill or agent is still where it would load, a skill of the same name shadows one of ours (a plugin
@@ -172,7 +179,7 @@ def live_edits(home, actions):
     return changed + added
 
 
-def cmd_apply(home, overwrite=False):
+def cmd_apply(home, overwrite=False, no_codex=False):
     want, actions = plan(home)
     edited = live_edits(home, actions)
     if edited and not overwrite:
@@ -210,7 +217,63 @@ def cmd_apply(home, overwrite=False):
     (home / ".claude/.pipeline-install.json").write_text(json.dumps(manifest, indent=1))
     print(f"installed: {len(actions)} action(s); manifest {home / '.claude/.pipeline-install.json'}"
           + (f"; replaced files backed up in {backup}" if backup.exists() else ""))
-    return cmd_check(home)
+    fails, notes = ([], ["Codex not synced (--no-codex)"]) if no_codex else sync_codex(home)
+    for n in notes:
+        print(f"NOTE   install     {n}")
+    for f in fails:
+        print(f"FAIL   install     {f}")
+    code = cmd_check(home)
+    return 1 if fails else code
+
+
+def codex_package(home):
+    """The Codex package that ~/.agents/skills links into (the folder holding its converter), or None."""
+    link = home / ".agents/skills/plan"
+    if not link.exists():
+        return None
+    return next((d for d in link.resolve().parents if (d / "scripts/convert_helm.py").is_file()), None)
+
+
+def acceptance_gates(report):
+    try:
+        return {g["name"]: g["status"] for g in json.loads(report.read_text()).get("gates", [])}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def sync_codex(home):
+    """Rebuild and reinstall Codex's copies from what was just installed: (fails, notes). The package's acceptance
+    is judged against its previous report: a gate that passed before and fails now fails the install; a gate that
+    was already failing is named every time, never hidden."""
+    pkg = codex_package(home)
+    if pkg is None:
+        return [], (["no Codex package links into ~/.agents/skills, so Codex was not synced"]
+                    if (home / ".agents/skills").is_dir() else [])
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home)}
+    report = pkg / "validation/acceptance.json"
+    before = acceptance_gates(report)
+    steps = (("converter", [sys.executable, str(pkg / "scripts/convert_helm.py"), "--source", str(home / ".claude")]),
+             ("acceptance", [sys.executable, str(pkg / "scripts/acceptance.py"), "--root", str(pkg), "--json", str(report)]),
+             ("install", [sys.executable, str(pkg / "scripts/install_global.py"), "--install", "--home", str(home)]))
+    notes = []
+    for name, cmd in steps:
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=pkg)
+        if name == "acceptance":
+            after = acceptance_gates(report)
+            if not after:
+                return [f"Codex acceptance wrote no report: {(r.stdout + r.stderr).strip()[-300:]}"], notes
+            newly = sorted(g for g, st in after.items() if st != "PASS" and before.get(g) == "PASS")
+            still = sorted(g for g, st in after.items() if st != "PASS" and before.get(g) != "PASS")
+            if newly:
+                return [f"Codex acceptance: {', '.join(newly)} passed before this install and fails now "
+                        f"(report {report})"], notes
+            if still:
+                notes.append(f"Codex acceptance: {len(still)} gate(s) already failing before this install still fail: "
+                             f"{', '.join(still)} (report {report})")
+        elif r.returncode != 0:
+            return [f"Codex {name} failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}"], notes
+    notes.append(f"Codex synced from the package at {pkg}")
+    return [], notes
 
 
 def registered_commands(home):
@@ -266,13 +329,13 @@ def codex_conversion_check(home, want):
              and str(dst.relative_to(claude)) in recorded and recorded[str(dst.relative_to(claude))] != sha(dst)]
     if stale:
         fails.append(f"Codex's copies were converted from older versions of {len(stale)} file(s) ({', '.join(stale[:5])}"
-                     + (" ..." if len(stale) > 5 else "") + "): rerun helm-codex-system's converter, acceptance, and install")
+                     + (" ..." if len(stale) > 5 else "") + "): install.py apply rebuilds them")
     # Every managed file must be carried, except the hooks, which Codex runs from ~/.claude/hooks directly.
     absent = [str(dst.relative_to(claude)) for dst in sorted(want)
               if dst.relative_to(claude).parts[0] != "hooks" and str(dst.relative_to(claude)) not in recorded]
     if absent:
         fails.append(f"Codex's package does not carry {len(absent)} installed file(s) ({', '.join(absent[:5])}"
-                     + (" ..." if len(absent) > 5 else "") + "): rerun helm-codex-system's converter, acceptance, and install")
+                     + (" ..." if len(absent) > 5 else "") + "): install.py apply rebuilds them")
     return fails
 
 
@@ -382,7 +445,7 @@ def main(argv):
         return 2
     home = Path(argv[argv.index("--home") + 1]) if "--home" in argv else Path.home()
     if argv[0] == "apply":
-        return cmd_apply(home, overwrite="--overwrite-live-edits" in argv)
+        return cmd_apply(home, overwrite="--overwrite-live-edits" in argv, no_codex="--no-codex" in argv)
     return {"plan": cmd_plan, "check": cmd_check}[argv[0]](home)
 
 

@@ -101,6 +101,22 @@ class InstallTest(unittest.TestCase):
         self.assertNotIn("Codex's copies were converted from older versions", out.stdout)
         self.assertEqual((pkg / "log.txt").read_text().split(), ["convert", "acceptance", "install"])
 
+    def test_codex_acceptance_is_judged_against_its_previous_report(self):
+        pkg = self.codex_package({"pipeline": "PASS", "discovery": "FAIL"}, previous={"pipeline": "PASS", "discovery": "FAIL"})
+        out = self.run_i("apply")
+        self.assertIn("already failing before this install still fail: discovery", out.stdout,
+                      "an old failure is named in every run")
+        self.assertNotIn("passed before this install and fails now", out.stdout)
+        (pkg / "gates.json").write_text(json.dumps({"pipeline": "FAIL", "discovery": "FAIL"}))
+        out = self.run_i("apply")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("pipeline passed before this install and fails now", out.stdout)
+        self.assertEqual((pkg / "log.txt").read_text().split()[-2:], ["convert", "acceptance"],
+                         "a failed acceptance stops before Codex installs the new copies")
+        out = subprocess.run([sys.executable, str(INSTALL), "apply", "--home", str(self.home), "--no-codex"],
+                             capture_output=True, text=True)
+        self.assertIn("Codex not synced (--no-codex)", out.stdout)
+
     def test_check_fails_before_install(self):
         out = self.run_i("check")
         self.assertEqual(out.returncode, 1)
