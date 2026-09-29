@@ -3,6 +3,7 @@ when the rule fixed in advance says it is better, the isolated review accepts it
 they must."""
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -459,6 +460,38 @@ class Loop(unittest.TestCase):
              "reproduction": {"status": "FAITHFUL"}, "session_workaround": {"status": "WEIGHED"},
              "checks_weakened": [], "findings": [], **over}
         (out / "change-reviewer.result.md").write_text("Summary.\n\n```json\n" + json.dumps(v) + "\n```\n")
+
+    def fingerprint(self, base, head):
+        """What a review covers, computed with git the same way the judge does: the change's own diff (its patch id)
+        and each file it touches as it was at the base."""
+        diff = subprocess.run(["git", "-C", str(self.repo), "diff", f"{base}..{head}"], capture_output=True, text=True).stdout
+        pid = subprocess.run(["git", "-C", str(self.repo), "patch-id", "--stable"], input=diff, capture_output=True,
+                             text=True).stdout.split()[0]
+        touched = git(self.repo, "diff", "--name-only", f"{base}..{head}").splitlines()
+        return {"patch_id": pid, "touched": {f: git(self.repo, "rev-parse", f"{base}:{f}") for f in touched}}
+
+    def rebase_onto_new_main(self, rel, text):
+        git(self.repo, "switch", "-q", "main")
+        (self.repo / rel).write_text(text)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "meanwhile on main")
+        self.base = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "rebase", "-q", "main", "evolve/chg-0001")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "switch", "-q", "main")
+        record = self.ledger / "changes/CHG-0001.md"
+        record.write_text(re.sub(r"^Base: .*$", f"Base: {self.base}", record.read_text(), count=1, flags=re.M))
+
+    def test_a_rebase_that_leaves_the_change_as_it_was_keeps_its_review(self):
+        self.bench_both()
+        self.change()
+        self.review()
+        meta = self.ledger / "changes/CHG-0001-review/meta.json"
+        meta.write_text(json.dumps({"base": self.base, "head": self.head, **self.fingerprint(self.base, self.head)}))
+        self.rebase_onto_new_main("notes.txt", "an unrelated file\n")
+        self.bench_both()
+        r = run("record", "CHG-0001", env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout)
 
     def test_a_proven_change(self):
         self.bench_both()
