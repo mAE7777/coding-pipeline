@@ -341,6 +341,12 @@ class Rule(unittest.TestCase):
         self.assertEqual(evolve.unittest_outcome(
             1, "AttributeError: 'NoneType' object has no attribute 'x'\nRan 1 test\n\nFAILED (errors=1)\n"), "crash")
 
+    def test_a_verdict_with_a_raw_control_character_is_read(self):
+        # A reviewer quoting command output can leave a raw tab or newline inside a JSON string; the verdict stands.
+        text = 'Summary.\n```json\n{"verdict": "ACCEPT", "evidence": "ran\ttests\nall passed"}\n```\n'
+        self.assertEqual((evolve.last_json(text) or {}).get("verdict"), "ACCEPT")
+        self.assertIsNone(evolve.last_json("```json\n{not json}\n```"), "what is not JSON still reads as no verdict")
+
     def test_review_fields_decide_not_the_headline(self):
         good = {"verdict": "ACCEPT", "kind": "fix", "kind_ok": True, "root_cause": {"status": "FIXED"},
                 "reproduction": {"status": "FAITHFUL"}, "session_workaround": {"status": "WEIGHED"},
