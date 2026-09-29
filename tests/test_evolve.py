@@ -183,7 +183,15 @@ class Ledger(unittest.TestCase):
         self.incident(3, "not-pipeline (the design skill)")
         self.incident(4, "duplicate (INC-0001)")
         self.incident(5, "not-reproduced", repro="tried a unit test on the stop hook; the hook behaves")
-        head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "main"], capture_output=True, text=True).stdout.strip()
+        # A repository of its own: a copy of this one (a benchmark's export) has no git history to ask.
+        repo = Path(self.tmp.name) / "repo"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        (repo / "a.txt").write_text("a\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "a")
+        head = git(repo, "rev-parse", "main")
+        self.env["PIPELINE_REPO"] = str(repo)
         self.incident(6, f"resolved ({head[:12]} · the owner's direct order; unit tests and three fixture runs)")
         r = run("check", env=self.env)
         self.assertEqual(r.returncode, 0, r.stdout)
