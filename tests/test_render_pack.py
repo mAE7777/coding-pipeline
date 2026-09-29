@@ -182,6 +182,27 @@ class RenderPackTest(unittest.TestCase):
         self.assertIn("I want a list app", text)
         self.assertIn("S-001", text)
 
+    def test_an_audit_sees_the_units_citing_its_transcripts_and_the_previous_read(self):
+        src = self.root / "docs/project/sources"
+        for n in (1, 2):
+            (src / f"SRC-{n}-x").mkdir(parents=True)
+            (src / f"SRC-{n}-x/transcript.md").write_text(f"### T001 · owner\nsource {n}\n")
+        (src / "dossier.md").write_text(
+            "# Dossier\n\n## Where it stands\nA shared list, deletions syncing.\n\n## Units\n"
+            "- S-001 · product · owner · current · SRC-1 T001\n  first\n  > \"source 1\" (SRC-1 T001)\n"
+            "- S-002 · product · owner · current · SRC-2 T001\n  second\n  > \"source 2\" (SRC-2 T001)\n"
+            "- S-003 · product · owner · current · SRC-2 T001; SRC-1 T001\n  both\n\n## No-content turns\n")
+        prev = self.root / "audit-1.md"
+        prev.write_text("material: the photo was dropped")
+        code, text = render(self.root, "cold-reader", "--mode", "fidelity", "--docs",
+                            "docs/project/sources/SRC-1-x/transcript.md", "--previous", str(prev))
+        self.assertEqual(code, 0, text)
+        self.assertIn("A shared list, deletions syncing.", text)
+        self.assertIn("S-001", text)
+        self.assertIn("S-003", text)
+        self.assertNotIn("S-002", text, "a unit about another source is not paid for in this audit")
+        self.assertIn("the photo was dropped", text, "a re-audit settles the previous read's material items")
+
     def test_documents_read_carries_what_the_documents_refer_to(self):
         docs = ("--docs", "docs/project/intent.md", "--docs", "docs/project/milestones.md")
         code, text = render(self.root, "cold-reader", *docs)

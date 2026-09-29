@@ -95,6 +95,10 @@ frequent first). Work through them one cause at a time.
     `install.py check` names when Codex's copies are behind, `python3 install.py check` until it passes, push,
     then `evolve.py check` (every fixed incident proven and merged). A commit message says what changed for a user of the pipeline, in plain words.
 
+A change the owner orders directly, outside this loop, still closes its incidents on the record: `Status:
+resolved (<commit> · <how it was verified>)`; `evolve.py check` requires the commit on main, and a harvest that
+sees the problem again flags it as a regression like any fixed one.
+
 ## /evolve status
 `evolve.py status` and `evolve.py check`: the ledger in plain words, what is open and how often it recurs,
 what is proven and released, and anything the check refuses.

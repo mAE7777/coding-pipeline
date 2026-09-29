@@ -51,12 +51,14 @@ compare applies this rule, never judgment:
   INCOMPARABLE  a suite not measured on one side; for fixtures and scenarios no pair of measurements taken in
                 the same environment, or a different number of runs
   WORSE         a selftest suite that passed now fails or is missing, or any selftest suite fails at head; a
-                test file with fewer tests than before; a fixture passing a smaller share of its runs; a
-                scenario or a non-reproduction test that passed now fails
+                test file with fewer tests than before; a fixture passing a smaller share of its runs, or
+                costing more than a quarter more per run (cost units, spend.py); a scenario or a
+                non-reproduction test that passed now fails
   reproduction  a test must fail at base (an assertion, or the code under test raising) and pass at head; a
                 test that needs a name only the change adds (an import or name error) cannot show the problem
                 and does not count; a fixture must fail at least one run at base and pass every run at head;
-                a scenario must fail at base and pass at head
+                a scenario must fail at base and pass at head; repro:cost:fixtures:<prefix> (a change made to
+                spend less) must cut the fixture's cost per run by a fifth or more and pass at least as often
   BETTER        nothing incomparable or worse, at least one reproduction, and every reproduction flipped
   SAME          otherwise, with the reason (not an improvement)
 
@@ -89,7 +91,8 @@ INSTALL_MANIFEST = Path(os.environ.get("PIPELINE_INSTALL_MANIFEST") or Path.home
 KINDS = ("defect", "doc-gap", "friction", "missing-capability", "environment", "not-pipeline")
 CHANGE_KINDS = ("fix", "doc", "capability", "rule-change")
 OWNER_KINDS = ("capability", "rule-change")
-STATUSES = ("open", "confirmed", "not-reproduced", "environment", "not-pipeline", "duplicate", "fixed", "reopened")
+STATUSES = ("open", "confirmed", "not-reproduced", "environment", "not-pipeline", "duplicate", "fixed", "resolved",
+            "reopened")
 STATUS_LINE = re.compile(r"^(FAIL|BLOCKED|INCONCLUSIVE|NOT_RUN|ERROR|BROKEN|STALE|LEAK|UNAVAILABLE)\s{2,}(\S+)\s+(.*)$", re.M)
 VERDICT_WORD = re.compile(r"\b(?:verdict|status)\W{1,4}(INCONCLUSIVE|ERROR|NOT_RUN|BLOCKED|UNAVAILABLE|LEAK)\b")
 NOISE_LINE = re.compile(r"^(Exit code:? -?\d+|Error:?|Script (completed|failed)|Wall time.*|Output:|Process exited.*|"
@@ -451,7 +454,7 @@ def cmd_harvest(opts):
         for iid, inc in known.items():
             if g["signature"] in inc["signatures"]:
                 g["known"] = iid
-                g["regression"] = inc["status"].startswith("fixed")
+                g["regression"] = inc["status"].startswith(("fixed", "resolved"))
                 added += add_occurrence(inc, f"- {stamp} · harvest {out.name} · x{g['count']} · {path}", path)
                 break
         if not g["known"]:
@@ -702,7 +705,7 @@ def unittest_outcome(returncode, out):
 
 def measure(tree, suite, runs):
     kind, _, arg = suite.partition(":")
-    if kind == "repro":
+    if kind in ("repro", "cost"):
         return measure(tree, arg, runs)
     if kind == "selftest":
         r = subprocess.run(["bash", str(tree / "tests/pipeline-selftest.sh")], capture_output=True, text=True, cwd=tree)
@@ -717,9 +720,17 @@ def measure(tree, suite, runs):
             passes.setdefault(m.group(2), []).append(m.group(1) == "PASS")
         if not passes:
             raise RuntimeError(f"no fixture matched {arg}: {(r.stdout + r.stderr)[-400:]}")
-        models = sorted({json.loads(s.read_text()).get("model") or "unknown"
-                         for s in (tree / ".evidence/fixtures").glob("*/run-*/*.summary.json")})
-        return {"fixtures": passes, "models": models, "tail": r.stdout[-1500:]}
+        summaries = list((tree / ".evidence/fixtures").glob("*/run-*/*.summary.json"))
+        models = sorted({json.loads(f.read_text()).get("model") or "unknown" for f in summaries})
+        from spend import units as cost_units
+        cost = {}
+        for f in summaries:
+            name, run = f.parent.parent.name, f.parent.name
+            u = json.loads(f.read_text()).get("usage") or {}
+            cost.setdefault(name, {}).setdefault(run, 0)
+            cost[name][run] += cost_units(u)
+        return {"fixtures": passes, "models": models, "units": {k: sorted(v.values()) for k, v in cost.items()},
+                "tail": r.stdout[-1500:]}
     if kind == "scenario":
         r = subprocess.run([sys.executable, str(tree / "tests/system_scenarios.py"), "--only", arg],
                            capture_output=True, text=True, cwd=tree)
@@ -823,6 +834,14 @@ def pooled(measurements):
     return out
 
 
+def mean_units(measurements):
+    out = {}
+    for m in measurements:
+        for name, runs in (m.get("units") or {}).items():
+            out.setdefault(name, []).extend(runs)
+    return {k: sum(v) / len(v) for k, v in out.items() if v}
+
+
 def summary_line(data):
     last = data["measurements"][-1]
     if "suites" in last:
@@ -841,6 +860,8 @@ def compare(base_sha, head_sha, suites, inst_sha):
     for s in suites:
         is_repro = s.startswith("repro:")
         inner = s.removeprefix("repro:")
+        cost_repro = inner.startswith("cost:")
+        inner = inner.removeprefix("cost:")
         b_all, h_all = stored(base_sha, s, inst_sha), stored(head_sha, s, inst_sha)
         if not b_all or not h_all:
             incomparable.append(f"{s} is not measured at {'base' if not b_all else 'head'}")
@@ -867,14 +888,21 @@ def compare(base_sha, head_sha, suites, inst_sha):
                     worse.append(f"{name}: {n} tests at base, {hm['tests'].get(name, 0)} at head (tests removed)")
         elif inner.startswith("fixtures:"):
             bp, hp = pooled(b["measurements"]), pooled(h["measurements"])
+            bu, hu = mean_units(b["measurements"]), mean_units(h["measurements"])
             for name, (p, n) in bp.items():
                 hp_, hn = hp.get(name, (0, 0))
+                cost = f"{bu[name] / 1e3:.0f}k -> {hu[name] / 1e3:.0f}k units a run" if name in bu and name in hu else ""
                 if hn != n:
                     incomparable.append(f"fixture {name}: {n} runs at base, {hn} at head (measure both sides alike)")
+                elif cost_repro:
+                    ok = hp_ * n >= p * hn and name in bu and name in hu and hu[name] <= 0.8 * bu[name]
+                    repro.append((f"fixture {name} cost", ok, f"{cost or 'no cost measured'}; passes {p}/{n} -> {hp_}/{hn}"))
                 elif is_repro:
                     repro.append((f"fixture {name}", p < n and hp_ == hn, f"base {p}/{n}, head {hp_}/{hn}"))
                 elif hp_ * n < p * hn:
                     worse.append(f"fixture {name}: {p}/{n} at base, {hp_}/{hn} at head")
+                if not cost_repro and name in bu and name in hu and hu[name] > 1.25 * bu[name]:
+                    worse.append(f"fixture {name} costs more: {cost} (more than a quarter over, beyond run-to-run noise)")
         elif inner.startswith("scenario:"):
             for name, st in bm["scenarios"].items():
                 if is_repro:
@@ -1141,6 +1169,14 @@ def cmd_check(argv):
             m = re.search(r"INC-\d{4}", st)
             if not m or m.group(0) not in known or m.group(0) == iid:
                 fails.append(f"{iid}: a duplicate must name the incident it duplicates")
+        if word == "resolved":
+            # A change the owner directed outside this loop: its commit must be on main, and how it was verified said.
+            m = re.match(r"resolved \(([0-9a-f]{7,40}) · (.{10,})\)$", st)
+            if not m:
+                fails.append(f"{iid}: resolved needs (<commit> · <how it was verified>)")
+            elif subprocess.run(["git", "-C", str(repo()), "merge-base", "--is-ancestor", m.group(1), "main"],
+                                capture_output=True).returncode != 0:
+                fails.append(f"{iid}: resolved by {m.group(1)}, which is not on main")
         if word == "fixed":
             m = re.match(r"fixed \((CHG-\d{4})\)", st)
             if not m:

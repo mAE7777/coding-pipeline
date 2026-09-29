@@ -53,7 +53,9 @@ Codex and runs Claude when Codex is UNAVAILABLE, recording the switch and its re
 Writes <role>[-demo][-pass2].{pack.md,agents.json,jsonl,result.md,summary.json,settings.json|sb} to
 <evidence-dir>. Status: OK, INCONCLUSIVE (a role that must execute ran no tool), LEAK (a --canary string
 appeared, or the pass-1 pack carried intent), BLOCKED (a server from the real project is running),
-UNAVAILABLE (Codex could not serve the run), or ERROR (non-zero exit, timeout, or no result). A project that
+UNAVAILABLE (Codex could not serve the run), ERROR (non-zero exit, timeout, or no result), or BLOCKED
+with a budget reason (the project's active phase is over its spend cap, spend.py). The summary records
+the run's token usage. A project that
 names "Gate network" hosts is reviewed on Claude even under --family codex or auto (the switch is recorded):
 the Codex fence opens ports, not hosts. Exit 0 for
 OK, 1 otherwise, 2 on bad usage. Never uses --dangerously-skip-permissions.
@@ -272,6 +274,10 @@ def parse_claude_stream(lines):
             info["denials"] = [str(d.get("tool_name")) + ":" + json.dumps(d.get("tool_input"))[:160]
                                for d in ev.get("permission_denials") or []]
             info["session_id"] = info["session_id"] or ev.get("session_id")
+            u = ev.get("usage") or {}
+            info["usage"] = {"input": u.get("input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
+                             "cache_read": u.get("cache_read_input_tokens", 0), "output": u.get("output_tokens", 0),
+                             "cost_usd": ev.get("total_cost_usd"), "duration_ms": ev.get("duration_ms")}
     return info
 
 
@@ -288,6 +294,11 @@ def parse_codex_stream(lines):
             info["session_id"] = ev.get("thread_id")
         elif t == "turn.completed":
             info["turns"] += 1
+            u = ev.get("usage") or {}
+            acc = info.setdefault("usage", {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "family": "codex"})
+            acc["input"] += max(0, u.get("input_tokens", 0) - u.get("cached_input_tokens", 0))
+            acc["cache_read"] += u.get("cached_input_tokens", 0)
+            acc["output"] += u.get("output_tokens", 0)
         elif t in ("turn.failed", "error"):
             info["is_error"] = True
             msg = ev.get("message") or (ev.get("error") or {}).get("message") or ""
@@ -570,7 +581,7 @@ def launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, resul
     else:
         status = "OK"
     return {"status": status, "family": family, "exit_code": code, "session_id": info["session_id"] or sid,
-            "model": info["model"], "tool_uses": info["tool_uses"], "turns": info["turns"],
+            "model": info["model"], "tool_uses": info["tool_uses"], "turns": info["turns"], "usage": info.get("usage"),
             "denials": info["denials"], "tools_seen": info.get("tools_seen"), "canary_hits": canary_hits,
             "unavailable_reason": reason, "errors": info.get("errors"), "stderr_tail": (err or "")[-400:],
             "agent_file": extra.get("agent_file"), "agent_sha256": extra.get("agent_sha256"),
@@ -620,6 +631,17 @@ def main(argv):
     suffix = ("-demo" if opts.get("mode") == "demo" else "") + \
         ((f"-pass{pass_no}" if pass_no and pass_no != "1" else "-pass2") if opts.get("resume") else "")
     stem = out / f"{role}{suffix}"
+    if opts.get("project") and (Path(opts["project"]) / ".evidence/spend/active.json").is_file():
+        import spend
+        state, lines = spend.status(Path(opts["project"]).resolve())
+        if state and state["over_cap"]:
+            if auto_dir:
+                shutil.rmtree(workdir, ignore_errors=True)
+            summary = {"status": "BLOCKED", "role": role, "reason": f"budget: {lines[0]}; the owner raises the cap "
+                                                                    "with spend.py raise, in their own words"}
+            Path(str(stem) + ".summary.json").write_text(json.dumps(summary, indent=2))
+            print(json.dumps(summary, indent=2))
+            return 1
     pack_path = Path(str(stem) + ".pack.md")
     if "render" in opts:
         render = list(opts["render"])

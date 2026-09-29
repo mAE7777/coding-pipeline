@@ -27,8 +27,9 @@ Roles and what their pack contains (nothing else reaches the checker):
                    context not under review, and with --previous <result.md> the earlier read, whose
                    findings a re-read settles. Understanding mode (--inputs understanding):
                    state.md's Understanding with the Goal, Must not lose, and the milestone's section.
-                   Fidelity mode (--mode fidelity): the --docs transcripts verbatim and the dossier
-                   (docs/project/sources/dossier.md). Extraction mode (--mode extract): the --docs
+                   Fidelity mode (--mode fidelity): the --docs transcripts verbatim, the dossier's summary
+                   and only the units citing those transcripts, and with --previous the earlier read.
+                   Extraction mode (--mode extract): the --docs
                    transcripts only, never the dossier.
   claim-verifier   the --inputs claims file verbatim.
 
@@ -306,9 +307,18 @@ def render(role, opts):
             pack.need("Milestone contract", ms, f"the {mid} section of milestones.md")
             title = "Cold read, understanding mode"
         elif mode == "fidelity":
+            srcs = set()
             for f in opts.get("docs", []):
                 pack.need(f"Transcript: {f}", pack.read(f), f)
-            pack.need("Dossier", pack.read("docs/project/sources/dossier.md"), "docs/project/sources/dossier.md")
+                srcs.update(re.findall(r"\b(SRC-\d+)-", f))
+            dossier = pack.read("docs/project/sources/dossier.md")
+            # Only the units that cite these sources (and the summary): the audit is about these transcripts, and a
+            # whole dossier per audit is paid for again in every portion.
+            pack.need("Dossier (the summary and the units citing these transcripts)",
+                      cited_units(dossier, srcs) if dossier and srcs else dossier, "docs/project/sources/dossier.md")
+            if opts.get("previous"):
+                pack.need("Previous read (say for each of its material items whether it is now settled)",
+                          pack.read(opts["previous"]), opts["previous"])
             title = "Cold read, fidelity mode"
         elif mode == "extract":
             # The sources only: an extraction that saw the dossier would confirm it instead of finding what it lacks.
@@ -368,6 +378,17 @@ def field_block(ms_section, label):
             if line.strip():
                 out.append(line)
     return "\n".join(out) or None
+
+
+def cited_units(dossier, srcs):
+    """The dossier's summary and the units whose references name any of the sources."""
+    where = re.search(r"^## Where it stands\s*$(.*?)(?=^## )", dossier, re.M | re.S)
+    units = re.search(r"^## Units\s*$(.*?)(?=^## |\Z)", dossier, re.M | re.S)
+    blocks = re.split(r"(?m)^(?=- S-\d+ · )", units.group(1)) if units else []
+    keep = [b.rstrip() for b in blocks if b.startswith("- S-")
+            and set(re.findall(r"\b(SRC-\d+)\b", b.splitlines()[0])) & srcs]
+    return "\n".join(["## Where it stands", (where.group(1).strip() if where else "(none)"), "", "## Units",
+                      *(keep or ["(no unit cites these transcripts)"])])
 
 
 def main(argv):

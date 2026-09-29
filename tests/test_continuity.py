@@ -174,10 +174,15 @@ class ContinuityTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_unadopted_project_is_routed_to_adoption(self):
+    def test_only_a_pipeline_project_is_routed_to_adoption(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / ".git").mkdir()
             (Path(d) / "main.go").write_text("package main\n")
+            code, out, _ = hook("session-start", {"session_id": "s1", "cwd": d})
+            self.assertEqual(code, 0)
+            self.assertNotIn("adopt", out, "an ordinary repository is not told to start an adoption")
+            (Path(d) / "docs/project").mkdir(parents=True)
+            (Path(d) / "docs/project/intent.md").write_text("# Intent\n")
             code, out, _ = hook("session-start", {"session_id": "s1", "cwd": d})
             self.assertIn("/plan adopt", json.loads(out)["hookSpecificOutput"]["additionalContext"])
             code, out, _ = hook("session-start", {"session_id": "s1", "cwd": d}, tool="codex")

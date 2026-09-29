@@ -84,8 +84,8 @@ class AdoptTest(unittest.TestCase):
 
     def read_everything(self):
         """The real flow: the whole inventory and the history become sources; the dossier accounts for every unit (a
-        unit per document section, the code and history read with nothing more to keep); an independent extraction
-        round finds nothing missed; every unit lands in the record."""
+        unit per document section, the history read with nothing more to keep, the code mapped); an independent
+        extraction and an audit that finds nothing material; every unit lands in the record."""
         self.capture("add", str(self.root), "--inventory")
         self.capture("add", str(self.root), "--git-log")
         sources = self.root / "docs/project/sources"
@@ -112,6 +112,11 @@ class AdoptTest(unittest.TestCase):
                                                         for m in sorted(sources.glob("SRC-*/meta.json"))))
         (ex / "cold-reader.result.md").write_text("```json\n" + json.dumps({"points": points}) + "\n```\n")
         self.assertIn("0 not carried", self.capture("reconcile", str(self.root), str(ex / "cold-reader.result.md")))
+        au = self.root / ".evidence/capture/audit-1"
+        au.mkdir(parents=True)
+        (au / "cold-reader.pack.md").write_text((ex / "cold-reader.pack.md").read_text().replace("Document", "Transcript"))
+        (au / "cold-reader.result.md").write_text("```json\n" + json.dumps({"fidelity": []}) + "\n```\n")
+        self.assertIn("0 material", self.capture("audit", str(self.root), str(au / "cold-reader.result.md")))
         return closure
 
     def characterize(self, rows=None, discrepancies="", blocking=None):
@@ -175,10 +180,11 @@ class AdoptTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("a document must be read or captured", out.stdout)
         ledger = self.root / "docs/project/research/adoption/coverage.md"
-        text = re.sub(r"\| (src/export\.py) \| code \| (\d+) \| captured \| [^|]* \|", r"| \1 | code | \2 | outlined (small) | |",
-                      ledger.read_text())
+        text = re.sub(r"\| (src/export\.py) \| code \| (\d+) \| mapped \(code map\) \| [^|]* \|",
+                      r"| \1 | code | \2 | outlined (small) | |", ledger.read_text())
+        self.assertNotEqual(text, ledger.read_text())
         ledger.write_text(text)
-        self.assertIn("code, tests, and configuration are captured and read in full", self.adopt("check").stdout)
+        self.assertIn("code and tests are mapped", self.adopt("check").stdout)
 
     def test_a_removed_ledger_row_or_an_uncited_read_fails(self):
         self.adopt("inventory")
