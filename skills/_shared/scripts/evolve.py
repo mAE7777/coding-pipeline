@@ -66,8 +66,9 @@ record refuses a change missing any part of its proof: existing incidents, a rep
 with the session's own workaround weighed among them, a BETTER comparison recomputed from the stored
 measurements at the branch's current commit, an acceptance computed from the isolated change reviewer's
 fields for that change (a review of an earlier commit still covers it when the change's own diff is the same
-byte for byte, no file it touches changed underneath, and each reproduction fails at the base for the same reason:
-a rebase onto unrelated work keeps the review) (cause
+byte for byte with full blob ids, no file it touches changed underneath, and each reproduction fails at the base
+for the same reason once run-varying text is reduced, a base never measured counting as no reason: a rebase onto
+unrelated work keeps the review) (cause
 fixed, reproduction faithful, the workaround weighed, no check weakened,
 the kind confirmed, no high or medium finding), and, for a capability or rule change, the owner's words
 proven in their transcript. check proves the whole ledger, including that every fixed incident's change reached main.
@@ -978,25 +979,41 @@ def last_json(text):
 
 
 def fingerprint(base, head, suites=()):
-    """What a review covers: the change's own diff, byte for byte (whitespace included) but without the hunk line
-    numbers that move with the base; each file it touches, renames split into their old and new paths, as it was at
-    the base; and why each reproduction failed at the base."""
-    diff = subprocess.run(["git", "-C", str(repo()), "diff", "--no-renames", "--no-ext-diff", f"{base}..{head}"],
-                          capture_output=True, text=True).stdout
-    kept = [re.sub(r"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", "@@", line) for line in diff.splitlines()
-            if not line.startswith("index ")]
-    touched = [f for f in git("diff", "--no-renames", "--name-only", f"{base}..{head}").splitlines() if f]
+    """What a review covers: the change's own diff, byte for byte (whitespace included, and each file's full blob ids
+    so a binary file's content counts too) but without the hunk line numbers that move with the base; each file it
+    touches, renames split into their old and new paths, as it was at the base; and why each reproduction failed at
+    the base."""
+    diff = subprocess.run(["git", "-C", str(repo()), "diff", "--no-renames", "--no-ext-diff", "--no-textconv",
+                           "--full-index", f"{base}..{head}"], capture_output=True, text=True).stdout
+    kept = [re.sub(r"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", "@@", line) for line in diff.splitlines()]
+    names = subprocess.run(["git", "-C", str(repo()), "diff", "--no-renames", "--name-only", "-z", f"{base}..{head}"],
+                           capture_output=True, text=True).stdout
+    touched = [f for f in names.split("\0") if f]
     return {"diff_sha256": hashlib.sha256("\n".join(kept).encode()).hexdigest(),
-            "touched": {f: git("rev-parse", f"{base}:{f}") for f in touched},
-            "repro_failures": {s: failure_line(base, s, head) for s in suites if s.startswith("repro:")}}
+            "touched": {f: git("rev-parse", "--verify", "--quiet", f"{base}:{f}") for f in touched},
+            "repro_failures": {s: failure_reason(base, s, head) for s in suites if s.startswith("repro:")}}
 
 
-def failure_line(base, suite, instrument):
-    """The line that says why a reproduction failed at the base (its last error or assertion), paths reduced."""
+ERROR_LINE = re.compile(r"^\s*[\w.]*(Error|Exception|Exit)\b")
+
+
+def reason_of(m):
+    """Why one measurement failed, reduced to what stays the same from run to run: which fixtures, scenarios, or
+    suites failed; for a test, its outcome and its last error line with paths, ids, numbers, and quoted values
+    reduced (a commit id or an address in the message must not make two runs of the same failure differ)."""
+    for field in ("fixtures", "scenarios", "suites"):
+        if field in m:
+            failed = sorted(k for k, v in m[field].items() if (not all(v) if isinstance(v, list) else v != "PASS"))
+            return f"{field} failing: {', '.join(failed) or 'none'}"
+    lines = [l.strip() for l in (m.get("tail") or "").splitlines() if ERROR_LINE.match(l.strip())]
+    return f"{m.get('outcome', 'no outcome')}: " + (signature("error", lines[-1]) if lines else "no error line stored")
+
+
+def failure_reason(base, suite, instrument):
+    """reason_of the latest measurement of a reproduction at the base; None when the base was never measured, so a
+    reason that cannot be told never passes for the same one."""
     runs = stored(base, suite, instrument)
-    tail = (runs[-1]["measurements"][-1].get("tail") or "") if runs else ""
-    lines = [l.strip() for l in tail.splitlines() if re.match(r"^\s*[\w.]*(Error|Exception|Exit)\b", l.strip())]
-    return re.sub(r"(/[\w.@+-]+)+", "<path>", lines[-1]) if lines else ""
+    return reason_of(runs[-1]["measurements"][-1]) if runs else None
 
 
 def review_covers(meta, base, head, suites=()):
@@ -1008,16 +1025,24 @@ def review_covers(meta, base, head, suites=()):
     if not meta.get("diff_sha256"):
         return False, "the review recorded no fingerprint of the change"
     now = fingerprint(base, head, suites)
-    if now["diff_sha256"] != meta["diff_sha256"]:
-        return False, "the change's own diff is different"
     if set(now["touched"]) != set(meta.get("touched", {})):
         return False, "it touches other files now"
     moved = sorted(f for f, blob in meta["touched"].items() if now["touched"].get(f) != blob)
     if moved:
         return False, f"{', '.join(moved)} changed underneath it"
-    for suite, line in (meta.get("repro_failures") or {}).items():
-        if now["repro_failures"].get(suite) != line:
-            return False, f"the reproduction {suite} fails at the new base for another reason"
+    if now["diff_sha256"] != meta["diff_sha256"]:
+        return False, "the change's own diff is different"
+    reviewed = meta.get("repro_failures") or {}
+    if set(reviewed) - set(now["repro_failures"]):
+        return False, "the record's reproductions changed since the review"
+    for suite in now["repro_failures"]:
+        was, is_now = reviewed.get(suite), now["repro_failures"][suite]
+        if was is None:
+            return False, f"the review holds no failure reason for the reproduction {suite}"
+        if is_now is None:
+            return False, f"the new base was never measured on {suite}: bench it first"
+        if is_now != was:
+            return False, f"the reproduction {suite} fails at the new base for another reason ({is_now}; was {was})"
     return True, ""
 
 

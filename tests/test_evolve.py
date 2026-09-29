@@ -342,6 +342,19 @@ class Rule(unittest.TestCase):
         self.assertEqual(evolve.unittest_outcome(
             1, "AttributeError: 'NoneType' object has no attribute 'x'\nRan 1 test\n\nFAILED (errors=1)\n"), "crash")
 
+    def test_a_failure_reason_leaves_out_what_differs_from_run_to_run(self):
+        # Two runs of one reproduction whose message names the commits of that run.
+        a = {"outcome": "fail", "tail": "Traceback (most recent call last):\nAssertionError: 1 != 0 : FAIL   evolve      "
+             "CHG-0001: the review was of f4d86f1469c6, the branch is at b38da9e6c76a: review again\n\n"
+             "Ran 1 test in 2.1s\n\nFAILED (failures=1)\n"}
+        b = {**a, "tail": a["tail"].replace("f4d86f1469c6", "660d818a6f5a").replace("b38da9e6c76a", "47c3cdf3e004")}
+        self.assertEqual(evolve.reason_of(a), evolve.reason_of(b))
+        self.assertNotEqual(evolve.reason_of(a), evolve.reason_of({"outcome": "crash", "tail": "KeyError: 'x'\n"}))
+        self.assertEqual(evolve.reason_of({"fixtures": {"probe-inbox": [False, True], "other": [True]}}),
+                         "fixtures failing: probe-inbox")
+        self.assertEqual(evolve.reason_of({"scenarios": {"adopt": "FAIL", "plan": "PASS"}}), "scenarios failing: adopt")
+        self.assertEqual(evolve.reason_of({"outcome": "fail", "tail": "...cut off"}), "fail: no error line stored")
+
     def test_a_verdict_with_a_raw_control_character_is_read(self):
         # A reviewer quoting command output can leave a raw tab or newline inside a JSON string; the verdict stands.
         text = 'Summary.\n```json\n{"verdict": "ACCEPT", "evidence": "ran\ttests\nall passed"}\n```\n'
@@ -400,7 +413,14 @@ if __name__""", """
 
 
 if __name__""")
+# The same test, failing at the base with a message that differs on every run, as real failure messages often do.
+TEST_HEAD_VARYING = TEST_HEAD.replace("""        self.assertEqual(calc.mean([]), 0.0)""", """        try:
+            got = calc.mean([])
+        except ZeroDivisionError:
+            raise AssertionError("the mean of nothing crashed in run " + __import__("os").urandom(6).hex())
+        self.assertEqual(got, 0.0)""")
 REPRO = "repro:test:tests/test_calc.py::Calc.test_mean_of_nothing"
+NOTE = "docé.md"  # git quotes such a name unless asked not to
 SUITES = f"selftest;{REPRO}"
 
 
@@ -463,13 +483,34 @@ class Loop(unittest.TestCase):
 
     def fingerprint(self, base, head):
         """What a review covers, computed with git the same way the judge does: the change's own diff byte for byte
-        without its hunk line numbers, and each file it touches (renames split) as it was at the base."""
-        diff = subprocess.run(["git", "-C", str(self.repo), "diff", "--no-renames", "--no-ext-diff", f"{base}..{head}"],
-                              capture_output=True, text=True).stdout
-        kept = [re.sub(r"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", "@@", l) for l in diff.splitlines() if not l.startswith("index ")]
-        touched = git(self.repo, "diff", "--no-renames", "--name-only", f"{base}..{head}").splitlines()
+        with full blob ids but without its hunk line numbers, and each file it touches (renames split, names
+        unquoted) as it was at the base."""
+        diff = subprocess.run(["git", "-C", str(self.repo), "diff", "--no-renames", "--no-ext-diff", "--no-textconv",
+                               "--full-index", f"{base}..{head}"], capture_output=True, text=True).stdout
+        kept = [re.sub(r"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", "@@", l) for l in diff.splitlines()]
+        names = subprocess.run(["git", "-C", str(self.repo), "diff", "--no-renames", "--name-only", "-z",
+                                f"{base}..{head}"], capture_output=True, text=True).stdout
         return {"diff_sha256": __import__("hashlib").sha256("\n".join(kept).encode()).hexdigest(),
-                "touched": {f: self.blob(base, f) for f in touched}}
+                "touched": {f: self.blob(base, f) for f in names.split("\0") if f}}
+
+    def amend_branch(self, files):
+        git(self.repo, "switch", "-q", "evolve/chg-0001")
+        for rel, content in files.items():
+            (self.repo / rel).write_bytes(content if isinstance(content, bytes) else content.encode())
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "--amend", "--no-edit")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "switch", "-q", "main")
+
+    def in_repo(self, fn, *args):
+        """Call an evolve function against this test's repository and ledger, as the command would."""
+        saved, saved_home = os.environ.get("PIPELINE_REPO"), evolve.HOME
+        os.environ["PIPELINE_REPO"], evolve.HOME = str(self.repo), self.ledger
+        try:
+            return fn(*args)
+        finally:
+            evolve.HOME = saved_home
+            os.environ.pop("PIPELINE_REPO") if saved is None else os.environ.__setitem__("PIPELINE_REPO", saved)
 
     def blob(self, ref, path):
         r = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "--verify", "--quiet", f"{ref}:{path}"],
@@ -491,11 +532,15 @@ class Loop(unittest.TestCase):
         record.write_text(re.sub(r"^Base: .*$", f"Base: {self.base}", record.read_text(), count=1, flags=re.M))
 
     def test_a_rebase_that_leaves_the_change_as_it_was_keeps_its_review(self):
+        self.amend_branch({"tests/test_calc.py": TEST_HEAD_VARYING})
         self.bench_both()
         self.change()
         self.review()
+        # What the judge records at review time, reproductions' failure reasons included.
         meta = self.ledger / "changes/CHG-0001-review/meta.json"
-        meta.write_text(json.dumps({"base": self.base, "head": self.head, **self.fingerprint(self.base, self.head)}))
+        fp = self.in_repo(evolve.fingerprint, self.base, self.head, [REPRO])
+        self.assertIn("<id>", fp["repro_failures"][REPRO])
+        meta.write_text(json.dumps({"base": self.base, "head": self.head, **fp}))
         self.rebase_onto_new_main("notes.txt", "an unrelated file\n")
         self.bench_both()
         r = run("record", "CHG-0001", env=self.env)
@@ -524,15 +569,7 @@ class Loop(unittest.TestCase):
         self.assertIn("the change's own diff is different", r.stdout)
 
     def judge(self, meta, suites=()):
-        saved = os.environ.get("PIPELINE_REPO")
-        os.environ["PIPELINE_REPO"] = str(self.repo)
-        saved_home = evolve.HOME
-        evolve.HOME = self.ledger
-        try:
-            return evolve.review_covers(meta, self.base, self.head, suites)
-        finally:
-            evolve.HOME = saved_home
-            os.environ.pop("PIPELINE_REPO") if saved is None else os.environ.__setitem__("PIPELINE_REPO", saved)
+        return self.in_repo(evolve.review_covers, meta, self.base, self.head, suites)
 
     def test_whitespace_renames_and_a_new_failure_all_void_a_review(self):
         meta = {"head": "0" * 40, **self.fingerprint(self.base, self.head)}
@@ -550,19 +587,45 @@ class Loop(unittest.TestCase):
         git(self.repo, "switch", "-q", "main")
         meta = {"head": "0" * 40, **self.fingerprint(self.base, self.head)}
         self.assertIn("calc.py", meta["touched"])
-        # The reproduction failing at the base for another reason voids it too.
-        meta["repro_failures"] = {"repro:test:tests/test_calc.py::Calc.test_mean_of_nothing": "ValueError: something else"}
-        covered, why = self.judge(meta, ["repro:test:tests/test_calc.py::Calc.test_mean_of_nothing"])
+        # A reason that cannot be told never passes for the same one: the base was never measured.
+        meta["repro_failures"] = {REPRO: "error: error: ValueError: something else"}
+        self.assertEqual(self.judge(meta, [REPRO]), (False, f"the new base was never measured on {REPRO}: bench it first"))
+        # Measured, it fails for another reason than the review saw.
+        r = run("bench", self.base, "--suites", REPRO, "--instrument", "evolve/chg-0001", env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        covered, why = self.judge(meta, [REPRO])
         self.assertFalse(covered)
         self.assertIn("fails at the new base for another reason", why)
+        # A review that recorded no reason for a reproduction does not cover it either.
+        meta["repro_failures"] = {}
+        self.assertEqual(self.judge(meta, [REPRO]),
+                         (False, f"the review holds no failure reason for the reproduction {REPRO}"))
+
+    def test_a_binary_file_or_an_unusual_name_is_seen(self):
+        self.change()
+        (self.repo / NOTE).write_text("one\n\n\n\n\n\n\ntwo\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "a note")
+        git(self.repo, "switch", "-q", "evolve/chg-0001")
+        git(self.repo, "rebase", "-q", "main")
+        git(self.repo, "switch", "-q", "main")
+        self.base = git(self.repo, "rev-parse", "main")
+        self.amend_branch({"data.bin": b"\x00\x01\x02 one", NOTE: "one, edited\n\n\n\n\n\n\ntwo\n"})
+        meta = {"head": "0" * 40, **self.fingerprint(self.base, self.head)}
+        self.assertIn(NOTE, meta["touched"])
+        self.assertTrue(meta["touched"][NOTE], "a non-ASCII path is looked up at the base")
+        self.assertEqual(self.judge(meta), (True, ""))
+        # A binary file's content changed after the review: git's diff shows no text, only its blob id.
+        self.amend_branch({"data.bin": b"\x00\x01\x02 two"})
+        self.assertEqual(self.judge(meta), (False, "the change's own diff is different"))
+        # A file with a non-ASCII name changed underneath, far from the change's own lines.
+        self.amend_branch({"data.bin": b"\x00\x01\x02 one"})
+        self.assertEqual(self.judge(meta), (True, ""))
+        self.rebase_onto_new_main(NOTE, "one\n\n\n\n\n\n\ntwo, edited on main\n")
+        self.assertEqual(self.judge(meta), (False, f"{NOTE} changed underneath it"))
 
     def test_the_judge_fingerprints_what_it_reviews(self):
-        saved = os.environ.get("PIPELINE_REPO")
-        os.environ["PIPELINE_REPO"] = str(self.repo)
-        try:
-            fp = evolve.fingerprint(self.base, self.head)
-        finally:
-            os.environ.pop("PIPELINE_REPO") if saved is None else os.environ.__setitem__("PIPELINE_REPO", saved)
+        fp = self.in_repo(evolve.fingerprint, self.base, self.head)
         self.assertEqual({k: fp[k] for k in ("diff_sha256", "touched")}, self.fingerprint(self.base, self.head))
         self.assertEqual(sorted(fp["touched"]), ["calc.py", "tests/test_calc.py"])
 
