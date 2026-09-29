@@ -443,29 +443,44 @@ else
 fi
 # Record files meant to be committed must reach git: an ignore rule anywhere (the project's, or one set for the
 # whole machine) would keep them out silently.
-if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  HIDDEN=""
-  UNCHECKED=""
-  for f in docs/project/intent.md docs/project/milestones.md docs/project/interfaces.md docs/project/decisions.md \
-           docs/project/fix-log.md docs/project/inbox.md; do
-    [ -f "$f" ] || continue
-    git ls-files --error-unmatch "$f" >/dev/null 2>&1 && continue
-    # check-ignore: 0 ignored, 1 not ignored, anything else means it could not tell; so does a "not ignored" given
-    # while an ignore file could not be read (other noise on stderr, such as a sandbox refusing a config file, is not).
-    ERR=$(git check-ignore -q "$f" 2>&1)
-    RC=$?
-    if [ $RC -eq 0 ]; then
-      HIDDEN="$HIDDEN $f (ignored by $(git check-ignore -v "$f" 2>/dev/null | cut -f1))"
-    elif [ $RC -ne 1 ] || printf '%s' "$ERR" | grep -qiE 'ignore|exclude'; then
-      UNCHECKED="$UNCHECKED $f ($(printf '%s' "${ERR:-git exit $RC}" | head -1))"
-    fi
-  done
-  if [ -n "${HIDDEN// /}" ]; then
-    report FAIL record-tracked "record files meant to be committed are ignored by git, so they never reach the repository:$HIDDEN; add each with git add -f, or remove the rule"
-  elif [ -n "${UNCHECKED// /}" ]; then
-    report FAIL record-tracked "git could not tell whether these record files are ignored:$UNCHECKED"
+if [ -e .git ] && command -v git >/dev/null 2>&1; then
+  if ! GITERR=$(git rev-parse --is-inside-work-tree 2>&1 >/dev/null); then
+    report FAIL record-tracked "git cannot read this repository, so no record file can be vouched for: $(printf '%s' "$GITERR" | head -1)"
   else
-    report PASS record-tracked "no committed record file is ignored by git"
+    # Where ignore rules come from, each checked for readability directly: an unreadable one means git's "not
+    # ignored" may be wrong, whatever git prints about it.
+    EXCLUDES_FILE=$(git config --path core.excludesFile 2>/dev/null)
+    UNREADABLE=""
+    while IFS= read -r src; do
+      [ -n "$src" ] && [ -e "$src" ] && [ ! -r "$src" ] && UNREADABLE="$UNREADABLE $src"
+    done <<SOURCES
+$(git rev-parse --git-path info/exclude)
+${EXCLUDES_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore}
+.gitignore
+docs/.gitignore
+docs/project/.gitignore
+SOURCES
+    HIDDEN=""
+    UNCHECKED=""
+    for f in docs/project/intent.md docs/project/milestones.md docs/project/interfaces.md docs/project/decisions.md \
+             docs/project/fix-log.md docs/project/inbox.md; do
+      [ -f "$f" ] || continue
+      git ls-files --error-unmatch "$f" >/dev/null 2>&1 && continue
+      git check-ignore -q "$f" >/dev/null 2>&1
+      RC=$?
+      if [ $RC -eq 0 ]; then
+        HIDDEN="$HIDDEN $f (ignored by $(git check-ignore -v "$f" 2>/dev/null | cut -f1))"
+      elif [ $RC -ne 1 ] || [ -n "$UNREADABLE" ]; then
+        UNCHECKED="$UNCHECKED $f"
+      fi
+    done
+    if [ -n "${HIDDEN// /}" ]; then
+      report FAIL record-tracked "record files meant to be committed are ignored by git, so they never reach the repository:$HIDDEN; add each with git add -f, or remove the rule"
+    elif [ -n "${UNCHECKED// /}" ]; then
+      report FAIL record-tracked "git could not tell whether these record files are ignored:$UNCHECKED (unreadable ignore rules:${UNREADABLE:- none; git check-ignore itself failed})"
+    else
+      report PASS record-tracked "no committed record file is ignored by git"
+    fi
   fi
 else
   report SKIP record-tracked "not a git repository"
