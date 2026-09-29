@@ -442,24 +442,45 @@ else
   report SKIP pipeline-traces "not a git repo"
 fi
 # Record files meant to be committed must reach git: an ignore rule anywhere (the project's, or one set for the
-# whole machine) would keep them out silently.
-if [ -e .git ] && command -v git >/dev/null 2>&1; then
+# whole machine) would keep them out silently. The project may sit in a subfolder of its repository.
+GIT_ABOVE=""
+D=$PWD
+while [ -n "$D" ] && [ "$D" != "/" ]; do
+  [ -e "$D/.git" ] && { GIT_ABOVE=$D; break; }
+  D=$(dirname "$D")
+done
+if [ -n "$GIT_ABOVE" ] && command -v git >/dev/null 2>&1; then
   if ! GITERR=$(git rev-parse --is-inside-work-tree 2>&1 >/dev/null); then
-    report FAIL record-tracked "git cannot read this repository, so no record file can be vouched for: $(printf '%s' "$GITERR" | head -1)"
+    WHY=$(printf '%s\n' "$GITERR" | grep -m1 'fatal:' || printf '%s\n' "$GITERR" | head -1)
+    report FAIL record-tracked "git cannot read this repository, so no record file can be vouched for: $WHY"
   else
-    # Where ignore rules come from, each checked for readability directly: an unreadable one means git's "not
-    # ignored" may be wrong, whatever git prints about it.
+    # Where ignore rules come from, each examined directly: one that cannot be read, or cannot even be looked at,
+    # means git's "not ignored" may be wrong, whatever git prints about it.
+    TOP=$(git rev-parse --show-toplevel)
     EXCLUDES_FILE=$(git config --path core.excludesFile 2>/dev/null)
+    RULES="$(git rev-parse --git-path info/exclude)
+${EXCLUDES_FILE:-${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/ignore}"
+    D="$PWD/docs/project"
+    while :; do
+      RULES="$RULES
+$D/.gitignore"
+      [ "$D" = "$TOP" ] || [ "$D" = "/" ] && break
+      D=$(dirname "$D")
+    done
     UNREADABLE=""
     while IFS= read -r src; do
-      [ -n "$src" ] && [ -e "$src" ] && [ ! -r "$src" ] && UNREADABLE="$UNREADABLE $src"
-    done <<SOURCES
-$(git rev-parse --git-path info/exclude)
-${EXCLUDES_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore}
-.gitignore
-docs/.gitignore
-docs/project/.gitignore
-SOURCES
+      [ -n "$src" ] || continue
+      if [ -e "$src" ]; then
+        [ -r "$src" ] || UNREADABLE="$UNREADABLE $src"
+      else
+        case "$(ls -d "$src" 2>&1 >/dev/null)" in
+          ""|*"No such file"*|*"Not a directory"*) ;;
+          *) UNREADABLE="$UNREADABLE $src" ;;
+        esac
+      fi
+    done <<RULES
+$RULES
+RULES
     HIDDEN=""
     UNCHECKED=""
     for f in docs/project/intent.md docs/project/milestones.md docs/project/interfaces.md docs/project/decisions.md \
@@ -477,13 +498,13 @@ SOURCES
     if [ -n "${HIDDEN// /}" ]; then
       report FAIL record-tracked "record files meant to be committed are ignored by git, so they never reach the repository:$HIDDEN; add each with git add -f, or remove the rule"
     elif [ -n "${UNCHECKED// /}" ]; then
-      report FAIL record-tracked "git could not tell whether these record files are ignored:$UNCHECKED (unreadable ignore rules:${UNREADABLE:- none; git check-ignore itself failed})"
+      report FAIL record-tracked "git could not tell whether these record files are ignored:$UNCHECKED (ignore rules that cannot be read:${UNREADABLE:- none; git check-ignore itself failed})"
     else
       report PASS record-tracked "no committed record file is ignored by git"
     fi
   fi
 else
-  report SKIP record-tracked "not a git repository"
+  report SKIP record-tracked "not in a git repository"
 fi
 if [ -f .gitignore ] && grep -qE '(^|/)\.claude' .gitignore; then
   report WARN gitignore ".gitignore lists .claude (reveals tooling; remove it)"

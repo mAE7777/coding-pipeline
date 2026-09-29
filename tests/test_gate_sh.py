@@ -161,11 +161,53 @@ class GateShTest(unittest.TestCase):
             noisy = subprocess.run(["bash", str(GATE), str(wt)], capture_output=True, text=True, timeout=300,
                                    env={**GIT_ENV, "PATH": f"{fake}:{os.environ['PATH']}"}).stdout
             self.assertIn("PASS   record-tracked", noisy, noisy[-800:])
+        # An ignore file that cannot even be looked at (its folder is closed) is unreadable, not absent.
+        with tempfile.TemporaryDirectory() as d:
+            docs = Path(d) / "docs/project"
+            docs.mkdir(parents=True)
+            (docs / "fix-log.md").write_text("# Fix log\n")
+            subprocess.run(["git", "init", "-q", d], check=True, env=GIT_ENV)
+            closed = Path(d) / "closed"
+            closed.mkdir()
+            (closed / "rules").write_text("nothing\n")
+            subprocess.run(["git", "-C", d, "config", "core.excludesFile", str(closed / "rules")], check=True, env=GIT_ENV)
+            closed.chmod(0)
+            try:
+                out = gate(d).stdout
+            finally:
+                closed.chmod(0o755)
+            self.assertIn("could not tell", out)
+            self.assertIn("closed/rules", out)
+        # A project in a subfolder of its repository is checked against the repository's rules.
+        with tempfile.TemporaryDirectory() as d:
+            proj = Path(d) / "apps/tally"
+            (proj / "docs/project").mkdir(parents=True)
+            (proj / "docs/project/fix-log.md").write_text("# Fix log\n")
+            subprocess.run(["git", "init", "-q", d], check=True, env=GIT_ENV)
+            (Path(d) / ".gitignore").write_text("fix-log.md\n")
+            out = gate(str(proj)).stdout
+            self.assertIn("FAIL   record-tracked", out)
+            self.assertIn("docs/project/fix-log.md", out)
+            # Without HOME the gate still runs to its end.
+            no_home = {k: v for k, v in GIT_ENV.items() if k != "HOME"}
+            out = subprocess.run(["bash", str(GATE), str(proj)], capture_output=True, text=True, timeout=300, env=no_home)
+            self.assertIn("RESULT:", out.stdout, out.stderr[-400:])
         with tempfile.TemporaryDirectory() as d:
             self.assertIn("SKIP   record-tracked", gate(d).stdout)
             # A repository git cannot read is a failure to vouch for anything, not "not a repository".
             (Path(d) / ".git").write_text("gitdir: /nonexistent/elsewhere\n")
             self.assertRegex(gate(d).stdout, r"FAIL\s+record-tracked\s+git cannot read this repository")
+            # The reason shown is git's own error, not a wrapper's noise printed before it.
+            fake = Path(d) / "bin"
+            fake.mkdir()
+            real_git = subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip()
+            (fake / "git").write_text(f"#!/bin/bash\necho 'xcrun: cannot write the cache file' >&2\n\"{real_git}\" \"$@\"\n")
+            (fake / "git").chmod(0o755)
+            out = subprocess.run(["bash", str(GATE), d], capture_output=True, text=True, timeout=300,
+                                 env={**GIT_ENV, "PATH": f"{fake}:{os.environ['PATH']}"}).stdout
+            line = next(l for l in out.splitlines() if "record-tracked" in l)
+            self.assertIn("fatal:", line)
+            self.assertNotIn("xcrun", line)
 
 
 if __name__ == "__main__":
