@@ -346,6 +346,14 @@ class Rule(unittest.TestCase):
         text = 'Summary.\n```json\n{"verdict": "ACCEPT", "evidence": "ran\ttests\nall passed"}\n```\n'
         self.assertEqual((evolve.last_json(text) or {}).get("verdict"), "ACCEPT")
         self.assertIsNone(evolve.last_json("```json\n{not json}\n```"), "what is not JSON still reads as no verdict")
+        # Only the last block is the verdict: a draft ACCEPT never stands in for a final block that does not parse.
+        draft_then_broken = ('```json\n{"verdict": "ACCEPT", "note": "draft\nline"}\n```\nOn reflection:\n'
+                             '```json\n{"verdict": "CHANGES", "why": "a \\q bad escape"}\n```\n')
+        verdict, why = evolve.read_verdict(draft_then_broken)
+        self.assertIsNone(verdict)
+        self.assertIn("last json block does not parse", why)
+        self.assertEqual(evolve.last_json('```json\n{"verdict": "ACCEPT"}\n```\n```json\n{"verdict": "CHANGES"}\n```'),
+                         {"verdict": "CHANGES"})
 
     def test_review_fields_decide_not_the_headline(self):
         good = {"verdict": "ACCEPT", "kind": "fix", "kind_ok": True, "root_cause": {"status": "FIXED"},
