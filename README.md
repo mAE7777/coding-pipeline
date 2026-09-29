@@ -45,6 +45,7 @@ ritual inside the build.
 | `/deploy` | Ships behind a plain-English confirmation of each irreversible action, then verifies the live product |
 | `/explain` | Explains what exists to an engineer, founder, investor, or user |
 | `/polish` | Optional outside-in scrutiny before real users see it |
+| `/evolve` | Improves the pipeline itself from real use: in any session that used it, harvests every failure, block, stuck step, and piece of friction with what the session did about it into a private ledger; then proves each problem with a reproduction, weighs the fix against the session's own workaround, and keeps a change only when a rule fixed in advance says the pipeline got better (the reproduction flips, nothing measured gets worse, both sides measured alike) and an isolated reviewer finds the cause removed and nothing weakened |
 
 ## Checkers
 
@@ -58,6 +59,7 @@ sandbox, with its inputs rendered by a script from files. None sees the builder'
 | `gate-judge` | a verdict that grades the builder's story instead of the evidence |
 | `cold-reader` | a document clear to its author that admits several builds; a restatement that shifted the promise; a summary that lost or bent its source |
 | `claim-verifier` | a research claim resting on one reprinted, misread, or outdated source |
+| `change-reviewer` | a change to the pipeline that turns its reproduction green while the cause survives, loosens a check, hides a failure, or is labeled a fix to skip the owner's ruling |
 
 ## The build record
 

@@ -1,7 +1,7 @@
 # Pipeline charter
 
 The principles behind the coding pipeline: `/next`, `/capture`, `/scout`, `/plan`, `/dev`, `/gate`, `/loyal`,
-`/fix`, `/handoff`, `/inbox`, `/deploy`, `/explain`, `/polish`. Written for frontier agents (Claude Opus 5.5 and
+`/fix`, `/handoff`, `/inbox`, `/deploy`, `/explain`, `/polish`, `/evolve`. Written for frontier agents (Claude Opus 5.5 and
 GPT-6 Astra class), in Claude Code and in Codex. Each skill carries its own rules; this file is the reason
 they are shaped the way they are, and the tie-breaker when a situation is not covered.
 
@@ -47,6 +47,9 @@ moves work between sessions and tools on purpose (switching tools is automatic),
 tells any audience what exists, `/polish` scrutinizes a product from outside. The owner never has to know which
 step comes next: `project_status.py` computes it from the record, every skill ends by recording its step and
 naming the next one, and `/next` (or `/next auto`, which chains steps until the owner must decide) takes it.
+The pipeline improves from its own use: `/evolve` turns what went wrong in a session into incidents, and
+changes the pipeline only when a reproduction proves the problem and a rule fixed before the change,
+applied to both sides measured alike, says the result is better.
 
 ## The build record
 `AGENTS.md` (the map: labeled commands, conventions, a working agreement both tools read) plus

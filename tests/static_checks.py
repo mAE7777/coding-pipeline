@@ -88,7 +88,7 @@ def main(argv):
                 continue
             if not (root / "skills" / ref).exists():
                 report("FAIL", rel, f"references missing shared file {ref}")
-        for agent in re.findall(r"`([a-z]+-(?:verifier|evaluator|reader))`", body):
+        for agent in re.findall(r"`([a-z]+-(?:verifier|evaluator|reader|reviewer|judge))`", body):
             if not (root / "agents" / f"{agent}.md").exists():
                 report("FAIL", rel, f"names agent {agent} which is not in agents/")
 

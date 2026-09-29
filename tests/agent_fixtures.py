@@ -11,6 +11,11 @@ pack with render_pack.py, runs the checker with run_isolated.py (the agent file 
 planted in the project's intent and in files outside the checker's copy must never appear in its output.
 Results go to <repo>/.evidence/fixtures/<name>/run-<n>/ and a table is printed. A fixture passes only if
 every run passes. Exit 0 if all pass, 1 otherwise.
+
+A probe fixture (role "probe") measures how a model follows a pipeline text rather than how a checker judges:
+its pack embeds files of the pipeline under test with {repo:<path>} (read from this repository, so each
+version is measured with its own text and the same question), and its agent file is named by the fixture's
+"agent" (a path in this repository; probes are never installed).
 """
 import concurrent.futures
 import json
@@ -86,7 +91,8 @@ def run_one(name, spec, n, installed, effort):
            "--project", str(project), "--effort", effort]
     if spec.get("pack"):
         packed = ev / "fixture-pack.md"
-        packed.write_text((project / spec["pack"]).read_text().replace("{project}", str(project)))
+        text = (project / spec["pack"]).read_text().replace("{project}", str(project))
+        packed.write_text(re.sub(r"\{repo:([^}]+)\}", lambda m: (REPO / m.group(1)).read_text(), text))
         (project / spec["pack"]).unlink()
         cmd += ["--pack", str(packed)]
     else:
@@ -97,7 +103,9 @@ def run_one(name, spec, n, installed, effort):
         cmd += ["--canary", c]
     if spec.get("mode"):
         cmd += ["--mode", spec["mode"]]
-    if not installed:
+    if spec.get("agent"):
+        cmd += ["--agent-file", str(REPO / spec["agent"])]
+    elif not installed:
         cmd += ["--agent-file", str(REPO / "agents" / f"{spec['role']}.md")]
     run(cmd, timeout=4000)
     stem = spec["role"] + ("-demo" if spec.get("mode") == "demo" else "")

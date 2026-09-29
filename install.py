@@ -45,11 +45,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 SKILLS = ("next", "capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
-          "polish")
+          "polish", "evolve")
 RETIRED_SKILLS = ("qa", "integrate")
 SHARED = ("gate.sh", "scripts", "templates", "references/pipeline-constitution.md", "references/steal-protocol.md",
           "references/steal-spec.md", "references/record-glossary.md")
-AGENTS = ("code-verifier", "loyal-evaluator", "gate-judge", "cold-reader", "claim-verifier")
+AGENTS = ("code-verifier", "loyal-evaluator", "gate-judge", "cold-reader", "claim-verifier", "change-reviewer")
 RETIRED_AGENTS = ("dev-planner", "task-implementer", "qa-planner", "category-executor", "project-analyzer",
                   "migration-planner", "doc-generator", "market-researcher", "winners-board")
 KEEP_LIVE = ("brain.md", "friction.log", "tests")
@@ -204,7 +204,7 @@ def cmd_apply(home, overwrite=False):
     for p in (home / ".claude/skills/_shared/scripts").glob("*.py"):
         p.chmod(p.stat().st_mode | 0o111)
     manifest = {"installed": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "revision": revision(), "files": {str(d): sha(s) for d, s in sorted(want.items())}}
+                "revision": revision(), "repo": str(REPO), "files": {str(d): sha(s) for d, s in sorted(want.items())}}
     (home / ".claude/.pipeline-install.json").write_text(json.dumps(manifest, indent=1))
     print(f"installed: {len(actions)} action(s); manifest {home / '.claude/.pipeline-install.json'}"
           + (f"; replaced files backed up in {backup}" if backup.exists() else ""))

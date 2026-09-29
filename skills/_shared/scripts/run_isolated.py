@@ -7,7 +7,9 @@ Usage:
                   [--agent-file <path>] [--canary <text> ...] [--deny <path> ...] [--allow-read <path> ...]
                   [--network <host> ...] [--effort xhigh] [--timeout <seconds>] [--dry-run]
 
-Roles: code-verifier, loyal-evaluator, gate-judge, cold-reader, claim-verifier.
+Roles: code-verifier, loyal-evaluator, gate-judge, cold-reader, claim-verifier, change-reviewer (a proposed
+change to the pipeline itself, run by evolve.py review), and probe (a fixture that measures how a model
+follows a pipeline text; its agent file always comes from --agent-file).
 --dir auto gives a checker that reads only its pack (cold-reader, claim-verifier) a fresh empty private
 folder, removed when the run ends.
 A real gate run takes longer than a shell tool call may last: start this in the background and wait for
@@ -77,8 +79,11 @@ ROLES = {
     "gate-judge": ["Read", "Grep", "Glob"],
     "cold-reader": ["Read", "Grep", "Glob"],
     "claim-verifier": ["Read", "WebSearch", "WebFetch"],
+    "change-reviewer": ["Read", "Grep", "Glob", "Bash"],
+    "probe": ["Read", "Grep", "Glob"],
 }
-MIN_TOOLS = {"code-verifier": 1, "loyal-evaluator": 1, "claim-verifier": 1, "gate-judge": 0, "cold-reader": 0}
+MIN_TOOLS = {"code-verifier": 1, "loyal-evaluator": 1, "claim-verifier": 1, "gate-judge": 0, "cold-reader": 0,
+             "change-reviewer": 1, "probe": 0}
 SHARED = HOME / ".claude/skills/_shared"
 LOCK_DIR = Path(os.environ.get("HEAVY_LOCK_DIR") or f"/tmp/heavy-lock-{os.getuid()}").resolve()
 TOOLCHAINS = [".volta", ".nvm", ".npm", ".bun", ".deno", ".cargo", ".rustup", "go", ".pyenv", ".local/bin",

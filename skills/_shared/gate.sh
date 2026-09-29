@@ -428,8 +428,8 @@ if [ -d .git ] && command -v git >/dev/null 2>&1; then
   PT=""
   if [ -n "$TRACKED" ]; then
     PT=$(printf '%s\n' "$TRACKED" | tr '\n' '\0' | xargs -0 grep -lE \
-      -e '(^|[^A-Za-z0-9])/(plan|dev|gate|loyal|scout|handoff|capture|fix|deploy|explain|polish|inbox|next) (M[0-9]+|adopt|amend|convert|freeze|resume|accept|check|status|vigilance|write|receive|ask|map|spike|offload|ingest|add|review|list|auto)([^A-Za-z]|$)' \
-      -e 'code-verifier|loyal-evaluator|gate-judge|cold-reader|claim-verifier|heavy\.py|milestone_lint|render_pack|run_isolated|gate_run\.py|gate_report|record_check|helm_stamp' \
+      -e '(^|[^A-Za-z0-9])/(plan|dev|gate|loyal|scout|handoff|capture|fix|deploy|explain|polish|inbox|next|evolve) (M[0-9]+|adopt|amend|convert|freeze|resume|accept|check|status|vigilance|write|receive|ask|map|spike|offload|ingest|add|review|list|auto|run)([^A-Za-z]|$)' \
+      -e 'code-verifier|loyal-evaluator|gate-judge|cold-reader|claim-verifier|change-reviewer|evolve\.py|heavy\.py|milestone_lint|render_pack|run_isolated|gate_run\.py|gate_report|record_check|helm_stamp' \
       -e 'rulings\.py|intent_lock|inbox\.py|project_status|continuity\.py|local_only\.py|gate_copies|handoff_check|milestone-continue|heavy-guard|reload-gate|typecheck-once' \
       2>/dev/null | head -5 | tr '\n' ' ')
   fi
