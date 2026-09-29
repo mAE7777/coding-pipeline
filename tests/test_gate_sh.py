@@ -125,6 +125,19 @@ class GateShTest(unittest.TestCase):
                 exclude.chmod(0o644)
             self.assertIn("FAIL   record-tracked", out)
             self.assertIn("could not tell", out)
+            self.assertIn("info/exclude", out, "the unreadable rule file is named, not git's first line of noise")
+            # An ignore file by any other name counts the same.
+            rules = Path(d) / "my-rules"
+            rules.write_text("nothing\n")
+            subprocess.run(["git", "-C", d, "config", "core.excludesFile", str(rules)], check=True, env=GIT_ENV)
+            rules.chmod(0)
+            try:
+                out = gate(d).stdout
+            finally:
+                rules.chmod(0o644)
+            self.assertIn("could not tell", out)
+            self.assertIn("my-rules", out)
+            subprocess.run(["git", "-C", d, "config", "--unset", "core.excludesFile"], check=True, env=GIT_ENV)
             # A worktree (its .git is a file) is checked like any checkout; outside git the check says it was skipped.
             subprocess.run(["git", "-C", d, "commit", "-qm", "record", "--no-gpg-sign"], check=True, env={
                 **GIT_ENV, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
@@ -150,6 +163,9 @@ class GateShTest(unittest.TestCase):
             self.assertIn("PASS   record-tracked", noisy, noisy[-800:])
         with tempfile.TemporaryDirectory() as d:
             self.assertIn("SKIP   record-tracked", gate(d).stdout)
+            # A repository git cannot read is a failure to vouch for anything, not "not a repository".
+            (Path(d) / ".git").write_text("gitdir: /nonexistent/elsewhere\n")
+            self.assertRegex(gate(d).stdout, r"FAIL\s+record-tracked\s+git cannot read this repository")
 
 
 if __name__ == "__main__":
