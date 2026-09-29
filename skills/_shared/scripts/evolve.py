@@ -958,9 +958,11 @@ def change_text(cid):
 
 
 def last_json(text):
+    """The last JSON block of a checker's message. A raw control character inside a string (a quoted command's tab
+    or newline) does not void the verdict; what is not JSON still reads as no verdict."""
     for b in reversed(re.findall(r"```json\s*(\{.*?\})\s*```", text or "", flags=re.S)):
         try:
-            return json.loads(b)
+            return json.loads(b, strict=False)
         except ValueError:
             continue
     return None
