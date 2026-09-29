@@ -441,6 +441,35 @@ if [ -d .git ] && command -v git >/dev/null 2>&1; then
 else
   report SKIP pipeline-traces "not a git repo"
 fi
+# Record files meant to be committed must reach git: an ignore rule anywhere (the project's, or one set for the
+# whole machine) would keep them out silently.
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  HIDDEN=""
+  UNCHECKED=""
+  for f in docs/project/intent.md docs/project/milestones.md docs/project/interfaces.md docs/project/decisions.md \
+           docs/project/fix-log.md docs/project/inbox.md; do
+    [ -f "$f" ] || continue
+    git ls-files --error-unmatch "$f" >/dev/null 2>&1 && continue
+    # check-ignore: 0 ignored, 1 not ignored, anything else means it could not tell; so does a "not ignored" given
+    # while an ignore file could not be read (other noise on stderr, such as a sandbox refusing a config file, is not).
+    ERR=$(git check-ignore -q "$f" 2>&1)
+    RC=$?
+    if [ $RC -eq 0 ]; then
+      HIDDEN="$HIDDEN $f (ignored by $(git check-ignore -v "$f" 2>/dev/null | cut -f1))"
+    elif [ $RC -ne 1 ] || printf '%s' "$ERR" | grep -qiE 'ignore|exclude'; then
+      UNCHECKED="$UNCHECKED $f ($(printf '%s' "${ERR:-git exit $RC}" | head -1))"
+    fi
+  done
+  if [ -n "${HIDDEN// /}" ]; then
+    report FAIL record-tracked "record files meant to be committed are ignored by git, so they never reach the repository:$HIDDEN; add each with git add -f, or remove the rule"
+  elif [ -n "${UNCHECKED// /}" ]; then
+    report FAIL record-tracked "git could not tell whether these record files are ignored:$UNCHECKED"
+  else
+    report PASS record-tracked "no committed record file is ignored by git"
+  fi
+else
+  report SKIP record-tracked "not a git repository"
+fi
 if [ -f .gitignore ] && grep -qE '(^|/)\.claude' .gitignore; then
   report WARN gitignore ".gitignore lists .claude (reveals tooling; remove it)"
 fi

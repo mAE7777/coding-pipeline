@@ -8,8 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "skills/_shared/gate.sh"
 FIX = ROOT / "tests/fixtures"
-# Git without this machine's global settings: a global ignore rule must not decide what a test stages or sees.
-GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull}
+# Git without this machine's global settings (the global config and the XDG ignore file both carry ignore rules): a
+# rule set for the whole machine must not decide what a test stages or sees.
+GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "XDG_CONFIG_HOME": os.devnull}
 
 
 def gate(*args):
@@ -20,7 +21,7 @@ class GateShTest(unittest.TestCase):
     def test_fingerprint_matches_script(self):
         a = gate("--fingerprint", str(FIX / "clean")).stdout.strip()
         b = subprocess.run([sys.executable, str(ROOT / "skills/_shared/scripts/fingerprint.py"),
-                            str(FIX / "clean")], capture_output=True, text=True).stdout.strip()
+                            str(FIX / "clean")], capture_output=True, text=True, env=GIT_ENV).stdout.strip()
         self.assertTrue(a.startswith("product:"), a)
         self.assertEqual(a, b)
 
