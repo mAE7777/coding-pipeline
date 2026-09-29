@@ -33,9 +33,11 @@ runs the package's converter, its acceptance, and its installer, so one command 
 that writes no fresh report or whose exit code disagrees with it, and any failing acceptance gate that is not a
 known failure restore that copy (Codex keeps its last accepted version) and fail the install, keeping the failed
 report under ~/.claude/_backups/. Known failures (~/.claude/.pipeline-codex-known.json) are named at every
-install, each with its reason, and leave the list by themselves once they pass; only the owner adds one
-(codex-known, their words proven against their transcript). Exit 0 only when Claude Code and Codex are both
-current.
+install, each with its reason, and leave the list by themselves once they pass (one the acceptance no longer
+reports stays, named); only the owner adds one (codex-known: their words, proven against their transcript, must
+name the gate, and the gate must be failing in the latest report). An acceptance that reports no gates fails. A
+sync that was killed midway is undone at the next apply, and check fails until then. Exit 0 only when Claude
+Code and Codex are both current.
 
 check FAILs when an installed file differs from the repository (or the overlay), a managed file is missing, a
 retired skill or agent is still where it would load, a skill of the same name shadows one of ours (a plugin
@@ -272,6 +274,11 @@ def snapshot_package(pkg):
     return snap
 
 
+def pending_marker(pkg):
+    """Beside the package (a restore never removes it): names the snapshot of a sync that has not finished."""
+    return pkg.parent / f".{pkg.name}.install-sync-pending"
+
+
 def restore_package(pkg, snap):
     """Put the package back as it was before this install touched it: Codex keeps its last accepted copies."""
     for entry in list(pkg.iterdir()):
@@ -299,9 +306,26 @@ def sync_codex(home):
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home)}
     report = pkg / "validation/acceptance.json"
     known = known_failures(home)
-    snap = snapshot_package(pkg)
     notes = []
+    marker = pending_marker(pkg)
+    if marker.is_file():
+        # A sync that was killed left its unaccepted copies where Codex loads them: put the last accepted ones back.
+        earlier = Path(marker.read_text().strip())
+        if earlier.is_dir():
+            restore_package(pkg, earlier)
+            notes.append("an interrupted Codex sync was undone: the package is back to its last accepted version")
+        marker.unlink()
+    snap = snapshot_package(pkg)
+    marker.write_text(str(snap))
+    try:
+        return run_sync(home, pkg, env, report, known, snap, marker, notes)
+    except BaseException:
+        restore_package(pkg, snap)
+        marker.unlink(missing_ok=True)
+        raise
 
+
+def run_sync(home, pkg, env, report, known, snap, marker, notes):
     def failed(message):
         kept = ""
         if report.is_file():
@@ -310,6 +334,7 @@ def sync_codex(home):
             shutil.copy2(report, keep)
             kept = f"; its report is kept at {keep}"
         restore_package(pkg, snap)
+        marker.unlink(missing_ok=True)
         return [message + kept + "; the package is restored, so Codex keeps its last accepted copies"], notes
 
     r = subprocess.run([sys.executable, str(pkg / "scripts/convert_helm.py"), "--source", str(home / ".claude")],
@@ -325,6 +350,8 @@ def sync_codex(home):
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return failed(f"Codex acceptance wrote no readable report (exit {r.returncode}, {exc.__class__.__name__}): "
                       f"{(r.stdout + r.stderr).strip()[-300:]}")
+    if not gates:
+        return failed(f"Codex acceptance reported no gates (exit {r.returncode})")
     failing = sorted(g for g, st in gates.items() if st != "PASS")
     if bool(failing) != (r.returncode != 0):
         return failed(f"Codex acceptance exited {r.returncode} while its report lists {len(failing)} failing gate(s)")
@@ -332,10 +359,13 @@ def sync_codex(home):
     if unknown:
         return failed(f"Codex acceptance: {', '.join(unknown)} fail and are not known failures (a known failure is "
                       "added only by the owner: install.py codex-known <gate> --reason ... --quote ...)")
-    healed = sorted(g for g in known if g not in failing)
+    healed = sorted(g for g in known if gates.get(g) == "PASS")
     if healed:
         save_known(home, {g: v for g, v in known.items() if g not in healed})
         notes.append(f"Codex acceptance: {', '.join(healed)} pass now and left the known failures")
+    for g in sorted(g for g in known if g not in gates):
+        notes.append(f"Codex acceptance: the known failure {g} was not reported this time (renamed, or not run); it "
+                     "stays on the list")
     for g in failing:
         notes.append(f"Codex acceptance: {g} still fails, a known failure since {known[g].get('since')} "
                      f"({known[g].get('reason')})")
@@ -344,6 +374,7 @@ def sync_codex(home):
     if r.returncode != 0:
         return failed(f"Codex installer failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}")
     shutil.rmtree(snap, ignore_errors=True)
+    marker.unlink(missing_ok=True)
     notes.append(f"Codex synced from the package at {pkg}")
     return [], notes
 
@@ -366,6 +397,21 @@ def cmd_codex_known(home, argv):
     if not path or not find_quote(path, opts["--quote"]):
         print("FAIL   install     the quote is not a whole sentence or message the owner typed in that session; only "
               "the owner adds a known failure")
+        return 1
+    if gate.lower() not in opts["--quote"].lower():
+        print(f"FAIL   install     the owner's words do not name {gate}; a ruling covers the gate it names")
+        return 1
+    pkg = codex_package(home)
+    reports = sorted((home / ".claude/_backups").glob("codex-acceptance-*.json")) + \
+        ([pkg / "validation/acceptance.json"] if pkg and (pkg / "validation/acceptance.json").is_file() else [])
+    latest = max(reports, key=lambda f: f.stat().st_mtime) if reports else None
+    try:
+        status = {g["name"]: g["status"] for g in json.loads(latest.read_text())["gates"]}.get(gate) if latest else None
+    except (OSError, ValueError, KeyError, TypeError):
+        status = None
+    if status in (None, "PASS"):
+        print(f"FAIL   install     {gate} is not failing in the latest acceptance report "
+              f"({latest or 'none found'}); only a failing gate can become a known failure")
         return 1
     known = known_failures(home)
     known[gate] = {"since": datetime.date.today().isoformat(), "reason": opts["--reason"],
@@ -424,7 +470,11 @@ def codex_conversion_check(home, want):
         if rel:
             recorded[rel.strip()] = digest.strip()
     fails, claude = [], home / ".claude"
-    fix = "install.py apply rebuilds them" if codex_package(home) else \
+    pkg = codex_package(home)
+    if pkg and pending_marker(pkg).is_file():
+        fails.append("a Codex sync was interrupted and its unaccepted copies may be live: install.py apply restores the "
+                     "last accepted version first")
+    fix = "install.py apply rebuilds them" if pkg else \
         "the package ~/.agents/skills links into has no scripts/convert_helm.py for install.py to run; rebuild it by hand"
     stale = [str(dst.relative_to(claude)) for dst in sorted(want) if dst.is_file()
              and str(dst.relative_to(claude)) in recorded and recorded[str(dst.relative_to(claude))] != sha(dst)]

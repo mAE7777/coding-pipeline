@@ -1,5 +1,6 @@
 """Tests for install.py against a throwaway home folder."""
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -148,19 +149,52 @@ class InstallTest(unittest.TestCase):
         out = self.run_i("apply")
         self.assertIn("exited 0 while its report lists 1 failing gate(s)", out.stdout)
 
-    def test_only_the_owner_adds_a_known_failure(self):
+    def test_only_the_owner_adds_a_known_failure_and_only_for_a_failing_gate(self):
+        pkg = self.codex_package({"pipeline": "PASS", "discovery": "FAIL"})
+        self.assertEqual(self.run_i("apply").returncode, 1, "an unknown failure blocks")
         env = {**os.environ, "HOME": str(self.home), "CLAUDE_CODE_SESSION_ID": SID}
-        args = [sys.executable, str(INSTALL), "codex-known", "discovery", "--home", str(self.home),
-                "--reason", "a packaging gap", "--quote", "Let discovery fail for now."]
-        self.assertEqual(subprocess.run(args, capture_output=True, text=True, env=env).returncode, 1)
+
+        def known(gate, quote):
+            return subprocess.run([sys.executable, str(INSTALL), "codex-known", gate, "--home", str(self.home),
+                                   "--reason", "a packaging gap", "--quote", quote], capture_output=True, text=True, env=env)
+        self.assertEqual(known("discovery", "Let discovery fail for now.").returncode, 1, "words the owner never typed")
         t = self.home / ".claude/projects/-p"
         t.mkdir(parents=True)
-        (t / f"{SID}.jsonl").write_text(json.dumps({"type": "user", "uuid": "u1", "timestamp": "t",
-                                                    "message": {"content": "Let discovery fail for now."}}) + "\n")
-        r = subprocess.run(args, capture_output=True, text=True, env=env)
+        (t / f"{SID}.jsonl").write_text("".join(json.dumps({"type": "user", "uuid": f"u{i}", "timestamp": "t",
+                                                            "message": {"content": text}}) + "\n"
+                                                for i, text in enumerate(["Let discovery fail for now.", "Ship it.",
+                                                                          "Let pipeline fail too."])))
+        self.assertIn("do not name discovery", known("discovery", "Ship it.").stdout)
+        self.assertIn("not failing in the latest acceptance report", known("pipeline", "Let pipeline fail too.").stdout)
+        r = known("discovery", "Let discovery fail for now.")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        known = json.loads((self.home / ".claude/.pipeline-codex-known.json").read_text())["gates"]
-        self.assertIn("Let discovery fail for now.", known["discovery"]["by"])
+        self.assertIn("Let discovery fail for now.", json.loads(
+            (self.home / ".claude/.pipeline-codex-known.json").read_text())["gates"]["discovery"]["by"])
+        out = self.run_i("apply")
+        self.assertIn("discovery still fails, a known failure", out.stdout)
+        self.assertNotIn("FAIL   install     Codex", out.stdout)
+        (pkg / "gates.json").write_text(json.dumps({"pipeline": "PASS"}))
+        out = self.run_i("apply")
+        self.assertIn("the known failure discovery was not reported this time", out.stdout, "kept, never dropped unseen")
+        self.assertIn("discovery", json.loads((self.home / ".claude/.pipeline-codex-known.json").read_text())["gates"])
+        (pkg / "gates.json").write_text(json.dumps({}))
+        self.assertIn("reported no gates", self.run_i("apply").stdout)
+
+    def test_an_interrupted_sync_is_undone_before_anything_else(self):
+        pkg = self.codex_package({"pipeline": "PASS"})
+        self.run_i("apply")
+        self.assertEqual((pkg / "generation.txt").read_text(), "1")
+        # A sync killed after its converter ran: its snapshot and marker are left, the unaccepted copies are live.
+        snap = self.home / ".codex-package.install-snapshot-killed"
+        shutil.copytree(pkg, snap, symlinks=True)
+        (self.home / ".codex-package.install-sync-pending").write_text(str(snap))
+        (pkg / "generation.txt").write_text("99")
+        out = self.run_i("check")
+        self.assertIn("a Codex sync was interrupted", out.stdout)
+        out = self.run_i("apply")
+        self.assertIn("an interrupted Codex sync was undone", out.stdout)
+        self.assertEqual((pkg / "generation.txt").read_text(), "2", "back to the accepted copy, then synced again")
+        self.assertFalse((self.home / ".codex-package.install-sync-pending").exists())
 
     def test_the_advice_fits_a_package_without_a_converter(self):
         pkg = self.home / "hand-built"
