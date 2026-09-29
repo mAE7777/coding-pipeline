@@ -10,6 +10,44 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install.py"
 
 
+# A stand-in for the Codex package that ~/.agents/skills links into: the same three scripts, each logging its run.
+CONVERTER = """import hashlib, sys
+from pathlib import Path
+pkg = Path(__file__).resolve().parents[1]
+source = Path(sys.argv[sys.argv.index("--source") + 1])
+lines = [hashlib.sha256(f.read_bytes()).hexdigest() + "  " + str(f.relative_to(source))
+         for f in sorted(source.rglob("*")) if f.is_file()]
+(pkg / "source-manifest.sha256").write_text("\\n".join(lines) + "\\n")
+for skill in (source / "skills").iterdir():
+    if (skill / "SKILL.md").is_file():
+        (pkg / ".agents/skills" / skill.name).mkdir(parents=True, exist_ok=True)
+        (pkg / ".agents/skills" / skill.name / "SKILL.md").write_text((skill / "SKILL.md").read_text())
+with open(pkg / "log.txt", "a") as f:
+    f.write("convert\\n")
+"""
+ACCEPTANCE = """import json, sys
+from pathlib import Path
+root = Path(sys.argv[sys.argv.index("--root") + 1])
+gates = json.loads((root / "gates.json").read_text())
+Path(sys.argv[sys.argv.index("--json") + 1]).write_text(json.dumps({"status": "PASS" if all(v == "PASS" for v in gates.values())
+    else "FAIL", "gates": [{"name": k, "status": v, "detail": ""} for k, v in gates.items()]}))
+with open(root / "log.txt", "a") as f:
+    f.write("acceptance\\n")
+sys.exit(0 if all(v == "PASS" for v in gates.values()) else 1)
+"""
+INSTALLER = """import sys
+from pathlib import Path
+pkg = Path(__file__).resolve().parents[1]
+home = Path(sys.argv[sys.argv.index("--home") + 1])
+for skill in (pkg / ".agents/skills").iterdir():
+    link = home / ".agents/skills" / skill.name
+    if not link.exists():
+        link.symlink_to(skill)
+with open(pkg / "log.txt", "a") as f:
+    f.write("install\\n")
+"""
+
+
 class InstallTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -39,6 +77,29 @@ class InstallTest(unittest.TestCase):
 
     def run_i(self, cmd):
         return subprocess.run([sys.executable, str(INSTALL), cmd, "--home", str(self.home)], capture_output=True, text=True)
+
+    def codex_package(self, gates, previous=None):
+        pkg = self.home / "codex-package"
+        for rel, text in (("scripts/convert_helm.py", CONVERTER), ("scripts/acceptance.py", ACCEPTANCE),
+                          ("scripts/install_global.py", INSTALLER), ("gates.json", json.dumps(gates))):
+            (pkg / rel).parent.mkdir(parents=True, exist_ok=True)
+            (pkg / rel).write_text(text)
+        (pkg / "validation").mkdir(exist_ok=True)
+        if previous:
+            (pkg / "validation/acceptance.json").write_text(json.dumps(
+                {"gates": [{"name": k, "status": v} for k, v in previous.items()]}))
+        (pkg / ".agents/skills/plan").mkdir(parents=True, exist_ok=True)
+        (self.home / ".agents/skills").mkdir(parents=True, exist_ok=True)
+        if not (self.home / ".agents/skills/plan").exists():
+            (self.home / ".agents/skills/plan").symlink_to(pkg / ".agents/skills/plan")
+        return pkg
+
+    def test_apply_brings_codex_up_to_date_in_the_same_command(self):
+        pkg = self.codex_package({"pipeline": "PASS"})
+        out = self.run_i("apply")
+        self.assertNotIn("Codex has no", out.stdout, out.stdout)
+        self.assertNotIn("Codex's copies were converted from older versions", out.stdout)
+        self.assertEqual((pkg / "log.txt").read_text().split(), ["convert", "acceptance", "install"])
 
     def test_check_fails_before_install(self):
         out = self.run_i("check")
