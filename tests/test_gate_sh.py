@@ -98,6 +98,58 @@ class GateShTest(unittest.TestCase):
                 (docs / "decisions.md").write_text(f"## D-003\n{trace}\n")
                 self.assertIn("FAIL   pipeline-traces", gate(d).stdout, trace)
 
+    def test_a_record_file_git_ignores_is_named(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            docs = Path(d) / "docs/project"
+            docs.mkdir(parents=True)
+            (docs / "fix-log.md").write_text("# Fix log\n")
+            (docs / "decisions.md").write_text("# Decisions\n")
+            subprocess.run(["git", "init", "-q", d], check=True, env=GIT_ENV)
+            (Path(d) / ".git/info/exclude").write_text("fix-log.md\n")
+            subprocess.run(["git", "-C", d, "add", "docs/project"], check=True, env=GIT_ENV)
+            out = gate(d).stdout
+            self.assertIn("FAIL   record-tracked", out)
+            self.assertIn("docs/project/fix-log.md", out)
+            self.assertNotIn("docs/project/decisions.md (ignored", out)
+            subprocess.run(["git", "-C", d, "add", "-f", "docs/project/fix-log.md"], check=True, env=GIT_ENV)
+            self.assertIn("PASS   record-tracked", gate(d).stdout, "a tracked file is committed whatever the rules say")
+            # A git that cannot read an ignore file cannot vouch for anything: that is a failure, never a pass.
+            (docs / "inbox.md").write_text("# Inbox\n")
+            exclude = Path(d) / ".git/info/exclude"
+            exclude.chmod(0)
+            try:
+                out = gate(d).stdout
+            finally:
+                exclude.chmod(0o644)
+            self.assertIn("FAIL   record-tracked", out)
+            self.assertIn("could not tell", out)
+            # A worktree (its .git is a file) is checked like any checkout; outside git the check says it was skipped.
+            subprocess.run(["git", "-C", d, "commit", "-qm", "record", "--no-gpg-sign"], check=True, env={
+                **GIT_ENV, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@example.com"})
+            wt = Path(d) / "wt"
+            subprocess.run(["git", "-C", d, "worktree", "add", "-q", "--detach", str(wt)], check=True, env=GIT_ENV)
+            (wt / "docs/project/milestones.md").write_text("# Milestones\n")
+            (Path(d) / ".git/info/exclude").write_text("fix-log.md\nmilestones.md\n")
+            out = gate(str(wt)).stdout
+            self.assertIn("FAIL   record-tracked", out, "a worktree is checked, not skipped")
+            self.assertIn("docs/project/milestones.md", out)
+            # Noise that says nothing about ignore rules does not turn a clear answer into "could not tell".
+            fake = Path(d) / "bin"
+            fake.mkdir()
+            real_git = subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip()
+            (fake / "git").write_text(f"#!/bin/bash\n\"{real_git}\" \"$@\"\nrc=$?\n"
+                                      "echo \"warning: unable to access '/somewhere/.config/git/attributes'\" >&2\n"
+                                      "exit $rc\n")
+            (fake / "git").chmod(0o755)
+            (Path(d) / ".git/info/exclude").write_text("")
+            noisy = subprocess.run(["bash", str(GATE), str(wt)], capture_output=True, text=True, timeout=300,
+                                   env={**GIT_ENV, "PATH": f"{fake}:{os.environ['PATH']}"}).stdout
+            self.assertIn("PASS   record-tracked", noisy, noisy[-800:])
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIn("SKIP   record-tracked", gate(d).stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
