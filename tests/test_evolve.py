@@ -462,13 +462,19 @@ class Loop(unittest.TestCase):
         (out / "change-reviewer.result.md").write_text("Summary.\n\n```json\n" + json.dumps(v) + "\n```\n")
 
     def fingerprint(self, base, head):
-        """What a review covers, computed with git the same way the judge does: the change's own diff (its patch id)
-        and each file it touches as it was at the base."""
-        diff = subprocess.run(["git", "-C", str(self.repo), "diff", f"{base}..{head}"], capture_output=True, text=True).stdout
-        pid = subprocess.run(["git", "-C", str(self.repo), "patch-id", "--stable"], input=diff, capture_output=True,
-                             text=True).stdout.split()[0]
-        touched = git(self.repo, "diff", "--name-only", f"{base}..{head}").splitlines()
-        return {"patch_id": pid, "touched": {f: git(self.repo, "rev-parse", f"{base}:{f}") for f in touched}}
+        """What a review covers, computed with git the same way the judge does: the change's own diff byte for byte
+        without its hunk line numbers, and each file it touches (renames split) as it was at the base."""
+        diff = subprocess.run(["git", "-C", str(self.repo), "diff", "--no-renames", "--no-ext-diff", f"{base}..{head}"],
+                              capture_output=True, text=True).stdout
+        kept = [re.sub(r"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", "@@", l) for l in diff.splitlines() if not l.startswith("index ")]
+        touched = git(self.repo, "diff", "--no-renames", "--name-only", f"{base}..{head}").splitlines()
+        return {"diff_sha256": __import__("hashlib").sha256("\n".join(kept).encode()).hexdigest(),
+                "touched": {f: self.blob(base, f) for f in touched}}
+
+    def blob(self, ref, path):
+        r = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "--verify", "--quiet", f"{ref}:{path}"],
+                           capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
 
     def rebase_onto_new_main(self, rel, text):
         git(self.repo, "switch", "-q", "main")
@@ -517,6 +523,39 @@ class Loop(unittest.TestCase):
         r = run("record", "CHG-0001", env=self.env)
         self.assertIn("the change's own diff is different", r.stdout)
 
+    def judge(self, meta, suites=()):
+        saved = os.environ.get("PIPELINE_REPO")
+        os.environ["PIPELINE_REPO"] = str(self.repo)
+        saved_home = evolve.HOME
+        evolve.HOME = self.ledger
+        try:
+            return evolve.review_covers(meta, self.base, self.head, suites)
+        finally:
+            evolve.HOME = saved_home
+            os.environ.pop("PIPELINE_REPO") if saved is None else os.environ.__setitem__("PIPELINE_REPO", saved)
+
+    def test_whitespace_renames_and_a_new_failure_all_void_a_review(self):
+        meta = {"head": "0" * 40, **self.fingerprint(self.base, self.head)}
+        self.assertEqual(self.judge(meta), (True, ""))
+        # Only the indentation changes: in Python that is another program.
+        git(self.repo, "switch", "-q", "evolve/chg-0001")
+        (self.repo / "calc.py").write_text((self.repo / "calc.py").read_text().replace("    return", "\treturn"))
+        git(self.repo, "commit", "-qam", "tabs")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        self.assertEqual(self.judge(meta), (False, "the change's own diff is different"))
+        # A rename: the old path is part of the ground the review stood on.
+        git(self.repo, "mv", "calc.py", "stats.py")
+        git(self.repo, "commit", "-qm", "rename")
+        self.head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "switch", "-q", "main")
+        meta = {"head": "0" * 40, **self.fingerprint(self.base, self.head)}
+        self.assertIn("calc.py", meta["touched"])
+        # The reproduction failing at the base for another reason voids it too.
+        meta["repro_failures"] = {"repro:test:tests/test_calc.py::Calc.test_mean_of_nothing": "ValueError: something else"}
+        covered, why = self.judge(meta, ["repro:test:tests/test_calc.py::Calc.test_mean_of_nothing"])
+        self.assertFalse(covered)
+        self.assertIn("fails at the new base for another reason", why)
+
     def test_the_judge_fingerprints_what_it_reviews(self):
         saved = os.environ.get("PIPELINE_REPO")
         os.environ["PIPELINE_REPO"] = str(self.repo)
@@ -524,7 +563,7 @@ class Loop(unittest.TestCase):
             fp = evolve.fingerprint(self.base, self.head)
         finally:
             os.environ.pop("PIPELINE_REPO") if saved is None else os.environ.__setitem__("PIPELINE_REPO", saved)
-        self.assertEqual(fp, self.fingerprint(self.base, self.head))
+        self.assertEqual({k: fp[k] for k in ("diff_sha256", "touched")}, self.fingerprint(self.base, self.head))
         self.assertEqual(sorted(fp["touched"]), ["calc.py", "tests/test_calc.py"])
 
     def test_a_proven_change(self):
