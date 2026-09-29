@@ -8,6 +8,8 @@ Usage:
                                               install, archive what the pipeline retired, write the manifest,
                                               and bring Codex's copies up to date in the same run
   python3 install.py check [--home <dir>]     compare the installed files with this repository and hunt shadows
+  python3 install.py codex-known <gate> --reason "<why>" --quote "<the owner's words>" [--session <id>]
+                                              let one Codex acceptance gate fail, on the owner's proven words
 
 What is managed:
   skills/<name>/          SKILL.md, references/, scripts/ of each pipeline skill; files the repository no longer
@@ -27,9 +29,13 @@ installed file and the repository revision.
 
 Codex. When ~/.agents/skills links into a Codex package (the folder holding scripts/convert_helm.py), apply then
 runs the package's converter, its acceptance, and its installer, so one command leaves both tools current
-(--no-codex skips it and says so). The acceptance is judged against its previous report: a gate that passed
-before and fails now fails the install; a gate that was already failing is named in every run, never hidden.
-Exit 0 only when Claude Code and Codex are both current.
+(--no-codex skips it and says so). The package is copied first. A failed converter or installer, an acceptance
+that writes no fresh report or whose exit code disagrees with it, and any failing acceptance gate that is not a
+known failure restore that copy (Codex keeps its last accepted version) and fail the install, keeping the failed
+report under ~/.claude/_backups/. Known failures (~/.claude/.pipeline-codex-known.json) are named at every
+install, each with its reason, and leave the list by themselves once they pass; only the owner adds one
+(codex-known, their words proven against their transcript). Exit 0 only when Claude Code and Codex are both
+current.
 
 check FAILs when an installed file differs from the repository (or the overlay), a managed file is missing, a
 retired skill or agent is still where it would load, a skill of the same name shadows one of ours (a plugin
@@ -48,6 +54,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -234,46 +241,138 @@ def codex_package(home):
     return next((d for d in link.resolve().parents if (d / "scripts/convert_helm.py").is_file()), None)
 
 
-def acceptance_gates(report):
+def known_failures_file(home):
+    return home / ".claude/.pipeline-codex-known.json"
+
+
+def known_failures(home):
+    """{gate: {"since", "reason", "by"}}: acceptance gates allowed to fail, each named at every install."""
+    f = known_failures_file(home)
     try:
-        return {g["name"]: g["status"] for g in json.loads(report.read_text()).get("gates", [])}
-    except (OSError, ValueError, KeyError, TypeError):
-        return {}
+        return json.loads(f.read_text()).get("gates", {}) if f.is_file() else {}
+    except ValueError:
+        raise SystemExit(f"install: {f} is not valid JSON; fix or remove it (it lists the Codex gates allowed to fail)")
+
+
+def save_known(home, gates):
+    known_failures_file(home).write_text(json.dumps({"gates": gates}, indent=1))
+
+
+def snapshot_package(pkg):
+    """A copy of the package (without its git folder), cloned copy-on-write where the disk allows."""
+    snap = Path(tempfile.mkdtemp(prefix=f".{pkg.name}.install-snapshot-", dir=pkg.parent))
+    for entry in pkg.iterdir():
+        if entry.name == ".git":
+            continue
+        if subprocess.run(["cp", "-cRp", str(entry), str(snap / entry.name)], capture_output=True).returncode != 0:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.copytree(entry, snap / entry.name, symlinks=True)
+            else:
+                shutil.copy2(entry, snap / entry.name, follow_symlinks=False)
+    return snap
+
+
+def restore_package(pkg, snap):
+    """Put the package back as it was before this install touched it: Codex keeps its last accepted copies."""
+    for entry in list(pkg.iterdir()):
+        if entry.name == ".git":
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    for entry in snap.iterdir():
+        os.replace(entry, pkg / entry.name)
+    shutil.rmtree(snap, ignore_errors=True)
 
 
 def sync_codex(home):
-    """Rebuild and reinstall Codex's copies from what was just installed: (fails, notes). The package's acceptance
-    is judged against its previous report: a gate that passed before and fails now fails the install; a gate that
-    was already failing is named every time, never hidden."""
+    """Rebuild and reinstall Codex's copies from what was just installed: (fails, notes). The package is copied
+    first; a converter or installer that fails, an acceptance that crashes or writes no report or disagrees with its
+    own exit code, and an acceptance gate that fails without being a known failure all restore the copy, so Codex
+    keeps its last accepted version, and fail the install. A known failure is named at every install and leaves the
+    list by itself once it passes; only the owner adds one (install.py codex-known)."""
     pkg = codex_package(home)
     if pkg is None:
         return [], (["no Codex package links into ~/.agents/skills, so Codex was not synced"]
                     if (home / ".agents/skills").is_dir() else [])
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home)}
     report = pkg / "validation/acceptance.json"
-    before = acceptance_gates(report)
-    steps = (("converter", [sys.executable, str(pkg / "scripts/convert_helm.py"), "--source", str(home / ".claude")]),
-             ("acceptance", [sys.executable, str(pkg / "scripts/acceptance.py"), "--root", str(pkg), "--json", str(report)]),
-             ("install", [sys.executable, str(pkg / "scripts/install_global.py"), "--install", "--home", str(home)]))
+    known = known_failures(home)
+    snap = snapshot_package(pkg)
     notes = []
-    for name, cmd in steps:
-        r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=pkg)
-        if name == "acceptance":
-            after = acceptance_gates(report)
-            if not after:
-                return [f"Codex acceptance wrote no report: {(r.stdout + r.stderr).strip()[-300:]}"], notes
-            newly = sorted(g for g, st in after.items() if st != "PASS" and before.get(g) == "PASS")
-            still = sorted(g for g, st in after.items() if st != "PASS" and before.get(g) != "PASS")
-            if newly:
-                return [f"Codex acceptance: {', '.join(newly)} passed before this install and fails now "
-                        f"(report {report})"], notes
-            if still:
-                notes.append(f"Codex acceptance: {len(still)} gate(s) already failing before this install still fail: "
-                             f"{', '.join(still)} (report {report})")
-        elif r.returncode != 0:
-            return [f"Codex {name} failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}"], notes
+
+    def failed(message):
+        kept = ""
+        if report.is_file():
+            keep = home / ".claude/_backups" / f"codex-acceptance-{datetime.datetime.now():%Y%m%dT%H%M%S}.json"
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(report, keep)
+            kept = f"; its report is kept at {keep}"
+        restore_package(pkg, snap)
+        return [message + kept + "; the package is restored, so Codex keeps its last accepted copies"], notes
+
+    r = subprocess.run([sys.executable, str(pkg / "scripts/convert_helm.py"), "--source", str(home / ".claude")],
+                       capture_output=True, text=True, env=env, cwd=pkg)
+    if r.returncode != 0:
+        return failed(f"Codex converter failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}")
+    if report.exists():
+        report.unlink()
+    r = subprocess.run([sys.executable, str(pkg / "scripts/acceptance.py"), "--root", str(pkg), "--json", str(report)],
+                       capture_output=True, text=True, env=env, cwd=pkg)
+    try:
+        gates = {g["name"]: g["status"] for g in json.loads(report.read_text())["gates"]}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return failed(f"Codex acceptance wrote no readable report (exit {r.returncode}, {exc.__class__.__name__}): "
+                      f"{(r.stdout + r.stderr).strip()[-300:]}")
+    failing = sorted(g for g, st in gates.items() if st != "PASS")
+    if bool(failing) != (r.returncode != 0):
+        return failed(f"Codex acceptance exited {r.returncode} while its report lists {len(failing)} failing gate(s)")
+    unknown = [g for g in failing if g not in known]
+    if unknown:
+        return failed(f"Codex acceptance: {', '.join(unknown)} fail and are not known failures (a known failure is "
+                      "added only by the owner: install.py codex-known <gate> --reason ... --quote ...)")
+    healed = sorted(g for g in known if g not in failing)
+    if healed:
+        save_known(home, {g: v for g, v in known.items() if g not in healed})
+        notes.append(f"Codex acceptance: {', '.join(healed)} pass now and left the known failures")
+    for g in failing:
+        notes.append(f"Codex acceptance: {g} still fails, a known failure since {known[g].get('since')} "
+                     f"({known[g].get('reason')})")
+    r = subprocess.run([sys.executable, str(pkg / "scripts/install_global.py"), "--install", "--home", str(home)],
+                       capture_output=True, text=True, env=env, cwd=pkg)
+    if r.returncode != 0:
+        return failed(f"Codex installer failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}")
+    shutil.rmtree(snap, ignore_errors=True)
     notes.append(f"Codex synced from the package at {pkg}")
     return [], notes
+
+
+def cmd_codex_known(home, argv):
+    """Add an acceptance gate to the known failures, on the owner's words proven in their transcript."""
+    gate = argv[1] if len(argv) > 1 and not argv[1].startswith("--") else None
+    opts = {argv[i]: argv[i + 1] for i in range(len(argv) - 1) if argv[i].startswith("--")}
+    if not gate or not opts.get("--reason") or not opts.get("--quote"):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    sys.path.insert(0, str(REPO / "skills/_shared/scripts"))
+    from rulings import find_quote, resolve_transcript
+    from session_env import current
+    session = opts.get("--session")
+    if not session:
+        tool, sid = current()
+        session = f"codex:{sid}" if tool == "codex" else sid
+    path = resolve_transcript(session) if session else None
+    if not path or not find_quote(path, opts["--quote"]):
+        print("FAIL   install     the quote is not a whole sentence or message the owner typed in that session; only "
+              "the owner adds a known failure")
+        return 1
+    known = known_failures(home)
+    known[gate] = {"since": datetime.date.today().isoformat(), "reason": opts["--reason"],
+                   "by": f"owner: \"{opts['--quote']}\" (session {session})"}
+    save_known(home, known)
+    print(f"install: {gate} is a known Codex failure now; every install names it until it passes")
+    return 0
 
 
 def registered_commands(home):
@@ -325,17 +424,19 @@ def codex_conversion_check(home, want):
         if rel:
             recorded[rel.strip()] = digest.strip()
     fails, claude = [], home / ".claude"
+    fix = "install.py apply rebuilds them" if codex_package(home) else \
+        "the package ~/.agents/skills links into has no scripts/convert_helm.py for install.py to run; rebuild it by hand"
     stale = [str(dst.relative_to(claude)) for dst in sorted(want) if dst.is_file()
              and str(dst.relative_to(claude)) in recorded and recorded[str(dst.relative_to(claude))] != sha(dst)]
     if stale:
         fails.append(f"Codex's copies were converted from older versions of {len(stale)} file(s) ({', '.join(stale[:5])}"
-                     + (" ..." if len(stale) > 5 else "") + "): install.py apply rebuilds them")
+                     + (" ..." if len(stale) > 5 else "") + "): " + fix)
     # Every managed file must be carried, except the hooks, which Codex runs from ~/.claude/hooks directly.
     absent = [str(dst.relative_to(claude)) for dst in sorted(want)
               if dst.relative_to(claude).parts[0] != "hooks" and str(dst.relative_to(claude)) not in recorded]
     if absent:
         fails.append(f"Codex's package does not carry {len(absent)} installed file(s) ({', '.join(absent[:5])}"
-                     + (" ..." if len(absent) > 5 else "") + "): install.py apply rebuilds them")
+                     + (" ..." if len(absent) > 5 else "") + "): " + fix)
     return fails
 
 
@@ -440,10 +541,12 @@ def cmd_check(home):
 
 
 def main(argv):
-    if not argv or argv[0] not in ("plan", "apply", "check"):
+    if not argv or argv[0] not in ("plan", "apply", "check", "codex-known"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     home = Path(argv[argv.index("--home") + 1]) if "--home" in argv else Path.home()
+    if argv[0] == "codex-known":
+        return cmd_codex_known(home, argv)
     if argv[0] == "apply":
         return cmd_apply(home, overwrite="--overwrite-live-edits" in argv, no_codex="--no-codex" in argv)
     return {"plan": cmd_plan, "check": cmd_check}[argv[0]](home)
