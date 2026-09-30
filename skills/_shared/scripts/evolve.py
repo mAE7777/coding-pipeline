@@ -750,7 +750,7 @@ def measure(tree, suite, runs):
         r = subprocess.run([sys.executable, str(tree / path), *([name] if name else [])], capture_output=True,
                            text=True, cwd=tree)
         out = r.stdout + r.stderr
-        return {"outcome": unittest_outcome(r.returncode, out), "tail": out[-1500:]}
+        return {"outcome": unittest_outcome(r.returncode, out), "error": error_line(out), "tail": out[-1500:]}
     raise ValueError(f"unknown suite {suite}")
 
 
@@ -997,23 +997,49 @@ def fingerprint(base, head, suites=()):
 ERROR_LINE = re.compile(r"^\s*[\w.]*(Error|Exception|Exit)\b")
 
 
+def error_line(out):
+    """The exception line of a test's output: the first unindented line after its last traceback's frames, or, in
+    output without a traceback, its last error line; None when there is none."""
+    lines = (out or "").splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].startswith("Traceback (most recent call last):"):
+            return next((l.strip() for l in lines[i + 1:] if l.strip() and not l.startswith(" ")), None)
+    found = [l.strip() for l in lines if ERROR_LINE.match(l.strip())]
+    return found[-1] if found else None
+
+
+def run_varying_reduced(line):
+    """An error line with what differs from one run of the same failure to the next reduced (paths, commit ids and
+    addresses, numbers); its words and quoted text stay, so two different failed comparisons stay different."""
+    t = re.sub(r"(~|\.{0,2})?(/[\w.@+-]+)+/?", "<path>", line)
+    t = re.sub(r"\b(0x)?[0-9a-f]{7,}\b", "<id>", t)
+    t = re.sub(r"\d+", "<n>", t)
+    return re.sub(r"\s+", " ", t).strip()[:300]
+
+
 def reason_of(m):
-    """Why one measurement failed, reduced to what stays the same from run to run: which fixtures, scenarios, or
-    suites failed; for a test, its outcome and its last error line with paths, ids, numbers, and quoted values
-    reduced (a commit id or an address in the message must not make two runs of the same failure differ)."""
+    """Why one measurement failed, in what stays the same from run to run: which fixtures, scenarios, or suites
+    failed; for a test, its outcome and its exception line, run-varying text reduced. None when a test's exception
+    line was not stored (a reason that cannot be told never passes for the same one)."""
     for field in ("fixtures", "scenarios", "suites"):
         if field in m:
             failed = sorted(k for k, v in m[field].items() if (not all(v) if isinstance(v, list) else v != "PASS"))
             return f"{field} failing: {', '.join(failed) or 'none'}"
-    lines = [l.strip() for l in (m.get("tail") or "").splitlines() if ERROR_LINE.match(l.strip())]
-    return f"{m.get('outcome', 'no outcome')}: " + (signature("error", lines[-1]) if lines else "no error line stored")
+    line = m.get("error") or error_line(m.get("tail"))
+    return f"{m.get('outcome', 'no outcome')}: {run_varying_reduced(line)}" if line else None
 
 
 def failure_reason(base, suite, instrument):
-    """reason_of the latest measurement of a reproduction at the base; None when the base was never measured, so a
-    reason that cannot be told never passes for the same one."""
+    """reason_of the latest measurement of a reproduction at the base; None when the base was never measured."""
     runs = stored(base, suite, instrument)
     return reason_of(runs[-1]["measurements"][-1]) if runs else None
+
+
+def review_record(base, head, suites, pack):
+    """What a review writes beside its result: the commits, when, the pack's hash, and the fingerprint of what it
+    covers."""
+    return {"base": base, "head": head, "reviewed": now(), "pack_sha256": hashlib.sha256(pack.read_bytes()).hexdigest(),
+            **fingerprint(base, head, suites)}
 
 
 def review_covers(meta, base, head, suites=()):
@@ -1126,9 +1152,7 @@ def cmd_review(argv):
                             *(["--agent-file", str(agent)] if agent.is_file() else [])], capture_output=True, text=True)
     finally:
         shutil.rmtree(tree, ignore_errors=True)
-    (out / "meta.json").write_text(json.dumps({"base": base, "head": head, "reviewed": now(),
-                                               "pack_sha256": hashlib.sha256((out / "pack.md").read_bytes()).hexdigest(),
-                                               **fingerprint(base, head, suites)}))
+    (out / "meta.json").write_text(json.dumps(review_record(base, head, suites, out / "pack.md")))
     result = out / "change-reviewer.result.md"
     data, why = read_verdict(result.read_text(encoding="utf-8")) if result.is_file() else (None, "no result file")
     body = re.sub(r"^Result:.*$", f"Result: {result}", text, count=1, flags=re.M)

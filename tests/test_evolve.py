@@ -353,7 +353,18 @@ class Rule(unittest.TestCase):
         self.assertEqual(evolve.reason_of({"fixtures": {"probe-inbox": [False, True], "other": [True]}}),
                          "fixtures failing: probe-inbox")
         self.assertEqual(evolve.reason_of({"scenarios": {"adopt": "FAIL", "plan": "PASS"}}), "scenarios failing: adopt")
-        self.assertEqual(evolve.reason_of({"outcome": "fail", "tail": "...cut off"}), "fail: no error line stored")
+        # Two different failed comparisons stay different.
+        self.assertNotEqual(evolve.reason_of({"outcome": "fail", "error": "AssertionError: 'the review was of another commit' != 'ok'"}),
+                            evolve.reason_of({"outcome": "fail", "error": "AssertionError: 'a KeyError in the ledger reader' != 'ok'"}))
+        # A long message pushes the exception line out of the stored tail; the full output's line is kept apart.
+        out = ("F\n" + "=" * 70 + "\nFAIL: test_x (t.T.test_x)\n" + "-" * 70 + "\nTraceback (most recent call last):\n"
+               "  File \"t.py\", line 3, in test_x\n    self.assertEqual(r.returncode, 0, r.stdout)\n"
+               "AssertionError: 1 != 0 : PASS   first line of a long report\n" + "PASS   another line\n" * 200 +
+               "\n" + "-" * 70 + "\nRan 1 test in 0.1s\n\nFAILED (failures=1)\n")
+        self.assertEqual(evolve.error_line(out), "AssertionError: 1 != 0 : PASS   first line of a long report")
+        self.assertIsNone(evolve.reason_of({"outcome": "fail", "tail": out[-1500:]}), "a reason that cannot be told")
+        self.assertEqual(evolve.reason_of({"outcome": "fail", "error": evolve.error_line(out), "tail": out[-1500:]}),
+                         "fail: AssertionError: <n> != <n> : PASS first line of a long report")
 
     def test_a_verdict_with_a_raw_control_character_is_read(self):
         # A reviewer quoting command output can leave a raw tab or newline inside a JSON string; the verdict stands.
@@ -536,14 +547,15 @@ class Loop(unittest.TestCase):
         self.bench_both()
         self.change()
         self.review()
-        # What this version's review records: its fingerprint with the reproductions' failure reasons, or, before
-        # reviews carried one, the head alone.
+        # What this version's review writes beside its result, or, before reviews carried a fingerprint, the head alone.
         meta = self.ledger / "changes/CHG-0001-review/meta.json"
-        fp = {}
-        if hasattr(evolve, "fingerprint"):
-            fp = self.in_repo(evolve.fingerprint, self.base, self.head, [REPRO])
-            self.assertIn("<id>", fp["repro_failures"][REPRO])
-        meta.write_text(json.dumps({"base": self.base, "head": self.head, **fp}))
+        record = {"base": self.base, "head": self.head}
+        if hasattr(evolve, "review_record"):
+            pack = self.ledger / "changes/CHG-0001-review/pack.md"
+            pack.write_text("the pack\n")
+            record = self.in_repo(evolve.review_record, self.base, self.head, [REPRO], pack)
+            self.assertIn("<id>", record["repro_failures"][REPRO])
+        meta.write_text(json.dumps(record))
         self.rebase_onto_new_main("notes.txt", "an unrelated file\n")
         self.bench_both()
         r = run("record", "CHG-0001", env=self.env)
