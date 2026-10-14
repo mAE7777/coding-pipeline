@@ -65,17 +65,33 @@ def claude(prompt, cwd, out, timeout=5400, resume=None):
             f.write(f"a session ran past the {timeout}s limit and was stopped\n")
     with open(out, "a", encoding="utf-8") as f:
         f.write(stdout)
-    result, session = "", None
+    # Every answer the session gave, in order: a turn's result event, with what was written before an output-limit
+    # cut put back in front (the event holds only the resumed part); a later turn (a background notice) follows it.
+    answers, texts, cut, session = [], [], [], None
     for line in stdout.splitlines():
         try:
             ev = json.loads(line)
         except ValueError:
             continue
-        if ev.get("type") == "system" and ev.get("subtype") == "init":
-            session = ev.get("session_id")
-        if ev.get("type") == "result":
-            result = ev.get("result") or ""
-    return result, session, code
+        kind = ev.get("type")
+        if kind == "system" and ev.get("subtype") == "init":
+            session = session or ev.get("session_id")
+        elif kind == "assistant":
+            for block in (ev.get("message") or {}).get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    texts, cut = [], []
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(block.get("text") or "")
+        elif kind == "user":
+            content = (ev.get("message") or {}).get("content")
+            blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
+            limit = any(isinstance(b, dict) and (b.get("text") or "").startswith("Output token limit hit.") for b in blocks)
+            cut = cut + ["".join(texts)] if limit else []
+            texts = []
+        elif kind == "result":
+            answers.append("".join(cut) + (ev.get("result") or ""))
+            texts, cut = [], []
+    return "\n\n".join(answers), session, code
 
 
 def run(cmd, cwd=None):

@@ -281,6 +281,34 @@ class StreamTest(unittest.TestCase):
         info = ri.parse_claude_stream(lines)
         self.assertEqual(info["result"], '```json\n{"points": [{"quote": "a"}, {"quote": "b"}]}\n```',
                          "the part before the cut is part of the answer; the text before a tool call is not")
+        self.assertEqual(info["output_limit_cuts"], 1, "the join is on record")
+        self.assertEqual(info["result_last_event"], '{"quote": "b"}]}\n```')
+
+    def test_an_answer_restarted_after_the_cut_is_taken_whole(self):
+        limit = json.dumps({"type": "user", "isSynthetic": True, "message": {"content": [
+            {"type": "text", "text": "Output token limit hit. Resume directly."}]}})
+        whole = '```json\n{"verdict": "ACCEPT", "findings": []}\n```'
+        lines = [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": '```json\n{"verd'}]}}),
+                 limit,
+                 json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": whole}]}}),
+                 json.dumps({"type": "result", "result": whole, "num_turns": 2, "is_error": False})]
+        self.assertEqual(ri.parse_claude_stream(lines)["result"], whole)
+
+    def test_a_turn_opened_by_a_background_notice_keeps_the_verdict_before_it(self):
+        verdict = 'Findings above.\n```json\n{"verdict": "CHANGES"}\n```'
+        lines = [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": verdict}]}}),
+                 json.dumps({"type": "result", "result": verdict, "num_turns": 9, "is_error": False}),
+                 json.dumps({"type": "system", "subtype": "task_notification", "status": "completed"}),
+                 json.dumps({"type": "system", "subtype": "init", "session_id": "S"}),
+                 json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}}),
+                 json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "log"}]}}),
+                 json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "The run was busy; the review above stands."}]}}),
+                 json.dumps({"type": "result", "result": "The run was busy; the review above stands.", "num_turns": 11,
+                             "is_error": False})]
+        info = ri.parse_claude_stream(lines)
+        self.assertIn('{"verdict": "CHANGES"}', info["result"], "the verdict is not lost to the later turn")
+        self.assertTrue(info["result"].endswith("the review above stands."))
+        self.assertEqual(info["answers"], 2)
 
     def test_parse_codex_stream_and_unavailable(self):
         lines = [json.dumps({"type": "thread.started", "thread_id": "T"}),
