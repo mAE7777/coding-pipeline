@@ -152,9 +152,13 @@ def protocols_dir():
     return first_existing(HOME / ".claude/skills/gate/references", HERE.parents[1] / "gate/references")
 
 
+MADE = []  # the private folders this process made; run_once removes the ones its run made, however it ends
+
+
 def private_tmp_dir():
     d = HOME / ".gate-copies" / f"tmp-{secrets.token_hex(6)}"
     d.mkdir(parents=True, mode=0o700)
+    MADE.append(d)
     return d
 
 
@@ -537,6 +541,7 @@ def codex_cmd(role, opts, workdir, stem, sid):
     codex = str(Path(codex).resolve())
     home = HOME / ".gate-copies" / f"codex-home-{secrets.token_hex(6)}"
     home.mkdir(parents=True, mode=0o700)
+    MADE.append(home)
     if (HOME / ".codex/auth.json").exists():
         (home / "auth.json").symlink_to(HOME / ".codex/auth.json")
     private_tmp = private_tmp_dir()
@@ -565,33 +570,32 @@ def run_once(role, family, opts, workdir, stem, pack):
     result_path.unlink(missing_ok=True)  # an earlier attempt's result must never stand in for this one
     for side in (".result.last-event.md", ".result.earlier-answers.md"):  # nor its side files
         Path(str(stem) + side).unlink(missing_ok=True)
-    if family == "codex":
-        cmd, env, extra = codex_cmd(role, opts, workdir, stem, sid)
-        if cmd is None:
-            return {"status": "UNAVAILABLE", "reason": extra["unavailable"], "family": "codex"}
-        stdin = extra.pop("prefix") + pack
-    else:
-        cmd, env, extra = claude_cmd(role, opts, workdir, stem, sid)
-        stdin = pack
-    if opts.get("dry_run"):
-        extra.pop("last_message", None)
-        for key in ("codex_home", "private_tmp"):
-            if extra.get(key):
-                shutil.rmtree(extra[key], ignore_errors=True)
-        return {"status": "DRY_RUN", "cmd": cmd, "cwd": str(workdir), "stdin_chars": len(stdin), "family": family,
-                "env_session_id_passed": "CLAUDE_CODE_SESSION_ID" in env, "env_codex_thread_passed": "CODEX_THREAD_ID" in env,
-                "env_heavy_owner": env.get("HEAVY_OWNER"), "env_claude_tmpdir": "CLAUDE_CODE_TMPDIR" in env,
-                **{k: v for k, v in extra.items() if k != "prefix"}}
+    made, extra = len(MADE), {}
     try:
+        if family == "codex":
+            cmd, env, extra = codex_cmd(role, opts, workdir, stem, sid)
+            if cmd is None:
+                return {"status": "UNAVAILABLE", "reason": extra["unavailable"], "family": "codex"}
+            stdin = extra.pop("prefix") + pack
+        else:
+            cmd, env, extra = claude_cmd(role, opts, workdir, stem, sid)
+            stdin = pack
+        if opts.get("dry_run"):
+            extra.pop("last_message", None)
+            return {"status": "DRY_RUN", "cmd": cmd, "cwd": str(workdir), "stdin_chars": len(stdin), "family": family,
+                    "env_session_id_passed": "CLAUDE_CODE_SESSION_ID" in env,
+                    "env_codex_thread_passed": "CODEX_THREAD_ID" in env,
+                    "env_heavy_owner": env.get("HEAVY_OWNER"), "env_claude_tmpdir": "CLAUDE_CODE_TMPDIR" in env,
+                    **{k: v for k, v in extra.items() if k != "prefix"}}
         return launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, result_path)
     finally:
-        # Also when the run is stopped (the gate stops a round's process group): no private folder is left behind
-        # and no lease stays held.
+        # However the run ends, a stop included (the gate stops a round's process group), even one that arrives
+        # while the command is still being built: no private folder is left behind and no lease stays held.
         owner = extra.get("owner") or opts.get("resume") or sid
         subprocess.run([sys.executable, str(HERE / "heavy.py"), "release", "--owner", owner], capture_output=True)
-        for key in ("codex_home", "private_tmp"):
-            if extra.get(key):
-                shutil.rmtree(extra[key], ignore_errors=True)
+        for d in MADE[made:]:
+            shutil.rmtree(d, ignore_errors=True)
+        del MADE[made:]
 
 
 def launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, result_path):
