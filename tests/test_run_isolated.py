@@ -266,6 +266,22 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(info["tools_seen"], ["Read", "Bash"])
         self.assertEqual(len(info["denials"]), 1)
 
+    def test_an_answer_continued_past_the_output_limit_is_kept_whole(self):
+        def say(text, mid):
+            return json.dumps({"type": "assistant", "message": {"id": mid, "content": [{"type": "text", "text": text}]}})
+        limit = json.dumps({"type": "user", "isSynthetic": True, "message": {"role": "user", "content": [
+            {"type": "text", "text": "Output token limit hit. Resume directly — no apology, no recap of what you were "
+                                     "doing. Pick up mid-thought if that is where the cut happened."}]}})
+        lines = [say("I will read the sources first.", "m0"),
+                 json.dumps({"type": "assistant", "message": {"id": "m0", "content": [{"type": "tool_use", "name": "Read"}]}}),
+                 json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "file text"}]}}),
+                 say('```json\n{"points": [{"quote": "a"}, ', "m1"), limit,
+                 say('{"quote": "b"}]}\n```', "m2"),
+                 json.dumps({"type": "result", "result": '{"quote": "b"}]}\n```', "num_turns": 2, "is_error": False})]
+        info = ri.parse_claude_stream(lines)
+        self.assertEqual(info["result"], '```json\n{"points": [{"quote": "a"}, {"quote": "b"}]}\n```',
+                         "the part before the cut is part of the answer; the text before a tool call is not")
+
     def test_parse_codex_stream_and_unavailable(self):
         lines = [json.dumps({"type": "thread.started", "thread_id": "T"}),
                  json.dumps({"type": "item.completed", "item": {"type": "command_execution"}}),
