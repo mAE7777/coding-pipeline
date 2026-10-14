@@ -287,8 +287,50 @@ class GateShTest(unittest.TestCase):
             (farm / "python3").unlink(missing_ok=True)
             (farm / "python3").symlink_to(shutil.which("python3"))
             out = run(d, PATH=str(farm))
-            self.assertRegex(out, r"NOT_RUN\s+record-tracked\s+git is not installed")
-            self.assertRegex(out, r"NOT_RUN\s+pipeline-traces\s+git is not installed")
+            for check in ("record-tracked", "pipeline-traces", "env-files"):
+                self.assertRegex(out, rf"FAIL\s+{check}\s+git is not installed", "the gate cannot vouch, so it says so")
+            self.assertIn("RESULT: FAIL", out, "nothing unchecked hides under a green summary")
+        # A rule file the operating system will not let git open (a sandbox, privacy protection) is not absent.
+        if shutil.which("sandbox-exec"):
+            with tempfile.TemporaryDirectory() as d:
+                repo(d)
+                rules = Path(d) / "rules"
+                rules.write_text("fix-log.md\n")
+                subprocess.run(["git", "-C", d, "config", "core.excludesFile", str(rules)], check=True, env=GIT_ENV)
+                real = str(rules.resolve())
+                profile = f'(version 1) (allow default) (deny file-read* (literal "{real}"))'
+                out = subprocess.run(["sandbox-exec", "-p", profile, "bash", str(GATE), d], capture_output=True,
+                                     text=True, timeout=300, env=GIT_ENV).stdout
+                self.assertNotIn("PASS   record-tracked", out, out[-600:])
+                self.assertIn("rules", out)
+        # Through a symlink to a project in a subfolder of its repository, the repository is still found.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "repo"
+            proj = root / "apps/tally"
+            (proj / "docs/project").mkdir(parents=True)
+            (proj / "docs/project/fix-log.md").write_text("# Fix log\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True, env=GIT_ENV)
+            (root / ".gitignore").write_text("fix-log.md\n")
+            sys.path.insert(0, str(ROOT / "skills/_shared/scripts"))
+            from project_policy import set_mode
+            set_mode(proj, True)
+            link = Path(d) / "tally-link"
+            link.symlink_to(proj, target_is_directory=True)
+            out = run(link)
+            self.assertIn("FAIL   record-tracked", out, out[-600:])
+            self.assertIn("docs/project/fix-log.md", out)
+        # With GIT_CONFIG_GLOBAL set, git never reads the XDG config, so an unreadable one is no reason to fail.
+        with tempfile.TemporaryDirectory() as d:
+            repo(d)
+            xdg = Path(d) / "home/.config/git"
+            xdg.mkdir(parents=True)
+            (xdg / "config").write_text("[core]\n")
+            (xdg / "config").chmod(0)
+            try:
+                out = run(d, HOME=str(Path(d) / "home"), XDG_CONFIG_HOME=str(Path(d) / "home/.config"))
+            finally:
+                (xdg / "config").chmod(0o644)
+            self.assertIn("PASS   record-tracked", out, out[-600:])
 
 
 if __name__ == "__main__":

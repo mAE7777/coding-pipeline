@@ -83,7 +83,9 @@ else
   fi
 fi
 
-if [ -d .git ] && command -v git >/dev/null 2>&1; then
+if [ -e .git ] && ! command -v git >/dev/null 2>&1; then
+  report FAIL env-files "git is not installed here, so tracked env files cannot be listed (install git, or run the gate where it is)"
+elif [ -e .git ]; then
   ENVTRACKED=$(git ls-files 2>/dev/null | grep -E '(^|/)\.env(\.[A-Za-z0-9]+)?$' | grep -viE 'example|sample|template' | head -3 | tr '\n' ' ')
   if [ -n "${ENVTRACKED// /}" ]; then
     report FAIL env-files "tracked env file(s): $ENVTRACKED"
@@ -427,9 +429,9 @@ else
   report PASS ai-traces "no AI fingerprints"
 fi
 # Committed build-record files read as a human team's documents: no pipeline or tooling names in them.
-if [ -d .git ] && ! command -v git >/dev/null 2>&1; then
-  report NOT_RUN pipeline-traces "git is not installed here, so the committed record files could not be listed"
-elif [ -d .git ]; then
+if [ -e .git ] && ! command -v git >/dev/null 2>&1; then
+  report FAIL pipeline-traces "git is not installed here, so the committed record files cannot be listed (install git, or run the gate where it is)"
+elif [ -e .git ]; then
   TRACKED=$(git ls-files -- docs/project AGENTS.md CLAUDE.md 2>/dev/null | grep -E '\.md$')
   PT=""
   if [ -n "$TRACKED" ]; then
@@ -450,13 +452,13 @@ fi
 # Record files meant to be committed must reach git: an ignore rule anywhere (the project's, or one set for the
 # whole machine) would keep them out silently. The project may sit in a subfolder of its repository.
 GIT_ABOVE=""
-D=$PWD
+D=$(pwd -P)  # the real path, as git's: through a symlink the walk still meets the repository
 while [ -n "$D" ] && [ "$D" != "/" ]; do
   [ -e "$D/.git" ] && { GIT_ABOVE=$D; break; }
   D=$(dirname "$D")
 done
 if [ -n "$GIT_ABOVE" ] && ! command -v git >/dev/null 2>&1; then
-  report NOT_RUN record-tracked "git is not installed here, so whether record files are ignored was not checked"
+  report FAIL record-tracked "git is not installed here, so whether record files are ignored cannot be checked (install git, or run the gate where it is)"
 elif [ -n "$GIT_ABOVE" ]; then
   if ! GITERR=$(git rev-parse --is-inside-work-tree 2>&1 >/dev/null); then
     WHY=$(printf '%s\n' "$GITERR" | grep -m1 'fatal:' || printf '%s\n' "$GITERR" | head -1)
@@ -467,10 +469,16 @@ elif [ -n "$GIT_ABOVE" ]; then
     TOP=$(git rev-parse --show-toplevel)
     EXCLUDES_FILE=$(git config --path core.excludesFile 2>/dev/null)
     # The config files that can name the ignore file are sources too: one git cannot read may name a rule it lost.
+    # GIT_CONFIG_GLOBAL, when set, is the only global config git reads; otherwise ~/.gitconfig and the XDG one.
+    if [ -n "${GIT_CONFIG_GLOBAL:-}" ]; then
+      GLOBALS=$GIT_CONFIG_GLOBAL
+    else
+      GLOBALS="${HOME:-}/.gitconfig
+${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/config"
+    fi
     RULES="$(git rev-parse --git-path info/exclude)
 ${EXCLUDES_FILE:-${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/ignore}
-${GIT_CONFIG_GLOBAL:-${HOME:-}/.gitconfig}
-${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/config
+$GLOBALS
 $(git rev-parse --git-path config)${GIT_CONFIG_SYSTEM:+
 $GIT_CONFIG_SYSTEM}"
     # git names the top folder by its real path, so the walk starts from the real path too (not a symlink's).
@@ -481,22 +489,24 @@ $D/.gitignore"
       [ "$D" = "$TOP" ] || [ "$D" = "/" ] && break
       D=$(dirname "$D")
     done
-    UNREADABLE=""
-    while IFS= read -r src; do
-      [ -n "$src" ] || continue
-      if [ -e "$src" ]; then
-        [ -r "$src" ] || UNREADABLE="$UNREADABLE $src"
-      else
-        # Missing, or hidden behind a folder that cannot be searched: the nearest folder above that exists tells.
-        UP=$(dirname "$src")
-        while [ ! -e "$UP" ] && [ "$UP" != "/" ] && [ "$UP" != "." ]; do UP=$(dirname "$UP"); done
-        if [ -d "$UP" ] && [ ! -x "$UP" ]; then
-          UNREADABLE="$UNREADABLE $src"
-        fi
-      fi
-    done <<RULES
-$RULES
-RULES
+    # Each source is opened: a missing one (or one under a missing folder) is absent and git loses nothing from it;
+    # any other failure (permission, a sandbox, macOS privacy, a folder in the way) means git may have lost rules.
+    # The error's kind decides, never its wording, which changes with the language.
+    UNREADABLE=$(printf '%s\n' "$RULES" | python3 -c '
+import sys
+for line in sys.stdin:
+    p = line.rstrip("\n")
+    if not p:
+        continue
+    try:
+        with open(p, "rb"):
+            pass
+    except (FileNotFoundError, NotADirectoryError):
+        continue
+    except OSError:
+        print(p)
+' | tr '\n' ' ')
+    UNREADABLE=${UNREADABLE:+ $UNREADABLE}
     HIDDEN=""
     UNCHECKED=""
     for f in docs/project/intent.md docs/project/milestones.md docs/project/interfaces.md docs/project/decisions.md \
