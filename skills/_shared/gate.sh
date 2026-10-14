@@ -427,7 +427,9 @@ else
   report PASS ai-traces "no AI fingerprints"
 fi
 # Committed build-record files read as a human team's documents: no pipeline or tooling names in them.
-if [ -d .git ] && command -v git >/dev/null 2>&1; then
+if [ -d .git ] && ! command -v git >/dev/null 2>&1; then
+  report NOT_RUN pipeline-traces "git is not installed here, so the committed record files could not be listed"
+elif [ -d .git ]; then
   TRACKED=$(git ls-files -- docs/project AGENTS.md CLAUDE.md 2>/dev/null | grep -E '\.md$')
   PT=""
   if [ -n "$TRACKED" ]; then
@@ -453,7 +455,9 @@ while [ -n "$D" ] && [ "$D" != "/" ]; do
   [ -e "$D/.git" ] && { GIT_ABOVE=$D; break; }
   D=$(dirname "$D")
 done
-if [ -n "$GIT_ABOVE" ] && command -v git >/dev/null 2>&1; then
+if [ -n "$GIT_ABOVE" ] && ! command -v git >/dev/null 2>&1; then
+  report NOT_RUN record-tracked "git is not installed here, so whether record files are ignored was not checked"
+elif [ -n "$GIT_ABOVE" ]; then
   if ! GITERR=$(git rev-parse --is-inside-work-tree 2>&1 >/dev/null); then
     WHY=$(printf '%s\n' "$GITERR" | grep -m1 'fatal:' || printf '%s\n' "$GITERR" | head -1)
     report FAIL record-tracked "git cannot read this repository, so no record file can be vouched for: $WHY"
@@ -462,9 +466,15 @@ if [ -n "$GIT_ABOVE" ] && command -v git >/dev/null 2>&1; then
     # means git's "not ignored" may be wrong, whatever git prints about it.
     TOP=$(git rev-parse --show-toplevel)
     EXCLUDES_FILE=$(git config --path core.excludesFile 2>/dev/null)
+    # The config files that can name the ignore file are sources too: one git cannot read may name a rule it lost.
     RULES="$(git rev-parse --git-path info/exclude)
-${EXCLUDES_FILE:-${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/ignore}"
-    D="$PWD/docs/project"
+${EXCLUDES_FILE:-${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/ignore}
+${GIT_CONFIG_GLOBAL:-${HOME:-}/.gitconfig}
+${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/config
+$(git rev-parse --git-path config)${GIT_CONFIG_SYSTEM:+
+$GIT_CONFIG_SYSTEM}"
+    # git names the top folder by its real path, so the walk starts from the real path too (not a symlink's).
+    D="$(pwd -P)/docs/project"
     while :; do
       RULES="$RULES
 $D/.gitignore"
@@ -477,10 +487,12 @@ $D/.gitignore"
       if [ -e "$src" ]; then
         [ -r "$src" ] || UNREADABLE="$UNREADABLE $src"
       else
-        case "$(ls -d "$src" 2>&1 >/dev/null)" in
-          ""|*"No such file"*|*"Not a directory"*) ;;
-          *) UNREADABLE="$UNREADABLE $src" ;;
-        esac
+        # Missing, or hidden behind a folder that cannot be searched: the nearest folder above that exists tells.
+        UP=$(dirname "$src")
+        while [ ! -e "$UP" ] && [ "$UP" != "/" ] && [ "$UP" != "." ]; do UP=$(dirname "$UP"); done
+        if [ -d "$UP" ] && [ ! -x "$UP" ]; then
+          UNREADABLE="$UNREADABLE $src"
+        fi
       fi
     done <<RULES
 $RULES
