@@ -284,31 +284,62 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(info["output_limit_cuts"], 1, "the join is on record")
         self.assertEqual(info["result_last_event"], '{"quote": "b"}]}\n```')
 
-    def test_an_answer_restarted_after_the_cut_is_taken_whole(self):
+    def test_an_answer_restarted_after_the_cut_never_reads_as_a_verdict(self):
+        """A model that writes its answer again from the start after a cut leaves a block that does not parse: no
+        verdict, never half of one; the cut is on record."""
         limit = json.dumps({"type": "user", "isSynthetic": True, "message": {"content": [
             {"type": "text", "text": "Output token limit hit. Resume directly."}]}})
         whole = '```json\n{"verdict": "ACCEPT", "findings": []}\n```'
-        lines = [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": '```json\n{"verd'}]}}),
+        lines = [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": 'Findings.\n```json\n{"verd'}]}}),
                  limit,
                  json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": whole}]}}),
                  json.dumps({"type": "result", "result": whole, "num_turns": 2, "is_error": False})]
-        self.assertEqual(ri.parse_claude_stream(lines)["result"], whole)
-
-    def test_a_turn_opened_by_a_background_notice_keeps_the_verdict_before_it(self):
-        verdict = 'Findings above.\n```json\n{"verdict": "CHANGES"}\n```'
-        lines = [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": verdict}]}}),
-                 json.dumps({"type": "result", "result": verdict, "num_turns": 9, "is_error": False}),
-                 json.dumps({"type": "system", "subtype": "task_notification", "status": "completed"}),
-                 json.dumps({"type": "system", "subtype": "init", "session_id": "S"}),
-                 json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}}),
-                 json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "log"}]}}),
-                 json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "The run was busy; the review above stands."}]}}),
-                 json.dumps({"type": "result", "result": "The run was busy; the review above stands.", "num_turns": 11,
-                             "is_error": False})]
         info = ri.parse_claude_stream(lines)
-        self.assertIn('{"verdict": "CHANGES"}', info["result"], "the verdict is not lost to the later turn")
-        self.assertTrue(info["result"].endswith("the review above stands."))
+        self.assertTrue(info["result"].startswith("Findings."), "nothing written before the cut is dropped")
+        self.assertEqual(info["output_limit_cuts"], 1)
+
+    def test_a_later_turn_is_the_result_and_earlier_answers_stay_apart(self):
+        """A background task's notice can open a turn after an answer; the final answer is the result (it may take
+        the earlier verdict back), and the earlier one is kept on record, never read as the verdict."""
+        verdict = 'Findings above.\n```json\n{"verdict": "PASS"}\n```'
+        later = "The background run finished: 4 tests fail, so the PASS above is wrong; this is a FAIL."
+        lines = [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": verdict}]}}),
+                 json.dumps({"type": "result", "result": verdict, "num_turns": 9, "is_error": False,
+                             "permission_denials": [{"tool_name": "Read", "tool_input": {"file_path": "/real/secret"}}],
+                             "usage": {"output_tokens": 100}, "total_cost_usd": 1.0, "duration_ms": 5}),
+                 json.dumps({"type": "system", "subtype": "task_notification", "status": "completed"}),
+                 json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": later}]}}),
+                 json.dumps({"type": "result", "result": later, "num_turns": 1, "is_error": False,
+                             "usage": {"output_tokens": 7}, "total_cost_usd": 1.2, "duration_ms": 3})]
+        info = ri.parse_claude_stream(lines)
+        self.assertEqual(info["result"], later, "an earlier verdict never stands over a later answer")
+        self.assertEqual(info["earlier_answers"], [verdict])
         self.assertEqual(info["answers"], 2)
+        self.assertEqual(len(info["denials"]), 1, "a denial in any turn counts")
+        self.assertEqual((info["usage"]["output"], info["usage"]["cost_usd"], info["turns"]), (107, 1.2, 10))
+
+    def test_an_unrecognized_synthetic_message_is_counted(self):
+        lines = [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "part one"}]}}),
+                 json.dumps({"type": "user", "isSynthetic": True, "message": {"content": [
+                     {"type": "text", "text": "Max output reached; carry on where you stopped."}]}}),
+                 json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "part two"}]}}),
+                 json.dumps({"type": "result", "result": "part two", "num_turns": 2, "is_error": False})]
+        self.assertEqual(ri.parse_claude_stream(lines)["unrecognized_synthetic"], 1, "a reworded notice shows")
+
+    def test_an_earlier_attempts_side_files_are_removed(self):
+        with tempfile.TemporaryDirectory() as d:
+            stem = Path(d) / "code-verifier"
+            for side in (".result.last-event.md", ".result.earlier-answers.md"):
+                Path(str(stem) + side).write_text("from an earlier attempt")
+            sys.path.insert(0, str(RI.parent))
+            saved = ri.claude_cmd
+            ri.claude_cmd = lambda *a, **k: (_ for _ in ()).throw(SystemExit(2))
+            try:
+                with self.assertRaises(SystemExit):
+                    ri.run_once("code-verifier", "claude", {}, Path(d), stem, "pack")
+            finally:
+                ri.claude_cmd = saved
+            self.assertFalse(any(Path(str(stem) + s).exists() for s in (".result.last-event.md", ".result.earlier-answers.md")))
 
     def test_parse_codex_stream_and_unavailable(self):
         lines = [json.dumps({"type": "thread.started", "thread_id": "T"}),

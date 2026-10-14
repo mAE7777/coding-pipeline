@@ -250,32 +250,22 @@ def agents_json(role, agent_file, out_path):
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-OUTPUT_LIMIT = "Output token limit hit."  # how Claude Code asks a model cut at its output limit to go on
-
-
-def last_block_parses(text):
-    """Whether the last fenced json block of a text parses: True, False, or None when it has none."""
-    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", text or "", flags=re.S)
-    if not blocks:
-        return None
-    try:
-        json.loads(blocks[-1], strict=False)
-        return True
-    except ValueError:
-        return False
+OUTPUT_LIMIT = re.compile(r"output token limit", re.I)  # how Claude Code asks a model cut at its output limit to go on
 
 
 def parse_claude_stream(lines):
-    """What a checker's stream says. The result is every answer the checker gave, in order. An answer is one turn's
-    result event; when it ran past the output limit, Claude Code asked the model to resume and the event holds only
-    the resumed part, so the parts written before each cut are put back in front (unless the model restarted the
-    answer whole, then the restart is the answer). A background task's notice can open another turn after the
-    answer; that turn's answer follows the first, so a verdict given before it is never lost. The number of answers,
-    the number of cuts joined, and the last event's own text are kept, so a joined result is never silent."""
-    info = {"session_id": None, "model": None, "tool_uses": 0, "denials": [], "turns": None,
-            "result": None, "is_error": None, "tools_seen": None, "answers": 0, "output_limit_cuts": 0,
-            "result_last_event": None}
+    """What a checker's stream says. The result is the checker's final answer: the last turn's result event, with
+    the parts written before an output-limit cut put back in front (Claude Code asks the model to resume, and the
+    event then holds only the resumed part). Earlier answers (a background task's notice can open another turn after
+    an answer) are kept apart, never taken for the result: a later turn may take an earlier verdict back. Denials,
+    errors, and token use count every turn. A synthetic message that is not a recognizable output-limit notice is
+    counted, so a reworded notice shows instead of silently cutting the answer."""
+    info = {"session_id": None, "model": None, "tool_uses": 0, "denials": [], "turns": 0,
+            "result": None, "is_error": None, "tools_seen": None, "answers": 0, "earlier_answers": [],
+            "output_limit_cuts": 0, "unrecognized_synthetic": 0, "result_last_event": None}
     texts, cut, answers = [], [], []  # the assistant's text since the last tool result; what came before a cut
+    usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "cost_usd": None, "duration_ms": None}
+    seen_result = False
     for line in lines:
         try:
             ev = json.loads(line)
@@ -296,33 +286,39 @@ def parse_claude_stream(lines):
         elif t == "user":
             content = (ev.get("message") or {}).get("content")
             blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
-            if any(isinstance(b, dict) and b.get("type") == "text" and (b.get("text") or "").startswith(OUTPUT_LIMIT)
-                   for b in blocks):
+            said = " ".join(b.get("text") or "" for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+            if said and OUTPUT_LIMIT.search(said):
                 cut.append("".join(texts))
             else:
+                if ev.get("isSynthetic") and said:
+                    info["unrecognized_synthetic"] += 1
                 cut = []
             texts = []
         elif t == "result":
             last = ev.get("result")
             info["result_last_event"] = last
             if isinstance(last, str):
-                answer = "".join(cut) + last
-                if cut and last_block_parses(answer) is False and last_block_parses(last):
-                    answer = last  # the model wrote its answer again from the start after the cut
                 info["output_limit_cuts"] += len(cut)
-                answers.append(answer)
+                answers.append("".join(cut) + last)
             texts, cut = [], []
-            info["turns"] = ev.get("num_turns")
-            info["is_error"] = ev.get("is_error")
-            info["denials"] = [str(d.get("tool_name")) + ":" + json.dumps(d.get("tool_input"))[:160]
-                               for d in ev.get("permission_denials") or []]
+            info["turns"] += ev.get("num_turns") or 0
+            info["is_error"] = bool(info["is_error"]) or bool(ev.get("is_error"))
+            info["denials"] += [str(d.get("tool_name")) + ":" + json.dumps(d.get("tool_input"))[:160]
+                                for d in ev.get("permission_denials") or []]
             info["session_id"] = info["session_id"] or ev.get("session_id")
             u = ev.get("usage") or {}
-            info["usage"] = {"input": u.get("input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
-                             "cache_read": u.get("cache_read_input_tokens", 0), "output": u.get("output_tokens", 0),
-                             "cost_usd": ev.get("total_cost_usd"), "duration_ms": ev.get("duration_ms")}
+            for k, src in (("input", "input_tokens"), ("cache_write", "cache_creation_input_tokens"),
+                           ("cache_read", "cache_read_input_tokens"), ("output", "output_tokens")):
+                usage[k] += u.get(src, 0) or 0
+            usage["cost_usd"] = ev.get("total_cost_usd")  # a running total for the session
+            if ev.get("duration_ms") is not None:
+                usage["duration_ms"] = (usage["duration_ms"] or 0) + ev["duration_ms"]
+            seen_result = True
+    if seen_result:
+        info["usage"] = usage
     info["answers"] = len(answers)
-    info["result"] = "\n\n".join(answers) if answers else None
+    info["earlier_answers"] = answers[:-1]
+    info["result"] = answers[-1] if answers else None
     return info
 
 
@@ -567,6 +563,8 @@ def run_once(role, family, opts, workdir, stem, pack):
     sid = str(uuid.uuid4())
     result_path = Path(str(stem) + ".result.md")
     result_path.unlink(missing_ok=True)  # an earlier attempt's result must never stand in for this one
+    for side in (".result.last-event.md", ".result.earlier-answers.md"):  # nor its side files
+        Path(str(stem) + side).unlink(missing_ok=True)
     if family == "codex":
         cmd, env, extra = codex_cmd(role, opts, workdir, stem, sid)
         if cmd is None:
@@ -641,8 +639,11 @@ def launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, resul
     elif info["result"] is not None:
         result_path.write_text(info["result"])
         if info.get("result_last_event") not in (None, info["result"]):
-            # the result was put together (cuts joined, later turns added): the last event's own text stays beside it
+            # cuts were joined into the result: the last event's own text stays beside it
             Path(str(stem) + ".result.last-event.md").write_text(info["result_last_event"])
+        if info.get("earlier_answers"):
+            # the checker answered more than once: its earlier answers are kept, apart from the final one
+            Path(str(stem) + ".result.earlier-answers.md").write_text("\n\n---\n\n".join(info["earlier_answers"]))
     canary_hits = [c for c in opts["canary"] if c in stream or c in (info["result"] or "")]
     reason = codex_unavailable(info, err) if family == "codex" and (code != 0 or info.get("errors")) else None
     if family == "codex" and not reason and code in (126, 127) and info["result"] is None:
@@ -660,6 +661,7 @@ def launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, resul
     return {"status": status, "family": family, "exit_code": code, "session_id": info["session_id"] or sid,
             "model": info["model"], "tool_uses": info["tool_uses"], "turns": info["turns"], "usage": info.get("usage"),
             "answers": info.get("answers"), "output_limit_cuts": info.get("output_limit_cuts"),
+            "unrecognized_synthetic": info.get("unrecognized_synthetic"),
             "denials": info["denials"], "tools_seen": info.get("tools_seen"), "canary_hits": canary_hits,
             "unavailable_reason": reason, "errors": info.get("errors"), "stderr_tail": (err or "")[-400:],
             "agent_file": extra.get("agent_file"), "agent_sha256": extra.get("agent_sha256"),

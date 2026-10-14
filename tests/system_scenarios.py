@@ -65,8 +65,8 @@ def claude(prompt, cwd, out, timeout=5400, resume=None):
             f.write(f"a session ran past the {timeout}s limit and was stopped\n")
     with open(out, "a", encoding="utf-8") as f:
         f.write(stdout)
-    # Every answer the session gave, in order: a turn's result event, with what was written before an output-limit
-    # cut put back in front (the event holds only the resumed part); a later turn (a background notice) follows it.
+    # The session's final answer, as the runner reads a checker's: the last turn's result event, with what was
+    # written before an output-limit cut put back in front (the event holds only the resumed part).
     answers, texts, cut, session = [], [], [], None
     for line in stdout.splitlines():
         try:
@@ -85,13 +85,13 @@ def claude(prompt, cwd, out, timeout=5400, resume=None):
         elif kind == "user":
             content = (ev.get("message") or {}).get("content")
             blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
-            limit = any(isinstance(b, dict) and (b.get("text") or "").startswith("Output token limit hit.") for b in blocks)
+            limit = any(isinstance(b, dict) and "output token limit" in (b.get("text") or "").lower() for b in blocks)
             cut = cut + ["".join(texts)] if limit else []
             texts = []
         elif kind == "result":
             answers.append("".join(cut) + (ev.get("result") or ""))
             texts, cut = [], []
-    return "\n\n".join(answers), session, code
+    return (answers[-1] if answers else ""), session, code
 
 
 def run(cmd, cwd=None):
