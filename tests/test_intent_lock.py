@@ -84,6 +84,11 @@ class IntentLockTest(unittest.TestCase):
         return subprocess.run([sys.executable, str(RULINGS), "record", str(self.project), "--id", did, "--quote", quote],
                               capture_output=True, text=True, env=self.env)
 
+    def test_the_project_folder_names_its_intent_file(self):
+        by_file, by_folder = self.run_l("lint", str(self.intent)), self.run_l("lint", str(self.project))
+        self.assertEqual((by_folder.returncode, by_folder.stdout), (by_file.returncode, by_file.stdout), by_folder.stderr)
+        self.assertEqual(self.run_l("hash", str(self.project)).stdout, self.run_l("hash", str(self.intent)).stdout)
+
     def test_lint_passes_a_complete_intent(self):
         out = self.run_l("lint", str(self.intent))
         self.assertEqual(out.returncode, 0, out.stdout)

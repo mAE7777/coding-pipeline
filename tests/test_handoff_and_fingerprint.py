@@ -184,6 +184,17 @@ class HandoffCheckTest(unittest.TestCase):
             code, out = check(d, packet(d))
             self.assertEqual(code, 0, out)
 
+    def test_the_project_folder_or_the_packet_alone_is_enough(self):
+        with tempfile.TemporaryDirectory() as d:
+            project(d)
+            p = packet(d)
+            latest = Path(d) / "docs/project/handoffs/latest.md"
+            latest.parent.mkdir(parents=True, exist_ok=True)
+            latest.write_text(Path(p).read_text())
+            for args in ([d], [str(latest)]):
+                out = subprocess.run([sys.executable, str(HC), *args], capture_output=True, text=True, cwd="/")
+                self.assertEqual(out.returncode, 0, f"{args}: {out.stdout}{out.stderr}")
+
     def test_dropped_constraint_fails(self):
         with tempfile.TemporaryDirectory() as d:
             project(d)

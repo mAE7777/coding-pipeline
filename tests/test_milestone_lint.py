@@ -65,6 +65,16 @@ def run(text, extra=("--no-history",), cwd=None, name="milestones.md"):
 
 
 class MilestoneLintTest(unittest.TestCase):
+    def test_the_project_folder_names_its_milestones_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "docs/project").mkdir(parents=True)
+            (Path(d) / "docs/project/milestones.md").write_text(GOOD, encoding="utf-8")
+            by_file = subprocess.run([sys.executable, str(LINT), str(Path(d) / "docs/project/milestones.md"),
+                                      "--no-history"], capture_output=True, text=True)
+            by_folder = subprocess.run([sys.executable, str(LINT), d, "--no-history"], capture_output=True, text=True)
+            self.assertEqual((by_folder.returncode, by_folder.stdout), (by_file.returncode, by_file.stdout),
+                             by_folder.stderr)
+
     def test_clean_file_passes(self):
         code, out = run(GOOD)
         self.assertEqual(code, 0, out)
