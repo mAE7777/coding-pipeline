@@ -1,5 +1,6 @@
 """Tests for install.py against a throwaway home folder."""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,8 @@ for skill in (source / "skills").iterdir():
     if (skill / "SKILL.md").is_file():
         (pkg / ".agents/skills" / skill.name).mkdir(parents=True, exist_ok=True)
         (pkg / ".agents/skills" / skill.name / "SKILL.md").write_text((skill / "SKILL.md").read_text())
+if (Path(os.environ["HOME"]) / "touch-live").exists():
+    (pkg.parent / "codex-package" / "NOTES.md").write_text("written by someone else during the sync")
 gen = pkg / "generation.txt"
 gen.write_text(str(int(gen.read_text()) + 1 if gen.is_file() else 1))
 with open(Path(os.environ["HOME"]) / "codex-log.txt", "a") as f:
@@ -48,6 +51,9 @@ INSTALLER = """import os, sys
 from pathlib import Path
 pkg = Path(__file__).resolve().parents[1]
 home = Path(sys.argv[sys.argv.index("--home") + 1])
+fail_at = Path(os.environ["HOME"]) / "fail-install-at"
+if fail_at.is_file() and (pkg / "generation.txt").read_text() == fail_at.read_text():
+    sys.exit(5)
 for skill in (pkg / ".agents/skills").iterdir():
     link = home / ".agents/skills" / skill.name
     if not link.exists():
@@ -103,31 +109,47 @@ class InstallTest(unittest.TestCase):
     def log(self):
         return (self.home / "codex-log.txt").read_text().split()
 
+    def stale(self, pkg):
+        """Make Codex's copies look converted from older files, as after a pipeline change."""
+        m = pkg / "source-manifest.sha256"
+        m.write_text("".join("0" * 64 + line[64:] + "\n" for line in m.read_text().splitlines()))
+
     def test_apply_brings_codex_up_to_date_in_the_same_command(self):
         self.codex_package({"pipeline": "PASS"})
         out = self.run_i("apply")
         self.assertNotIn("Codex has no", out.stdout, out.stdout)
         self.assertNotIn("Codex's copies were converted from older versions", out.stdout)
         self.assertEqual(self.log(), ["convert", "acceptance", "install"])
+        out = self.run_i("apply")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("Codex already current", out.stdout)
+        self.assertEqual(self.log(), ["convert", "acceptance", "install"], "nothing runs twice for the same files")
 
     def test_any_failing_gate_fails_the_install_and_codex_keeps_its_last_accepted_copies(self):
         pkg = self.codex_package({"pipeline": "PASS", "discovery": "PASS"})
         out = self.run_i("apply")
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertEqual((pkg / "generation.txt").read_text(), "1")
+        self.stale(pkg)
         (pkg / "gates.json").write_text(json.dumps({"pipeline": "PASS", "discovery": "FAIL"}))
         for attempt in (1, 2):
             out = self.run_i("apply")
             self.assertEqual(out.returncode, 1, f"attempt {attempt}: a failing gate never passes by being seen before")
             self.assertIn("Codex acceptance: discovery fail", out.stdout)
+            self.assertIn("the last accepted package is back (the rejected one is kept at", out.stdout)
             self.assertEqual((pkg / "generation.txt").read_text(), "1", "Codex keeps its last accepted copies")
             self.assertEqual(json.loads((pkg / "gates.json").read_text())["discovery"], "FAIL")
+            self.assertFalse((self.home / ".codex-package.staging").exists())
+            self.assertEqual((self.home / ".codex-package.rejected/generation.txt").read_text(), "2", "kept to look at")
         self.assertEqual(self.log()[-2:], ["convert", "acceptance"])
-        self.assertTrue(list((self.home / ".claude/_backups").glob("codex-acceptance-*.json")), "the failed report is kept")
+        kept = list((self.home / ".claude/_backups").glob("codex-acceptance-*.json"))
+        self.assertTrue(kept, "the failed report is kept")
+        self.assertIn('"discovery", "status": "FAIL"', kept[-1].read_text(), "the kept report is this run's")
         (pkg / "gates.json").write_text(json.dumps({"pipeline": "PASS", "discovery": "PASS"}))
         out = self.run_i("apply")
         self.assertEqual(out.returncode, 0, out.stdout)
         self.assertEqual((pkg / "generation.txt").read_text(), "2")
+        self.assertFalse((self.home / ".codex-package.previous").exists())
         out = subprocess.run([sys.executable, str(INSTALL), "apply", "--home", str(self.home), "--no-codex"],
                              capture_output=True, text=True)
         self.assertIn("Codex not synced (--no-codex)", out.stdout)
@@ -137,7 +159,7 @@ class InstallTest(unittest.TestCase):
         out = self.run_i("apply")
         self.assertEqual(out.returncode, 1)
         self.assertIn("wrote no readable report (exit 3", out.stdout)
-        self.assertFalse((pkg / "generation.txt").exists(), "restored to before the converter ran")
+        self.assertFalse((pkg / "generation.txt").exists(), "the package was never converted in place")
         (pkg / "gates.json").write_text(json.dumps({"pipeline": "FAIL", "lie": True}))
         out = self.run_i("apply")
         self.assertIn("exited 0 while its report lists 1 failing gate(s)", out.stdout)
@@ -146,21 +168,69 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("reported no gates", out.stdout)
 
-    def test_an_interrupted_sync_is_undone_before_anything_else(self):
+    def test_a_package_changed_during_the_sync_is_never_overwritten(self):
         pkg = self.codex_package({"pipeline": "PASS"})
-        self.run_i("apply")
-        self.assertEqual((pkg / "generation.txt").read_text(), "1")
-        # A sync killed after its converter ran: its snapshot and marker are left, the unaccepted copies are live.
-        snap = self.home / ".codex-package.install-snapshot-killed"
-        shutil.copytree(pkg, snap, symlinks=True)
-        (self.home / ".codex-package.install-sync-pending").write_text(str(snap))
-        (pkg / "generation.txt").write_text("99")
-        out = self.run_i("check")
-        self.assertIn("a Codex sync was interrupted", out.stdout)
+        (self.home / "touch-live").write_text("")
         out = self.run_i("apply")
-        self.assertIn("an interrupted Codex sync was undone", out.stdout)
-        self.assertEqual((pkg / "generation.txt").read_text(), "2", "back to the accepted copy, then synced again")
-        self.assertFalse((self.home / ".codex-package.install-sync-pending").exists())
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("the package changed while its new copies were being built", out.stdout)
+        self.assertIn("NOTES.md", out.stdout)
+        self.assertTrue((pkg / "NOTES.md").is_file(), "the other writer's file survives")
+        self.assertFalse((pkg / "generation.txt").exists())
+
+    def test_a_failed_installer_puts_the_last_accepted_package_back(self):
+        pkg = self.codex_package({"pipeline": "PASS"})
+        self.assertEqual(self.run_i("apply").returncode, 0)
+        self.stale(pkg)
+        (self.home / "fail-install-at").write_text("2")
+        out = self.run_i("apply")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("Codex installer failed (exit 5)", out.stdout)
+        self.assertIn("the last accepted package is back (the new one is kept at", out.stdout)
+        self.assertIn("and its installer ran again", out.stdout)
+        self.assertNotIn("failed too", out.stdout)
+        self.assertEqual((pkg / "generation.txt").read_text(), "1")
+        self.assertFalse((self.home / ".codex-package.previous").exists())
+
+    def test_a_stopped_sync_is_finished_or_undone_at_the_next_apply(self):
+        pkg = self.codex_package({"pipeline": "PASS"})
+        self.assertEqual(self.run_i("apply").returncode, 0)
+        previous, staging = self.home / ".codex-package.previous", self.home / ".codex-package.staging"
+        # stopped between the two renames: no package, the last accepted one beside it
+        os.rename(pkg, previous)
+        out = self.run_i("check")
+        self.assertIn("stopped halfway through replacing the package", out.stdout)
+        out = self.run_i("apply")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("the last accepted package is back", out.stdout)
+        self.assertEqual((pkg / "generation.txt").read_text(), "1")
+        self.assertFalse(previous.exists())
+        # stopped while a clone was being checked: the package was never touched
+        shutil.copytree(pkg, staging, symlinks=True)
+        (staging / "generation.txt").write_text("99")
+        out = self.run_i("apply")
+        self.assertIn("a Codex copy left by a stopped sync was removed", out.stdout)
+        self.assertFalse(staging.exists())
+        self.assertEqual((pkg / "generation.txt").read_text(), "1")
+        # stopped while the new package was under acceptance in its place
+        shutil.copytree(pkg, previous, symlinks=True)
+        (pkg / "generation.txt").write_text("77")
+        self.assertIn("unaccepted copies are live", self.run_i("check").stdout)
+        out = self.run_i("apply")
+        self.assertIn("stopped before its acceptance finished; the last accepted package is back", out.stdout)
+        self.assertEqual((pkg / "generation.txt").read_text(), "1")
+        self.assertEqual((self.home / ".codex-package.rejected/generation.txt").read_text(), "77")
+        self.assertFalse(previous.exists())
+        # stopped after the acceptance passed, before the installer finished
+        superseded = self.home / ".codex-package.superseded"
+        shutil.copytree(pkg, superseded, symlinks=True)
+        self.assertIn("stopped before its installer finished", self.run_i("check").stdout)
+        before = len(self.log())
+        out = self.run_i("apply")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("a stopped sync's installer step was run again", out.stdout)
+        self.assertEqual(self.log()[before:], ["install"])
+        self.assertFalse(superseded.exists())
 
     def test_the_advice_fits_a_package_without_a_converter(self):
         pkg = self.home / "hand-built"

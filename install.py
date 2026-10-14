@@ -25,13 +25,15 @@ made under ~/.claude, by hand or by /update) stops apply, which lists it: port t
 (or its private/ overlay) and apply again, or pass --overwrite-live-edits to replace it (the backup keeps it). The manifest (~/.claude/.pipeline-install.json) records the sha256 of every
 installed file and the repository revision.
 
-Codex. When ~/.agents/skills links into a Codex package (the folder holding scripts/convert_helm.py), apply then
-runs the package's converter, its acceptance, and its installer, so one command leaves both tools current
-(--no-codex skips it and says so). The package is copied first. A failed converter or installer, an acceptance
-that writes no fresh report, reports no gates, or exits in disagreement with its report, and any failing
-acceptance gate restore that copy (Codex keeps its last accepted version) and fail the install, keeping the failed
-report under ~/.claude/_backups/. A sync that was killed midway is undone at the next apply, and check fails until
-then. Exit 0 only when Claude Code and Codex are both current.
+Codex. When ~/.agents/skills links into a Codex package (the folder holding scripts/convert_helm.py) and Codex's
+copies are older than what was just installed, apply brings them up to date in the same run (--no-codex skips it
+and says so): the package is cloned beside itself, the converter and the acceptance run on the clone, and only a
+clone that passes every gate replaces the package (two renames); the package's installer then runs. A failed
+converter, an acceptance that writes no report, reports no gates, exits in disagreement with its report, or reports
+any failing gate, and a package that changed while the clone was checked leave the package untouched (Codex keeps
+its last accepted version) and fail the install, keeping the failed report under ~/.claude/_backups/. A failed
+installer puts the last accepted package back. A sync stopped at any point is finished or undone at the next apply,
+and check fails until then. Exit 0 only when Claude Code and Codex are both current.
 
 check FAILs when an installed file differs from the repository (or the overlay), a managed file is missing, a
 retired skill or agent is still where it would load, a skill of the same name shadows one of ours (a plugin
@@ -50,7 +52,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -220,7 +221,7 @@ def cmd_apply(home, overwrite=False, no_codex=False):
     (home / ".claude/.pipeline-install.json").write_text(json.dumps(manifest, indent=1))
     print(f"installed: {len(actions)} action(s); manifest {home / '.claude/.pipeline-install.json'}"
           + (f"; replaced files backed up in {backup}" if backup.exists() else ""))
-    fails, notes = ([], ["Codex not synced (--no-codex)"]) if no_codex else sync_codex(home)
+    fails, notes = ([], ["Codex not synced (--no-codex)"]) if no_codex else sync_codex(home, want)
     for n in notes:
         print(f"NOTE   install     {n}")
     for f in fails:
@@ -230,114 +231,168 @@ def cmd_apply(home, overwrite=False, no_codex=False):
 
 
 def codex_package(home):
-    """The Codex package that ~/.agents/skills links into (the folder holding its converter), or None."""
+    """The Codex package ~/.agents/skills links into: the folder that holds .agents/skills/plan, found from the link
+    even while the package itself is missing (a sync stopped between its two renames), or None."""
     link = home / ".agents/skills/plan"
-    if not link.exists():
+    if not link.is_symlink() and not link.exists():
         return None
-    return next((d for d in link.resolve().parents if (d / "scripts/convert_helm.py").is_file()), None)
+    target = link.resolve(strict=False)
+    return target.parents[2] if len(target.parents) > 2 and target.parent.name == "skills" else None
 
 
-def snapshot_package(pkg):
-    """A copy of the package (without its git folder), cloned copy-on-write where the disk allows."""
-    snap = Path(tempfile.mkdtemp(prefix=f".{pkg.name}.install-snapshot-", dir=pkg.parent))
-    for entry in pkg.iterdir():
-        if entry.name == ".git":
-            continue
-        if subprocess.run(["cp", "-cRp", str(entry), str(snap / entry.name)], capture_output=True).returncode != 0:
+def beside(pkg, kind):
+    """The folders a sync keeps next to the package, each naming one state: the clone being converted (staging), the
+    last accepted package while the new one is accepted in its place (previous), the same once the new one passed
+    (superseded), and the last package that failed (rejected, kept for a look and replaced by the next one)."""
+    return pkg.parent / f".{pkg.name}.{kind}"
+
+
+def tree_state(root):
+    """Every file under root (apart from .git) with its size and modification time: enough to see a change."""
+    state = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for f in filenames:
+            p = Path(dirpath) / f
+            try:
+                st = p.lstat()
+            except OSError:
+                continue
+            state[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
+    return state
+
+
+def clone(src, dst):
+    """A copy of src, its git folder included (the acceptance checks the package is a project root), cloned
+    copy-on-write where the disk allows."""
+    dst.mkdir()
+    for entry in src.iterdir():
+        if subprocess.run(["cp", "-cRp", str(entry), str(dst / entry.name)], capture_output=True).returncode != 0:
             if entry.is_dir() and not entry.is_symlink():
-                shutil.copytree(entry, snap / entry.name, symlinks=True)
+                shutil.copytree(entry, dst / entry.name, symlinks=True)
             else:
-                shutil.copy2(entry, snap / entry.name, follow_symlinks=False)
-    return snap
+                shutil.copy2(entry, dst / entry.name, follow_symlinks=False)
 
 
-def pending_marker(pkg):
-    """Beside the package (a restore never removes it): names the snapshot of a sync that has not finished."""
-    return pkg.parent / f".{pkg.name}.install-sync-pending"
+def reject(pkg, last):
+    """Put the last accepted package back in place and keep the one that failed beside it, named, never deleted
+    unseen."""
+    rejected = beside(pkg, "rejected")
+    if rejected.exists():
+        shutil.rmtree(rejected)
+    os.rename(pkg, rejected)
+    os.rename(last, pkg)
+    return rejected
 
 
-def restore_package(pkg, snap):
-    """Put the package back as it was before this install touched it: Codex keeps its last accepted copies."""
-    for entry in list(pkg.iterdir()):
-        if entry.name == ".git":
-            continue
-        if entry.is_dir() and not entry.is_symlink():
-            shutil.rmtree(entry)
-        else:
-            entry.unlink()
-    for entry in snap.iterdir():
-        os.replace(entry, pkg / entry.name)
-    shutil.rmtree(snap, ignore_errors=True)
+def finish_interrupted(pkg, notes):
+    """Put the package in one known state after a sync that was stopped, read from the folders beside it: a package
+    missing with the last accepted one beside it is put back; a new package still under acceptance (previous beside
+    it) is rejected; a clone being converted is dropped (the package was never touched by it). Returns True when a new
+    package passed its acceptance but its installer may not have finished (superseded beside it)."""
+    previous, superseded, staging = beside(pkg, "previous"), beside(pkg, "superseded"), beside(pkg, "staging")
+    for last in (previous, superseded):
+        if not pkg.exists() and (last / "scripts/convert_helm.py").is_file():
+            os.rename(last, pkg)
+            notes.append("a Codex sync stopped halfway through replacing the package; the last accepted package is back")
+    if previous.exists():
+        kept = reject(pkg, previous)
+        notes.append(f"a Codex sync stopped before its acceptance finished; the last accepted package is back and the "
+                     f"unaccepted one is kept at {kept}")
+    if staging.exists():
+        shutil.rmtree(staging)
+        notes.append("a Codex copy left by a stopped sync was removed; the package itself was untouched")
+    return superseded.exists()
 
 
-def sync_codex(home):
-    """Rebuild and reinstall Codex's copies from what was just installed: (fails, notes). The package is copied
-    first; a converter or installer that fails, an acceptance that crashes, writes no report, reports no gates, or
-    disagrees with its own exit code, and any failing acceptance gate all restore the copy, so Codex keeps its last
-    accepted version, and fail the install."""
+def sync_codex(home, want):
+    """Bring Codex's copies up to date with what was just installed: (fails, notes). Nothing runs when Codex is
+    already current. Otherwise the package is cloned beside itself and the converter runs on the clone, so it never
+    writes into the package Codex loads. If the package did not change meanwhile, the clone takes its place (a
+    rename; the last accepted package waits beside it) and the acceptance runs there, where Codex finds it (its
+    discovery gate needs the place the global links point to): while it runs, the new copies are what Codex would
+    load. A failing acceptance puts the last accepted package back and keeps the failed one beside it, named; a
+    passing one is followed by the installer, and a failing installer puts the last accepted package back too. Every
+    step is a rename, so a sync stopped anywhere is finished or undone at the next apply."""
     pkg = codex_package(home)
     if pkg is None:
         return [], (["no Codex package links into ~/.agents/skills, so Codex was not synced"]
                     if (home / ".agents/skills").is_dir() else [])
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home)}
-    report = pkg / "validation/acceptance.json"
     notes = []
-    marker = pending_marker(pkg)
-    if marker.is_file():
-        # A sync that was killed left its unaccepted copies where Codex loads them: put the last accepted ones back.
-        earlier = Path(marker.read_text().strip())
-        if earlier.is_dir():
-            restore_package(pkg, earlier)
-            notes.append("an interrupted Codex sync was undone: the package is back to its last accepted version")
-        marker.unlink()
-    snap = snapshot_package(pkg)
-    marker.write_text(str(snap))
-    try:
-        return run_sync(home, pkg, env, report, snap, marker, notes)
-    except BaseException:
-        restore_package(pkg, snap)
-        marker.unlink(missing_ok=True)
-        raise
+    accepted_unfinished = finish_interrupted(pkg, notes)
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home)}
+    previous, superseded, staging = beside(pkg, "previous"), beside(pkg, "superseded"), beside(pkg, "staging")
 
+    def install(root):
+        return subprocess.run([sys.executable, str(root / "scripts/install_global.py"), "--install", "--home", str(home)],
+                              capture_output=True, text=True, env=env, cwd=root)
 
-def run_sync(home, pkg, env, report, snap, marker, notes):
-    def failed(message):
-        kept = ""
-        if report.is_file():
-            keep = home / ".claude/_backups" / f"codex-acceptance-{datetime.datetime.now():%Y%m%dT%H%M%S}.json"
-            keep.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(report, keep)
-            kept = f"; its report is kept at {keep}"
-        restore_package(pkg, snap)
-        marker.unlink(missing_ok=True)
-        return [message + kept + "; the package is restored, so Codex keeps its last accepted copies"], notes
+    if accepted_unfinished:
+        r = install(pkg)
+        if r.returncode != 0:
+            return [f"Codex installer failed (exit {r.returncode}) finishing a stopped sync: "
+                    f"{(r.stdout + r.stderr).strip()[-300:]}"], notes
+        shutil.rmtree(superseded)
+        notes.append("a stopped sync's installer step was run again")
+    if not codex_conversion_check(home, want):
+        return [], notes + ["Codex already current"]
+    if not (pkg / "scripts/convert_helm.py").is_file():
+        return [f"the package ~/.agents/skills links into ({pkg}) has no scripts/convert_helm.py for install.py to "
+                "run; rebuild it by hand"], notes
+    report = pkg / "validation/acceptance.json"
 
-    r = subprocess.run([sys.executable, str(pkg / "scripts/convert_helm.py"), "--source", str(home / ".claude")],
-                       capture_output=True, text=True, env=env, cwd=pkg)
+    def keep_report():
+        if not report.is_file():
+            return ""
+        keep = home / ".claude/_backups" / f"codex-acceptance-{datetime.datetime.now():%Y%m%dT%H%M%S}.json"
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(report, keep)
+        return f"; its report is kept at {keep}"
+
+    before = tree_state(pkg)
+    clone(pkg, staging)
+    r = subprocess.run([sys.executable, str(staging / "scripts/convert_helm.py"), "--source", str(home / ".claude"),
+                        "--destination", str(staging)], capture_output=True, text=True, env=env, cwd=staging)
     if r.returncode != 0:
-        return failed(f"Codex converter failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}")
-    if report.exists():
-        report.unlink()
+        shutil.rmtree(staging, ignore_errors=True)
+        return [f"Codex converter failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}; the package "
+                "was not touched, so Codex keeps its last accepted copies"], notes
+    after = tree_state(pkg)
+    if after != before:
+        shutil.rmtree(staging, ignore_errors=True)
+        changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+        return [f"the package changed while its new copies were being built ({len(changed)} file(s), such as "
+                f"{', '.join(changed[:3])}); nothing was replaced, run install.py apply again"], notes
+    os.rename(pkg, previous)
+    os.rename(staging, pkg)
+    report.unlink(missing_ok=True)  # a report carried over from the last run is not this one's
     r = subprocess.run([sys.executable, str(pkg / "scripts/acceptance.py"), "--root", str(pkg), "--json", str(report)],
                        capture_output=True, text=True, env=env, cwd=pkg)
     try:
         gates = {g["name"]: g["status"] for g in json.loads(report.read_text())["gates"]}
+        problem = "" if gates else f"Codex acceptance reported no gates (exit {r.returncode})"
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return failed(f"Codex acceptance wrote no readable report (exit {r.returncode}, {exc.__class__.__name__}): "
-                      f"{(r.stdout + r.stderr).strip()[-300:]}")
-    if not gates:
-        return failed(f"Codex acceptance reported no gates (exit {r.returncode})")
+        gates, problem = {}, (f"Codex acceptance wrote no readable report (exit {r.returncode}, "
+                              f"{exc.__class__.__name__}): {(r.stdout + r.stderr).strip()[-300:]}")
     failing = sorted(g for g, st in gates.items() if st != "PASS")
-    if bool(failing) != (r.returncode != 0):
-        return failed(f"Codex acceptance exited {r.returncode} while its report lists {len(failing)} failing gate(s)")
-    if failing:
-        return failed(f"Codex acceptance: {', '.join(failing)} fail")
-    r = subprocess.run([sys.executable, str(pkg / "scripts/install_global.py"), "--install", "--home", str(home)],
-                       capture_output=True, text=True, env=env, cwd=pkg)
+    if not problem and bool(failing) != (r.returncode != 0):
+        problem = f"Codex acceptance exited {r.returncode} while its report lists {len(failing)} failing gate(s)"
+    if not problem and failing:
+        problem = f"Codex acceptance: {', '.join(failing)} fail"
+    if problem:
+        kept = keep_report()
+        rejected = reject(pkg, previous)
+        return [problem + kept + f"; the last accepted package is back (the rejected one is kept at {rejected}), so "
+                "Codex keeps its last accepted copies"], notes
+    os.rename(previous, superseded)
+    r = install(pkg)
     if r.returncode != 0:
-        return failed(f"Codex installer failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}")
-    shutil.rmtree(snap, ignore_errors=True)
-    marker.unlink(missing_ok=True)
+        rejected = reject(pkg, superseded)
+        back = install(pkg)
+        return [f"Codex installer failed (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-300:]}; the last "
+                f"accepted package is back (the new one is kept at {rejected}) and its installer ran again"
+                + ("" if back.returncode == 0 else f" but failed too (exit {back.returncode})")], notes
+    shutil.rmtree(superseded)
     notes.append(f"Codex synced from the package at {pkg}")
     return [], notes
 
@@ -379,6 +434,10 @@ def codex_conversion_check(home, want):
     (sha256 per ~/.claude-relative path, found beside the package that ~/.agents/skills links into) must
     match every managed pipeline file, and every managed file but the hooks must be in it."""
     link = home / ".agents/skills/plan"
+    pkg = codex_package(home)
+    if pkg and not pkg.exists() and (beside(pkg, "previous").exists() or beside(pkg, "superseded").exists()):
+        return ["a Codex sync stopped halfway through replacing the package, so Codex has no package now: "
+                "install.py apply puts the last accepted one back"]
     if not link.exists():
         return []
     manifest = next((d / "source-manifest.sha256" for d in link.resolve().parents
@@ -391,11 +450,12 @@ def codex_conversion_check(home, want):
         if rel:
             recorded[rel.strip()] = digest.strip()
     fails, claude = [], home / ".claude"
-    pkg = codex_package(home)
-    if pkg and pending_marker(pkg).is_file():
-        fails.append("a Codex sync was interrupted and its unaccepted copies may be live: install.py apply restores the "
-                     "last accepted version first")
-    fix = "install.py apply rebuilds them" if pkg else \
+    if pkg and beside(pkg, "previous").exists():
+        fails.append("a Codex sync stopped before its acceptance finished, so unaccepted copies are live: install.py "
+                     "apply puts the last accepted package back")
+    if pkg and beside(pkg, "superseded").exists():
+        fails.append("a Codex sync stopped before its installer finished: install.py apply runs it again")
+    fix = "install.py apply rebuilds them" if pkg and (pkg / "scripts/convert_helm.py").is_file() else \
         "the package ~/.agents/skills links into has no scripts/convert_helm.py for install.py to run; rebuild it by hand"
     stale = [str(dst.relative_to(claude)) for dst in sorted(want) if dst.is_file()
              and str(dst.relative_to(claude)) in recorded and recorded[str(dst.relative_to(claude))] != sha(dst)]
