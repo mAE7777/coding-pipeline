@@ -455,15 +455,16 @@ def git_reads(words, root=None, cwd=None):
     """True for a git command that only shows: --no-pager allowed, and -C <dir> only into the project itself (another
     folder's git config can name a command for git to run, such as core.fsmonitor), -c (which can set a command to
     run) never; a read subcommand; no --output file; a branch listing, never a branch change."""
-    rest = words[1:]
+    rest, here = words[1:], Path(cwd or ".")
     while rest and rest[0] in GIT_GLOBAL:
         if rest[0] == "-C":
             if len(rest) < 2 or root is None:
                 return False
-            target = Path(cwd or ".") / Path(rest[1]).expanduser()
             try:
-                target = target.resolve()
-                if target != Path(root).resolve() and not target.is_relative_to(Path(root).resolve()):
+                # git applies each -C after the one before it, following links, so the check does the same
+                here = (here / Path(rest[1]).expanduser()).resolve()
+                top = Path(root).resolve()
+                if here != top and not here.is_relative_to(top):
                     return False
             except (OSError, RuntimeError, ValueError):
                 return False

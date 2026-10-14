@@ -115,6 +115,8 @@ class ReloadGateTest(Base):
         cont = ROOT / "skills/_shared/scripts/continuity.py"
         other = Path(self.tmp.name) / "continuity.py"
         other.write_text("print('not the pipeline')\n")
+        (self.proj / "a").mkdir()
+        (self.proj / "a/b").symlink_to(Path(self.tmp.name), target_is_directory=True)  # leads out of the project
         copy = Path(self.tmp.name) / "copy"
         copy.mkdir()
         (copy / "continuity.py").write_bytes(cont.read_bytes())  # identical, but its neighbours are not the pipeline's
@@ -181,6 +183,7 @@ class ReloadGateTest(Base):
                   # git reads a folder's own config, which can name a command to run (core.fsmonitor)
                   "git -C /tmp status --short",
                   f"git -C {Path(self.tmp.name)} status",
+                  "git -C a -C b status",  # git applies the second -C inside the first: a/b, a link out
                   # brace expansion turns one word into several
                   "sed -n s/a/b/ {-i,} app.py",
                   "find . {-delete,}",
