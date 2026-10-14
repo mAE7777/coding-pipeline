@@ -140,7 +140,7 @@ def scan(command):
         elif c == "$" and command[i + 1:i + 2] in ("?", "#", "$", "!"):
             cur += [c, command[i + 1]]  # an exit status, a count, a process id: a number, nothing hides in it
             i += 1
-        elif c == "$" and re.match(r"[{\[\w@*-]", command[i + 1:i + 2]):
+        elif c == "$" and re.match(r"[{\[\w@*=~^+-]", command[i + 1:i + 2]):
             raise Unclear("a variable or arithmetic expansion")
         elif c == "$" and not quote and command[i + 1:i + 2] in ("'", '"'):
             raise Unclear("ANSI-C or locale quoting")
@@ -218,6 +218,8 @@ def pipelines(command):
 def discards_output(piece):
     """True when a piece sends its standard output to /dev/null (>, >>, 1>, &>, written with or without a space before
     it); a redirection of another descriptor (2>/dev/null, given as its own number) leaves the output on screen."""
+    if re.search(r"(^|[^0-9])1?>&-", piece):
+        return True  # standard output closed
     for m in re.finditer(r"&?>>?\s*/dev/null", piece):
         if piece[m.start()] == "&":
             return True
@@ -235,7 +237,7 @@ def shown(pipeline, k):
             return False
     for later in pipeline[k + 1:]:
         words = later.split()
-        if words and (os.path.basename(words[0]) == "wc" or
+        if words and (os.path.basename(words[0]) in ("wc", "true", "false", ":") or
                       (os.path.basename(words[0]) in ("grep", "rg") and any(w in ("-c", "-l", "-q", "--count",
                                                                                    "--quiet", "--files-with-matches")
                                                                             for w in words[1:]))):
@@ -451,11 +453,12 @@ def program_writes(head, words):
     if any(short_letters(w) & WRITING_SHORT.get(head, set()) for w in words[1:]):
         return True
     if head == "sed":
-        script = program_text(words, ("-f", "--file"), ("-e", "--expression"), ("-l",))
+        script = program_text(words, ("-f", "--file"), ("-e", "--expression"))  # macOS sed's -l takes no value
         return script is None or not sed_reads(script)
     if head == "awk":
-        script = program_text(words, ("-f", "--file", "-E", "--exec", "-l", "--load", "-i", "--include"),
-                              ("-e", "--source"), ("-F", "-v"))
+        if any(w.startswith("--") and w != "--" or w.startswith("-W") for w in words[1:]):
+            return True  # long options and -W reach awk features (files, profiles, extensions) this check cannot see
+        script = program_text(words, ("-f", "-E", "-l", "-i"), ("-e",), ("-F", "-v"))
         # any > at all: telling a comparison from a print to a file needs awk's own parser (a string can hold ; or })
         if script is None or re.search(r"system\s*\(|getline|\||>|@load", script):
             return True
@@ -627,16 +630,18 @@ def guard(data):
     if not remaining:
         return 0
     tool_input = data.get("tool_input") or {}
+    why = ""
     if data.get("tool_name") == "Bash":
         command = tool_input.get("command", "")
         if read_only(command, root=root, cwd=data.get("cwd")):
             return 0
+        what = "shell commands that change files"
         try:
             scan(command)
-            what = "shell commands that change files or run programs"
+            why = " This one may change files or run a program."
         except Unclear as exc:
-            what = (f"shell commands this gate cannot read for certain (this one has {exc}), like those that change "
-                    "files,")
+            why = (f" This one is held back because the gate cannot read for certain what it does (it has {exc}); a "
+                   "plain form of the same read goes through.")
     else:
         targets = patch_targets(tool_input) or [tool_input.get("file_path") or tool_input.get("notebook_path") or ""]
         if data.get("tool_name") == "apply_patch" and not any(targets):
@@ -657,7 +662,7 @@ def guard(data):
             return 0
         what = "edits in this project"
     reason = (f"Blocked: {what} wait until the build record is re-read after compaction (the summary is "
-              "lossy). Read these first (the Read tool, or cat): " + ", ".join(remaining) + ".")
+              "lossy). Read these first (the Read tool, or cat): " + ", ".join(remaining) + "." + why)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                              "permissionDecisionReason": reason}}))
     return 0
