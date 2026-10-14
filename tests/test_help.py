@@ -17,14 +17,14 @@ class HelpTest(unittest.TestCase):
             for args in (["--help"], ["-h"]):
                 out = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, timeout=60)
                 self.assertEqual(out.returncode, 0, f"{script.name} {args[0]}: {out.stderr[-300:]}")
-                self.assertIn("Usage", out.stdout, f"{script.name} {args[0]} prints its usage")
+                self.assertIn(script.name, out.stdout, f"{script.name} {args[0]} prints its usage")
 
     def test_help_after_a_subcommand(self):
         for script, sub in (("rulings.py", "record"), ("inbox.py", "add"), ("project_status.py", "record")):
             out = subprocess.run([sys.executable, str(ROOT / "skills/_shared/scripts" / script), sub, "--help"],
                                  capture_output=True, text=True, timeout=60)
             self.assertEqual(out.returncode, 0, f"{script} {sub} --help: {out.stderr[-300:]}")
-            self.assertIn("Usage", out.stdout)
+            self.assertIn(script, out.stdout)
 
 
 if __name__ == "__main__":

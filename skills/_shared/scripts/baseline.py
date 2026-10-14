@@ -124,4 +124,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    if "--help" in sys.argv[1:3] or sys.argv[1:] == ["-h"]:
+        print(__doc__.strip())  # asked for, so not an error
+        sys.exit(0)
     sys.exit(main(sys.argv[1:]))
