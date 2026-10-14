@@ -276,6 +276,7 @@ class ReloadGateTest(Base):
         self.call(GATE, "arm")
         files = " ".join(f"docs/project/{n}" for n in ("state.md", "intent.md", "milestones.md"))
         for cmd in (f"cat {files} >/dev/null", f"cat {files} 1>/dev/null 2>&1", f"cat {files} &>/dev/null",
+                    f"cat {files}>/dev/null", f"cat {files}>>/dev/null", f"cat {files}&>/dev/null",
                     f"cat {files} | wc -l", f"cat {files} | wc -c >/dev/null"):
             self.call(GATE, "track", tool_name="Bash", tool_input={"command": cmd})
             self.assertEqual(self.decision(self.call(GATE, "guard", tool_input={"file_path": str(self.proj / "app.py")})),
@@ -283,6 +284,15 @@ class ReloadGateTest(Base):
         self.call(GATE, "track", tool_name="Bash", tool_input={"command": f"cat {files} 2>/dev/null | head -400"})
         self.assertEqual(self.decision(self.call(GATE, "guard", tool_input={"file_path": str(self.proj / "app.py")})),
                          "allow")
+
+    def test_a_refusal_names_its_real_cause(self):
+        self.call(GATE, "arm")
+        out = self.call(GATE, "guard", tool_name="Bash", tool_input={"command": "ls $HOME"})
+        reason = json.loads(out.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("cannot read for certain", reason)
+        self.assertIn("variable", reason, "the agent is told why, not that its read changes files")
+        out = self.call(GATE, "guard", tool_name="Bash", tool_input={"command": "rm app.py"})
+        self.assertIn("change files", json.loads(out.stdout)["hookSpecificOutput"]["permissionDecisionReason"])
 
     def test_a_pipe_named_like_the_recovery_script_does_not_hang_the_gate(self):
         self.call(GATE, "arm")

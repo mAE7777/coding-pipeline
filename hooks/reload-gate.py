@@ -215,11 +215,23 @@ def pipelines(command):
     return groups + ([group] if group else [])
 
 
+def discards_output(piece):
+    """True when a piece sends its standard output to /dev/null (>, >>, 1>, &>, written with or without a space before
+    it); a redirection of another descriptor (2>/dev/null, given as its own number) leaves the output on screen."""
+    for m in re.finditer(r"&?>>?\s*/dev/null", piece):
+        if piece[m.start()] == "&":
+            return True
+        fd = re.search(r"(^|\s)(\d+)$", piece[:m.start()])
+        if not fd or fd.group(2) == "1":
+            return True
+    return False
+
+
 def shown(pipeline, k):
     """True when the output of piece k of a pipeline reaches the screen: not thrown away to /dev/null by it or a
     later piece, and not only counted (a later wc, or grep -c, -l, -q)."""
     for later in pipeline[k:]:
-        if re.search(r"(^|\s)(1?>>?|&>)\s*/dev/null", later):
+        if discards_output(later):
             return False
     for later in pipeline[k + 1:]:
         words = later.split()
@@ -616,9 +628,15 @@ def guard(data):
         return 0
     tool_input = data.get("tool_input") or {}
     if data.get("tool_name") == "Bash":
-        if read_only(tool_input.get("command", ""), root=root, cwd=data.get("cwd")):
+        command = tool_input.get("command", "")
+        if read_only(command, root=root, cwd=data.get("cwd")):
             return 0
-        what = "shell commands that change files"
+        try:
+            scan(command)
+            what = "shell commands that change files or run programs"
+        except Unclear as exc:
+            what = (f"shell commands this gate cannot read for certain (this one has {exc}), like those that change "
+                    "files,")
     else:
         targets = patch_targets(tool_input) or [tool_input.get("file_path") or tool_input.get("notebook_path") or ""]
         if data.get("tool_name") == "apply_patch" and not any(targets):
