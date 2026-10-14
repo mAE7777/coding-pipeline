@@ -251,9 +251,9 @@ def other_conversations(root, skip):
         newest = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:300]
         for f in newest:
             meta = rollout_meta(f)  # Codex compresses finished rollouts (.zst); their first line is read the same way
-            sid = meta.get("id") or ""
-            if isinstance(meta.get("source"), dict):
-                continue  # a subagent's or reviewer's rollout is not a conversation with the owner
+            sid = (meta or {}).get("id") or ""
+            if not meta or isinstance(meta.get("source"), dict):
+                continue  # a subagent's or reviewer's rollout, or one that cannot be attributed, is not the owner's
             if sid and sid not in skip and inside(meta.get("cwd") or "", root):
                 out.append((f.stat().st_mtime, "codex", sid, f))
     return sorted(out, key=lambda r: r[0], reverse=True)
@@ -306,13 +306,15 @@ def recovery(root, tool, session):
     mtime, other_tool, sid, path = convs[0]
     if packet.is_file() and mtime <= packet.stat().st_mtime + 5:
         return []
-    from rulings import typed_in_lines, thread_files, open_lines  # noqa: E402
+    from rulings import typed_in_lines, thread_files, open_lines, owner_rollout  # noqa: E402
     # The owner's words after the note can sit in any segment of the conversation written since then, an earlier
     # compressed one included: read each, newest first, from the end (6 MB is far more than a cutoff's last words).
     owner, noted = [], packet.stat().st_mtime if packet.is_file() else 0
     for seg in reversed(thread_files(path) if other_tool == "codex" else [path]):
         if seg != path and seg.stat().st_mtime <= noted:
             break
+        if not owner_rollout(seg):
+            continue  # the same rule as a ruling's proof: only the person's own session holds their words
         if seg.suffix == ".zst":
             with open_lines(seg) as f:
                 lines = f.read()[-6_000_000:].splitlines()

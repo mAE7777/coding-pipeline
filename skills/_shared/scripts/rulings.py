@@ -83,19 +83,32 @@ ROLLOUT_NAME = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([^_.]+
 
 
 def rollout_meta(path):
-    """The first line's payload of a Codex rollout (its session_meta), or {} when it cannot be read."""
+    """The first line's payload of a Codex rollout (its session_meta); {} when the first line is a record of another
+    kind (older rollouts), None when it cannot be read at all."""
     try:
         with open_lines(path) as f:
             first = json.loads(f.readline())
     except (OSError, ValueError):
-        return {}
-    return first.get("payload") or {} if first.get("type") == "session_meta" else {}
+        return None
+    if not isinstance(first, dict):
+        return None
+    return (first.get("payload") or {}) if first.get("type") == "session_meta" else {}
 
 
 def is_subagent(path):
     """True for a Codex rollout written by a subagent or a reviewer: what arrives there as the user is another
     agent's prompt, never the person's."""
-    return Path(path).name.startswith("rollout-") and isinstance(rollout_meta(path).get("source"), dict)
+    return Path(path).name.startswith("rollout-") and isinstance((rollout_meta(path) or {}).get("source"), dict)
+
+
+def owner_rollout(path):
+    """True when a transcript can hold the person's words: any Claude Code transcript, and a Codex rollout whose first
+    line shows the person's own session. A rollout whose first line cannot be read is not counted: what cannot be
+    attributed to the person is never taken for their words."""
+    if not Path(path).name.startswith("rollout-"):
+        return True
+    meta = rollout_meta(path)
+    return meta is not None and not isinstance(meta.get("source"), dict)
 
 
 def thread_files(path):
@@ -105,7 +118,7 @@ def thread_files(path):
     path = Path(path)
     if not path.name.startswith("rollout-"):
         return [path]
-    meta = rollout_meta(path)
+    meta = rollout_meta(path) or {}
     named = ROLLOUT_NAME.match(path.name)
     thread = meta.get("session_id") or meta.get("id") or (named.group(1) if named else None)
     return (codex_rollouts(thread) or [path]) if thread else [path]
@@ -155,7 +168,7 @@ def typed_messages(path):
     """[(uuid or line number, timestamp, text)] for every message the person typed. Agent hand-backs and task
     notifications arrive in the user role (a queued prompt with origin kind "peer", or a user entry); they are
     model or harness output and never count, and neither does anything from a subagent's side chain."""
-    if is_subagent(path):
+    if not owner_rollout(path):
         return []
     with open_lines(path) as f:
         return typed_in_lines(f)
@@ -165,7 +178,7 @@ def last_typed(path, tail_bytes=2_000_000):
     """The person's latest typed message, read from the end of the transcript only (hooks call this on every
     stop, and transcripts grow large). None when the tail holds no typed message, or the transcript is a Codex
     subagent's (decided from its first line, which the tail may not hold)."""
-    if is_subagent(path):
+    if not owner_rollout(path):
         return None
     if Path(path).suffix == ".zst":
         with open_lines(path) as f:

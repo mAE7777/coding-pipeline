@@ -287,7 +287,10 @@ class RulingsTest(unittest.TestCase):
         import rulings
         self.current_codex("thr-5_seg-1", ["keep the export as CSV"])
         broken = self.home / ".codex/sessions/2026/10/09/rollout-2026-10-09T23-00-00-thr-5_seg-2.jsonl"
-        broken.write_text("not json\n")
+        broken.write_text("not json\n" + json.dumps({"type": "event_msg", "timestamp": "z", "payload": {
+            "type": "item_completed", "item": {"type": "UserMessage", "id": "u", "client_id": "c",
+                                               "content": [{"type": "text", "text": "ship it now"}]}}}) + "\n")
+        self.assertEqual(rulings.typed_messages(broken), [], "words that cannot be attributed to the person never count")
         saved, rulings.HOME = rulings.HOME, self.home
         try:
             self.assertIsNotNone(rulings.find_quote(broken, "keep the export as CSV"))
