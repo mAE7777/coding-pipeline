@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check a milestones.md file against the milestone format rules.
 
-Usage: milestone_lint.py [path/to/milestones.md] [--no-history] [--intent path/to/intent.md]
+Usage: milestone_lint.py [path/to/milestones.md | project folder] [--no-history] [--intent path/to/intent.md]
        milestone_lint.py [path/to/milestones.md] --contract-hash M<k>
 
 Every check prints PASS, FAIL, or WARN with a reason. Exit 0 = no FAIL, 1 = at least one FAIL,
@@ -354,6 +354,7 @@ def main(argv):
         i = argv.index("--contract-hash")
         rest = [a for j, a in enumerate(argv) if j not in (i, i + 1)]
         path = Path(rest[0] if rest else "docs/project/milestones.md")
+        path = path / "docs/project/milestones.md" if path.is_dir() else path  # the project folder names it
         milestones, _, _, _ = split_sections(path.read_text(encoding="utf-8"))
         mid = argv[i + 1] if i + 1 < len(argv) else ""
         if mid not in milestones:
@@ -375,6 +376,7 @@ def main(argv):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     path = Path(args[0] if args else "docs/project/milestones.md")
+    path = path / "docs/project/milestones.md" if path.is_dir() else path  # the project folder names it
     if not path.is_file():
         print(f"milestone_lint: no such file: {path}", file=sys.stderr)
         return 2

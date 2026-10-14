@@ -7,6 +7,7 @@ Usage:
   intent_lock.py stamp <intent.md> --ruling D-<nnn> [--project <dir>]
   intent_lock.py verify <intent.md> [--project <dir>]
   intent_lock.py effective <intent.md>
+Each <intent.md> may also be the project folder, which names docs/project/intent.md.
 
 The locked text runs from the "## Goal" line up to, not including, "## Re-freeze log"; the status line
 above it and the log below it are outside the hash, so the stamp can record re-freezes without changing
@@ -156,6 +157,7 @@ def main(argv):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     cmd, path = argv[0], Path(argv[1])
+    path = path / "docs/project/intent.md" if path.is_dir() else path  # the project folder names it
     if not path.is_file():
         print(f"intent_lock: no such file: {path}", file=sys.stderr)
         return 2

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that a handoff packet carries everything it must, so nothing is lost between sessions.
 
-Usage: handoff_check.py <packet.md> [--project <dir>]
+Usage: handoff_check.py <packet.md | project folder> [--project <dir>]
 
 FAILs when: a required section is missing, empty, or says TBD / holds a template placeholder (angle
 brackets around words with a space, like the templates use; a generic such as Map<string, List>, with a
@@ -95,7 +95,11 @@ def main(argv):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     packet = Path(argv[0])
-    project = Path(".")
+    packet = packet / "docs/project/handoffs/latest.md" if packet.is_dir() else packet  # the project folder names it
+    # Without --project, the project is the one the packet sits in (docs/project/handoffs/<packet>), else here.
+    up = packet.resolve().parents
+    inside = len(up) > 3 and (up[2].name, up[1].name, up[0].name) == ("docs", "project", "handoffs")
+    project = up[3] if inside else Path(".")
     if "--project" in argv:
         i = argv.index("--project")
         if i + 1 >= len(argv):
