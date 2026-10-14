@@ -43,9 +43,55 @@ def claude_transcript(session):
     return Path(hits[0]) if hits else None
 
 
+def codex_rollouts(thread):
+    """Every rollout file of a Codex thread or session id, oldest first: a long thread is written in segments, and
+    finished ones are compressed (.jsonl.zst)."""
+    base = HOME / ".codex/sessions"
+    hits = glob.glob(str(base / "**" / f"rollout-*{thread}*.jsonl"), recursive=True) + \
+        glob.glob(str(base / "**" / f"rollout-*{thread}*.jsonl.zst"), recursive=True)
+    return [Path(h) for h in sorted(set(hits), key=lambda h: Path(h).name)]
+
+
 def codex_transcript(session):
-    hits = glob.glob(str(HOME / ".codex/sessions" / "**" / f"rollout-*{session}*.jsonl"), recursive=True)
-    return Path(sorted(hits)[-1]) if hits else None
+    hits = codex_rollouts(session)
+    return hits[-1] if hits else None
+
+
+def open_lines(path):
+    """The text lines of a transcript, a compressed Codex rollout (.zst) included: read with Python's zstd module
+    where it exists (3.14), else through the zstd program; a compressed file neither can read raises OSError."""
+    path = Path(path)
+    if path.suffix != ".zst":
+        return open(path, encoding="utf-8", errors="replace")
+    try:
+        from compression import zstd
+        return zstd.open(path, "rt", encoding="utf-8", errors="replace")
+    except ImportError:
+        pass
+    import shutil
+    import subprocess
+    if not shutil.which("zstd"):
+        raise OSError(f"{path} is compressed and neither Python's zstd module nor the zstd program is here to read it")
+    proc = subprocess.run(["zstd", "-dc", str(path)], capture_output=True)
+    if proc.returncode != 0:
+        raise OSError(f"zstd could not read {path}: {proc.stderr.decode(errors='replace').strip()[:200]}")
+    import io
+    return io.StringIO(proc.stdout.decode("utf-8", errors="replace"))
+
+
+def thread_files(path):
+    """All the files of the conversation a transcript belongs to: for a Codex rollout, every segment of its thread
+    (the thread id is its first line's session_id); for anything else, the file itself."""
+    path = Path(path)
+    if not path.name.startswith("rollout-"):
+        return [path]
+    try:
+        with open_lines(path) as f:
+            meta = (json.loads(f.readline()).get("payload") or {})
+    except (OSError, ValueError):
+        return [path]
+    thread = meta.get("session_id") or meta.get("id")
+    return codex_rollouts(thread) or [path] if thread else [path]
 
 
 # Text the harness injects into the user role: agent hand-backs, task notifications, command echoes, reminders,
@@ -79,31 +125,45 @@ def typed_messages(path):
     """[(uuid or line number, timestamp, text)] for every message the person typed. Agent hand-backs and task
     notifications arrive in the user role (a queued prompt with origin kind "peer", or a user entry); they are
     model or harness output and never count, and neither does anything from a subagent's side chain."""
-    with open(path, encoding="utf-8") as f:
+    with open_lines(path) as f:
         return typed_in_lines(f)
 
 
 def last_typed(path, tail_bytes=2_000_000):
     """The person's latest typed message, read from the end of the transcript only (hooks call this on every
     stop, and transcripts grow large). None when the tail holds no typed message."""
-    with open(path, "rb") as f:
-        f.seek(0, 2)
-        size = f.tell()
-        f.seek(max(0, size - tail_bytes))
-        chunk = f.read().decode("utf-8", errors="replace")
+    if Path(path).suffix == ".zst":
+        with open_lines(path) as f:
+            text = f.read()
+        chunk, size = text[-tail_bytes:], len(text)
+    else:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - tail_bytes))
+            chunk = f.read().decode("utf-8", errors="replace")
     lines = chunk.splitlines()[1:] if size > tail_bytes else chunk.splitlines()
     found = typed_in_lines(lines)
     return found[-1][2] if found else None
 
 
+# Every line that can hold a typed message names one of these; the rest (tool output, reasoning, token counts) is
+# skipped unparsed, which keeps a long Codex thread's hundreds of megabytes quick to read.
+CARRIERS = ('"user"', "queued_command", "UserMessage", "user_message", "session_meta")
+
+
 def typed_in_lines(lines):
-    out = []
+    out, codex_items = [], []
     for n, line in enumerate(lines, 1):
+        if not any(k in line for k in CARRIERS):
+            continue
         try:
             e = json.loads(line)
         except ValueError:
             continue
         ts = e.get("timestamp", "")
+        if e.get("type") == "session_meta" and isinstance((e.get("payload") or {}).get("source"), dict):
+            return []  # a Codex subagent or reviewer: what arrives as its user is another agent's prompt
         if e.get("isSidechain"):
             continue
         # Claude Code: typed prompts
@@ -132,7 +192,17 @@ def typed_in_lines(lines):
         if payload and e.get("type") == "event_msg" and payload.get("type") == "user_message" \
                 and typed(payload.get("message", "")):
             out.append((f"line {n}", ts, payload.get("message", "")))
-    return out
+        # Codex 0.158 and later: the person's messages are UserMessage items sent by the client (a client_id);
+        # injected instructions and context arrive as response_item messages in the user role, which never count
+        item = (payload or {}).get("item") if e.get("type") == "event_msg" else None
+        if isinstance(item, dict) and payload.get("type") == "item_completed" and item.get("type") == "UserMessage" \
+                and item.get("client_id"):
+            text = "\n".join(c.get("text", "") for c in item.get("content") or []
+                             if isinstance(c, dict) and c.get("type") == "text")
+            if typed(text):
+                codex_items.append((item.get("id") or f"line {n}", ts, text))
+    # A rollout that writes both forms says each message twice; the items are the current form.
+    return codex_items if codex_items else out
 
 
 EDGE = " .,;:!?\"'\u3002\uff0c\uff01\uff1f"
@@ -157,8 +227,13 @@ def quote_fits(quote, message):
 
 
 def find_quote(path, quote):
-    found = [m for m in typed_messages(path) if quote_fits(quote, m[2])]
-    return found[-1] if found else None
+    """The person's latest typed message the quote fits, searching every file of the conversation (a Codex
+    thread's segments, compressed ones included), or None."""
+    for p in reversed(thread_files(path)):  # newest segment first: a ruling is usually recent
+        found = [m for m in typed_messages(p) if quote_fits(quote, m[2])]
+        if found:
+            return found[-1]
+    return None
 
 
 def ledger_path(project):

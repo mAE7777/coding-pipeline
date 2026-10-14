@@ -274,6 +274,11 @@ def last_said(path, tool, tail=3_000_000):
             pl = e.get("payload") if isinstance(e.get("payload"), dict) else {}
             if e.get("type") == "event_msg" and pl.get("type") == "agent_message" and pl.get("message"):
                 return pl["message"]
+            item = pl.get("item") if e.get("type") == "event_msg" and pl.get("type") == "item_completed" else None
+            if isinstance(item, dict) and item.get("type") == "AgentMessage":  # Codex 0.158 and later
+                text = "\n".join(c.get("text", "") for c in item.get("content") or [] if isinstance(c, dict))
+                if text.strip():
+                    return text
         elif e.get("type") == "assistant":
             texts = [c.get("text", "") for c in (e.get("message") or {}).get("content") or []
                      if isinstance(c, dict) and c.get("type") == "text" and c.get("text", "").strip()]
