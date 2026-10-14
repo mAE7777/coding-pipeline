@@ -8,8 +8,6 @@ Usage:
                                               install, archive what the pipeline retired, write the manifest,
                                               and bring Codex's copies up to date in the same run
   python3 install.py check [--home <dir>]     compare the installed files with this repository and hunt shadows
-  python3 install.py codex-known <gate> --reason "<why>" --quote "<the owner's words>" [--session <id>]
-                                              let one Codex acceptance gate fail, on the owner's proven words
 
 What is managed:
   skills/<name>/          SKILL.md, references/, scripts/ of each pipeline skill; files the repository no longer
@@ -30,14 +28,10 @@ installed file and the repository revision.
 Codex. When ~/.agents/skills links into a Codex package (the folder holding scripts/convert_helm.py), apply then
 runs the package's converter, its acceptance, and its installer, so one command leaves both tools current
 (--no-codex skips it and says so). The package is copied first. A failed converter or installer, an acceptance
-that writes no fresh report or whose exit code disagrees with it, and any failing acceptance gate that is not a
-known failure restore that copy (Codex keeps its last accepted version) and fail the install, keeping the failed
-report under ~/.claude/_backups/. Known failures (~/.claude/.pipeline-codex-known.json) are named at every
-install, each with its reason, and leave the list by themselves once they pass (one the acceptance no longer
-reports stays, named); only the owner adds one (codex-known: their words, proven against their transcript, must
-name the gate, and the gate must be failing in the latest report). An acceptance that reports no gates fails. A
-sync that was killed midway is undone at the next apply, and check fails until then. Exit 0 only when Claude
-Code and Codex are both current.
+that writes no fresh report, reports no gates, or exits in disagreement with its report, and any failing
+acceptance gate restore that copy (Codex keeps its last accepted version) and fail the install, keeping the failed
+report under ~/.claude/_backups/. A sync that was killed midway is undone at the next apply, and check fails until
+then. Exit 0 only when Claude Code and Codex are both current.
 
 check FAILs when an installed file differs from the repository (or the overlay), a managed file is missing, a
 retired skill or agent is still where it would load, a skill of the same name shadows one of ours (a plugin
@@ -243,23 +237,6 @@ def codex_package(home):
     return next((d for d in link.resolve().parents if (d / "scripts/convert_helm.py").is_file()), None)
 
 
-def known_failures_file(home):
-    return home / ".claude/.pipeline-codex-known.json"
-
-
-def known_failures(home):
-    """{gate: {"since", "reason", "by"}}: acceptance gates allowed to fail, each named at every install."""
-    f = known_failures_file(home)
-    try:
-        return json.loads(f.read_text()).get("gates", {}) if f.is_file() else {}
-    except ValueError:
-        raise SystemExit(f"install: {f} is not valid JSON; fix or remove it (it lists the Codex gates allowed to fail)")
-
-
-def save_known(home, gates):
-    known_failures_file(home).write_text(json.dumps({"gates": gates}, indent=1))
-
-
 def snapshot_package(pkg):
     """A copy of the package (without its git folder), cloned copy-on-write where the disk allows."""
     snap = Path(tempfile.mkdtemp(prefix=f".{pkg.name}.install-snapshot-", dir=pkg.parent))
@@ -295,17 +272,15 @@ def restore_package(pkg, snap):
 
 def sync_codex(home):
     """Rebuild and reinstall Codex's copies from what was just installed: (fails, notes). The package is copied
-    first; a converter or installer that fails, an acceptance that crashes or writes no report or disagrees with its
-    own exit code, and an acceptance gate that fails without being a known failure all restore the copy, so Codex
-    keeps its last accepted version, and fail the install. A known failure is named at every install and leaves the
-    list by itself once it passes; only the owner adds one (install.py codex-known)."""
+    first; a converter or installer that fails, an acceptance that crashes, writes no report, reports no gates, or
+    disagrees with its own exit code, and any failing acceptance gate all restore the copy, so Codex keeps its last
+    accepted version, and fail the install."""
     pkg = codex_package(home)
     if pkg is None:
         return [], (["no Codex package links into ~/.agents/skills, so Codex was not synced"]
                     if (home / ".agents/skills").is_dir() else [])
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": str(home)}
     report = pkg / "validation/acceptance.json"
-    known = known_failures(home)
     notes = []
     marker = pending_marker(pkg)
     if marker.is_file():
@@ -318,14 +293,14 @@ def sync_codex(home):
     snap = snapshot_package(pkg)
     marker.write_text(str(snap))
     try:
-        return run_sync(home, pkg, env, report, known, snap, marker, notes)
+        return run_sync(home, pkg, env, report, snap, marker, notes)
     except BaseException:
         restore_package(pkg, snap)
         marker.unlink(missing_ok=True)
         raise
 
 
-def run_sync(home, pkg, env, report, known, snap, marker, notes):
+def run_sync(home, pkg, env, report, snap, marker, notes):
     def failed(message):
         kept = ""
         if report.is_file():
@@ -355,20 +330,8 @@ def run_sync(home, pkg, env, report, known, snap, marker, notes):
     failing = sorted(g for g, st in gates.items() if st != "PASS")
     if bool(failing) != (r.returncode != 0):
         return failed(f"Codex acceptance exited {r.returncode} while its report lists {len(failing)} failing gate(s)")
-    unknown = [g for g in failing if g not in known]
-    if unknown:
-        return failed(f"Codex acceptance: {', '.join(unknown)} fail and are not known failures (a known failure is "
-                      "added only by the owner: install.py codex-known <gate> --reason ... --quote ...)")
-    healed = sorted(g for g in known if gates.get(g) == "PASS")
-    if healed:
-        save_known(home, {g: v for g, v in known.items() if g not in healed})
-        notes.append(f"Codex acceptance: {', '.join(healed)} pass now and left the known failures")
-    for g in sorted(g for g in known if g not in gates):
-        notes.append(f"Codex acceptance: the known failure {g} was not reported this time (renamed, or not run); it "
-                     "stays on the list")
-    for g in failing:
-        notes.append(f"Codex acceptance: {g} still fails, a known failure since {known[g].get('since')} "
-                     f"({known[g].get('reason')})")
+    if failing:
+        return failed(f"Codex acceptance: {', '.join(failing)} fail")
     r = subprocess.run([sys.executable, str(pkg / "scripts/install_global.py"), "--install", "--home", str(home)],
                        capture_output=True, text=True, env=env, cwd=pkg)
     if r.returncode != 0:
@@ -377,48 +340,6 @@ def run_sync(home, pkg, env, report, known, snap, marker, notes):
     marker.unlink(missing_ok=True)
     notes.append(f"Codex synced from the package at {pkg}")
     return [], notes
-
-
-def cmd_codex_known(home, argv):
-    """Add an acceptance gate to the known failures, on the owner's words proven in their transcript."""
-    gate = argv[1] if len(argv) > 1 and not argv[1].startswith("--") else None
-    opts = {argv[i]: argv[i + 1] for i in range(len(argv) - 1) if argv[i].startswith("--")}
-    if not gate or not opts.get("--reason") or not opts.get("--quote"):
-        print(__doc__.strip(), file=sys.stderr)
-        return 2
-    sys.path.insert(0, str(REPO / "skills/_shared/scripts"))
-    from rulings import find_quote, resolve_transcript
-    from session_env import current
-    session = opts.get("--session")
-    if not session:
-        tool, sid = current()
-        session = f"codex:{sid}" if tool == "codex" else sid
-    path = resolve_transcript(session) if session else None
-    if not path or not find_quote(path, opts["--quote"]):
-        print("FAIL   install     the quote is not a whole sentence or message the owner typed in that session; only "
-              "the owner adds a known failure")
-        return 1
-    if gate.lower() not in opts["--quote"].lower():
-        print(f"FAIL   install     the owner's words do not name {gate}; a ruling covers the gate it names")
-        return 1
-    pkg = codex_package(home)
-    reports = sorted((home / ".claude/_backups").glob("codex-acceptance-*.json")) + \
-        ([pkg / "validation/acceptance.json"] if pkg and (pkg / "validation/acceptance.json").is_file() else [])
-    latest = max(reports, key=lambda f: f.stat().st_mtime) if reports else None
-    try:
-        status = {g["name"]: g["status"] for g in json.loads(latest.read_text())["gates"]}.get(gate) if latest else None
-    except (OSError, ValueError, KeyError, TypeError):
-        status = None
-    if status in (None, "PASS"):
-        print(f"FAIL   install     {gate} is not failing in the latest acceptance report "
-              f"({latest or 'none found'}); only a failing gate can become a known failure")
-        return 1
-    known = known_failures(home)
-    known[gate] = {"since": datetime.date.today().isoformat(), "reason": opts["--reason"],
-                   "by": f"owner: \"{opts['--quote']}\" (session {session})"}
-    save_known(home, known)
-    print(f"install: {gate} is a known Codex failure now; every install names it until it passes")
-    return 0
 
 
 def registered_commands(home):
@@ -591,12 +512,10 @@ def cmd_check(home):
 
 
 def main(argv):
-    if not argv or argv[0] not in ("plan", "apply", "check", "codex-known"):
+    if not argv or argv[0] not in ("plan", "apply", "check"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     home = Path(argv[argv.index("--home") + 1]) if "--home" in argv else Path.home()
-    if argv[0] == "codex-known":
-        return cmd_codex_known(home, argv)
     if argv[0] == "apply":
         return cmd_apply(home, overwrite="--overwrite-live-edits" in argv, no_codex="--no-codex" in argv)
     return {"plan": cmd_plan, "check": cmd_check}[argv[0]](home)
