@@ -236,6 +236,36 @@ class ContinuityTest(unittest.TestCase):
         self.assertIn("--session codex:thr-42", ctx, "the words can be proven from the Codex transcript")
         self.assertIn("app.py", ctx)
 
+    def test_a_current_codex_session_cut_off_is_recovered_with_the_owners_words(self):
+        """Codex 0.158 and later: the person's messages are UserMessage items, the agent's AgentMessage items."""
+        home = Path(self.tmp.name) / "home3"
+        subprocess.run([sys.executable, str(CONT), "packet", str(self.root), "--tool", "claude", "--session", "c-old"],
+                       check=True, capture_output=True, env={**os.environ, "HOME": str(home)})
+        packet = self.root / "docs/project/handoffs/latest.md"
+        written = re.search(r"^Written: (\S+)", packet.read_text(), re.M).group(1)
+        os.utime(packet, (time.time() - 600, time.time() - 600))
+        rollout = home / ".codex/sessions/2026/10/09/rollout-2026-10-09T10-00-00-thr-88_seg-88.jsonl"
+        rollout.parent.mkdir(parents=True)
+        later = "2099-01-01T00:00:00.000Z"
+
+        def item(kind, text, **extra):
+            return {"type": "event_msg", "timestamp": later, "payload": {"type": "item_completed", "item": {
+                "type": kind, "id": "x", **extra, "content": [{"type": "text" if kind == "UserMessage" else "Text",
+                                                               "text": text}]}}}
+        rollout.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in [
+            {"type": "session_meta", "timestamp": written, "payload": {"id": "seg-88", "session_id": "thr-88",
+                                                                      "cwd": str(self.root), "source": "vscode"}},
+            {"type": "response_item", "timestamp": later, "payload": {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "# AGENTS.md instructions\nnot the owner"}]}},
+            item("UserMessage", "把导出改成CSV，这是定论。", client_id="c1"),
+            item("AgentMessage", "Switching the export writer to CSV now."),
+        ]) + "\n")
+        code, out, _ = hook("session-start", {"session_id": "c-new", "cwd": str(self.root)}, env={"HOME": str(home)})
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"把导出改成CSV，这是定论。"', ctx, "the owner's words arrive verbatim")
+        self.assertNotIn("not the owner", ctx)
+        self.assertIn("Switching the export writer to CSV now.", ctx, "and what the agent said last")
+
     def test_a_clean_handoff_adds_no_recovery(self):
         home = Path(self.tmp.name) / "home2"
         rollout = home / ".codex/sessions/2026/09/28/rollout-x-thr-7.jsonl"

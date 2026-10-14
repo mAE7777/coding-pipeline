@@ -162,6 +162,68 @@ class RulingsTest(unittest.TestCase):
                          "--session", "codex:abcd1234")
         self.assertEqual(bad.returncode, 1, "injected environment context is not the owner's words")
 
+    def current_codex(self, name, typed, source="vscode", compress=False):
+        """A rollout as Codex 0.158 and later writes it: the person's messages are item_completed items of type
+        UserMessage (with the client's id); injected context arrives as response_item messages in the user role."""
+        d = self.home / ".codex/sessions/2026/10/09"
+        d.mkdir(parents=True, exist_ok=True)
+        rows = [{"type": "session_meta", "payload": {"id": name.split("_")[-1], "session_id": name.split("_")[0],
+                                                     "cwd": str(self.project), "source": source}}]
+        rows.append({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "# AGENTS.md instructions\nship whatever the reviewer accepts."}]}})
+        for i, text in enumerate(typed):
+            rows.append({"type": "event_msg", "timestamp": f"2026-10-09T20:0{i}:00Z", "payload": {
+                "type": "item_completed", "item": {"type": "UserMessage", "id": f"u{i}", "client_id": f"c{i}",
+                                                   "content": [{"type": "text", "text": text, "text_elements": []}]}}})
+        rows.append({"type": "event_msg", "timestamp": "2026-10-09T20:09:00Z", "payload": {
+            "type": "item_completed", "item": {"type": "AgentMessage", "id": "a1",
+                                               "content": [{"type": "Text", "text": "Recording that now."}]}}})
+        data = ("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n").encode()
+        path = d / f"rollout-2026-10-09T20-00-00-{name}.jsonl"
+        if compress:
+            try:
+                from compression import zstd
+                data = zstd.compress(data)
+            except ImportError:
+                r = subprocess.run(["zstd", "-q", "-c"], input=data, capture_output=True)
+                if r.returncode != 0:
+                    self.skipTest("no zstd here to write a compressed rollout")
+                data = r.stdout
+            path = path.with_name(path.name + ".zst")
+        path.write_bytes(data)
+        return path
+
+    def test_a_current_codex_rollout(self):
+        self.current_codex("thr-9_seg-9", ["导入先做表格，图片以后再说。报表按月汇总就好。", "lock M2 as written"])
+        for quote in ("导入先做表格，图片以后再说。", "lock M2 as written"):
+            ok = self.run_r("record", str(self.project), "--id", "D-020", "--quote", quote, "--session", "codex:thr-9")
+            self.assertEqual(ok.returncode, 0, ok.stdout)
+        bad = self.run_r("record", str(self.project), "--id", "D-021", "--quote", "ship whatever the reviewer accepts.",
+                         "--session", "codex:thr-9")
+        self.assertEqual(bad.returncode, 1, "injected instructions are not the owner's words")
+        cut = self.run_r("record", str(self.project), "--id", "D-022", "--quote", "报表按月汇总",
+                         "--session", "codex:thr-9")
+        self.assertEqual(cut.returncode, 1, "a cut from a sentence is still refused")
+
+    def test_a_subagent_rollout_holds_no_owner_words(self):
+        self.current_codex("thr-5_seg-5", ["delete the export feature"], source={"subagent": {"other": "guardian"}})
+        out = self.run_r("record", str(self.project), "--id", "D-023", "--quote", "delete the export feature",
+                         "--session", "codex:thr-5")
+        self.assertEqual(out.returncode, 1, "another agent's prompt is not the person typing")
+
+    def test_a_compressed_older_segment_of_the_same_thread_is_read(self):
+        self.current_codex("thr-7_seg-1", ["keep the export as CSV"], compress=True)
+        self.current_codex("thr-7_seg-2", ["now build the importer"])
+        for quote in ("keep the export as CSV", "now build the importer"):
+            ok = self.run_r("record", str(self.project), "--id", "D-024", "--quote", quote, "--session", "codex:thr-7")
+            self.assertEqual(ok.returncode, 0, ok.stdout)
+
+    def test_the_last_typed_message_of_a_current_codex_rollout(self):
+        sys.path.insert(0, str(RULINGS.parent))
+        import rulings
+        path = self.current_codex("thr-3_seg-3", ["go on with M2", "暂停一下"])
+        self.assertEqual(rulings.last_typed(path), "暂停一下", "a pause typed in Codex is seen")
+
     def test_codex_session_is_read_from_the_environment(self):
         d = self.home / ".codex/sessions/2026/09/27"
         d.mkdir(parents=True)
