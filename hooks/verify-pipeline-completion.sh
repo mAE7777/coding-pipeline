@@ -10,6 +10,11 @@ if [ -z "$CWD" ] || [ ! -d "$CWD" ]; then
   printf '{"suppressOutput": true}\n'
   exit 0
 fi
+HERE="$(cd "$(dirname "$0")" && pwd)"
+if ! python3 "$HERE/../skills/_shared/scripts/project_policy.py" check "$CWD"; then
+  printf '{"suppressOutput": true}\n'
+  exit 0
+fi
 
 WARNINGS=""
 MODIFIED=$(git -C "$CWD" diff --name-only HEAD 2>/dev/null; git -C "$CWD" ls-files --others --exclude-standard 2>/dev/null)

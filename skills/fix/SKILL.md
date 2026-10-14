@@ -4,6 +4,17 @@ description: "Make a targeted change outside a milestone's build run: a bug, a b
 argument-hint: "<the problem, or a gate finding ID such as M2-F03>"
 ---
 
+## Project workflow choice (first)
+
+Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
+any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
+No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
+code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
+do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
+Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
+never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
+See `_shared/references/project-control.md` for the shared contract.
+
 # /fix
 
 Load-bearing rules:

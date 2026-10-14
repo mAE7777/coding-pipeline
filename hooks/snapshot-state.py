@@ -15,6 +15,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/_shared/scripts"))
+from project_policy import managed, hook_project  # noqa: E402
+
 
 def run(cmd, cwd):
     try:
@@ -28,6 +31,8 @@ def main():
         data = json.load(sys.stdin)
     except ValueError:
         data = {}
+    if not managed(hook_project(data)):
+        return 0
     env = os.environ.get("CLAUDE_PROJECT_DIR")
     start = Path(env) if env and (Path(env) / "docs/project/state.md").is_file() else Path(data.get("cwd") or ".")
     cwd = next((c for c in [start.resolve(), *start.resolve().parents] if (c / "docs/project/state.md").is_file()), None)

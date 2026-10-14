@@ -203,6 +203,12 @@ class HeavyLeaseTest(HeavyTestBase):
 
 
 def guard(payload, env=None, cwd=None):
+    payload = dict(payload)
+    if not payload.get("cwd"):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
+            return guard({**payload, "cwd": d}, env=env, cwd=cwd)
+    (Path(payload["cwd"]) / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
     out = subprocess.run([PY, str(GUARD)], input=json.dumps(payload), capture_output=True, text=True,
                          env={**os.environ, **(env or {})}, cwd=cwd)
     if not out.stdout.strip():

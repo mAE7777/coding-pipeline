@@ -66,6 +66,8 @@ def walk_files(root):
 
 
 def in_scope(rel, scope):
+    if rel in (".coding-pipeline.json", ".coding-pipeline-origin.json"):
+        return False  # workflow control is not part of the product candidate
     if rel.rsplit("/", 1)[-1] in CLUTTER or any(part in TOOL_OUTPUT for part in rel.split("/")[:-1]):
         return False
     if scope == "all":

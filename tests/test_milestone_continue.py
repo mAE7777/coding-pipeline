@@ -39,6 +39,7 @@ class MilestoneContinueTest(unittest.TestCase):
         self.session = "test-" + uuid.uuid4().hex
         self.tmp = tempfile.TemporaryDirectory()
         self.d = self.tmp.name
+        (Path(self.d) / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
 
     def tearDown(self):
         self.tmp.cleanup()

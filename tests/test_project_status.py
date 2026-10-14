@@ -46,6 +46,7 @@ class ProjectStatusTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "proj"
         self.root.mkdir()
+        (self.root / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
         self.env = {**os.environ, "HOME": str(Path(self.tmp.name) / "home")}
         for k in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"):
             self.env.pop(k, None)

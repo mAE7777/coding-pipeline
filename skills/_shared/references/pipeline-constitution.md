@@ -5,6 +5,12 @@ The principles behind the coding pipeline: `/next`, `/capture`, `/scout`, `/plan
 GPT-6 Astra class), in Claude Code and in Codex. Each skill carries its own rules; this file is the reason
 they are shaped the way they are, and the tie-breaker when a situation is not covered.
 
+## Applicability
+The project's workflow choice is checked before every law below. No explicit ON means direct development:
+existing documents and design can be used without adoption or an owner lock. The user can turn management
+off immediately, independently of every old record or ruling. Skills remain available as independent tools.
+See `project-control.md`; a control choice is not an intent amendment or a missing owner approval.
+
 ## Why the pipeline looks like this
 Current models plan, decompose, write tests, and check their own work well, and they sustain multi-hour
 runs. Scripting those steps now makes results worse: step choreography, verification rituals, and

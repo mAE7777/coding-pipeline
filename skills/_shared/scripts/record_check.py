@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Classify a project's build record, so every tool notices at once when a project needs adopting.
+"""Classify a project's build record; adoption is a route only for explicitly managed projects.
 
 Usage: record_check.py [project-dir] [--json]
 
@@ -21,9 +21,10 @@ A venture project's own documents never count as foreign: truth/ and narrative/ 
 also helm's root files (blueprint-*.md, solution-concept.md, idea-stage-status.md, docent-ledger.md,
 CODEX-HANDOFF.md) and its design/ and vnv/ folders. A helm project that has reached the build with no code yet
 is therefore "empty": new work for /plan, not an adoption.
-The route for anything but complete (and empty) is `/plan adopt`: read everything, reconstruct, verify,
+When managed is ON, the route for anything but complete (and empty) is `/plan adopt`: read everything, reconstruct, verify,
 lock with the owner.
-Prints one line (or JSON with --json). Exit 0 for complete or empty, 3 when adoption is needed, 2 on bad usage.
+OFF has no route and exits 0. Prints one line (or JSON with --json). ON exits 0 for complete or empty,
+3 when adoption is needed, 2 on bad usage.
 """
 import json
 import os
@@ -34,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from languages import CODE, DOC  # noqa: E402
+from project_policy import read as policy  # noqa: E402
 
 RECORD = ("intent.md", "milestones.md", "state.md", "brief.md", "interfaces.md", "decisions.md")
 LEGACY = ("slices.md", "intent-anchor.md", "pipeline-state.md", "phases.md", "qa-reports", "key-learnings.md")
@@ -114,7 +116,9 @@ def classify(root):
     else:
         kind = "empty"
     info["kind"] = kind
-    info["route"] = None if kind in ("complete", "empty") else "/plan adopt"
+    choice = policy(root)
+    info["managed"] = choice["managed"]
+    info["route"] = None if not choice["managed"] or kind in ("complete", "empty") else "/plan adopt"
     return info
 
 
@@ -130,7 +134,7 @@ def main(argv):
     else:
         extra = f" · missing: {', '.join(info['missing'])}" if info["kind"] == "partial" else ""
         print(f"{info['kind']}{extra}" + (f" · route: {info['route']}" if info["route"] else ""))
-    return 0 if info["kind"] in ("complete", "empty") else 3
+    return 0 if not info["managed"] or info["kind"] in ("complete", "empty") else 3
 
 
 if __name__ == "__main__":

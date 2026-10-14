@@ -9,7 +9,35 @@ and losing decisions when context is compacted or work moves between sessions an
 
 The principles are in [`skills/_shared/references/pipeline-constitution.md`](skills/_shared/references/pipeline-constitution.md).
 
+## Choose whether a project is managed
+
+Projects default to **OFF**, including projects with old or partially adopted records. Use `/pipeline on`
+(Codex: `$pipeline on`) to enable the formal workflow, `/pipeline off` to disable it immediately, or
+`/pipeline status` to inspect the choice. Each command accepts an optional project folder. A plain request
+to enable or disable management has the same effect; no adoption or owner ruling is needed to change it.
+
+The choice is stored outside the build record in `.coding-pipeline.json`:
+
+```json
+{"version": 1, "managed": false}
+```
+
+OFF persists across sessions, compaction and Claude/Codex. Existing documents and design remain usable
+directly. Old locks, handoffs, missing record files and unfinished adoption never become prerequisites.
+Skills remain available as independent tools. The pipeline's automatic hooks, formal checker runners and
+continuation stop applying; an in-flight formal run stops when it observes the change. ON preserves the
+original gates and owner acceptance rules. Invoking a skill or finding old files never enables management.
+
+Git worktrees share the main checkout's choice. Nested repositories have their own choice. The controller
+also conditions recognizable older generated `AGENTS.md` agreements without removing project conventions.
+Existing managed projects must explicitly turn ON after this update. A missing, unreadable or invalid selection
+is treated as OFF; it cannot silently revive a workflow.
+
+Direct CLI: `python3 ~/.claude/skills/_shared/scripts/project_policy.py off /path/to/project`.
+
 ## How work flows
+
+The formal flow below applies when the project is ON.
 
 ```
  conversations, voice notes ──/capture──> dossier ──┐

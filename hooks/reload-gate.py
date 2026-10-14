@@ -26,6 +26,9 @@ import shlex
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/_shared/scripts"))
+from project_policy import managed, hook_project, read as policy, control_command  # noqa: E402
+
 REQUIRED = ("state.md", "intent.md", "milestones.md")
 READ_ONLY = {"cat", "head", "tail", "less", "more", "bat", "sed", "awk", "grep", "rg", "ls", "find", "wc", "pwd",
              "echo", "stat", "file", "diff", "tree", "jq", "sort", "uniq", "cut", "git", "true"}
@@ -40,14 +43,7 @@ def state_dir():
 
 
 def project_root(cwd):
-    env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env and (Path(env) / "docs/project/state.md").is_file():
-        return Path(env).resolve()
-    p = Path(cwd or ".").resolve()
-    for c in [p, *p.parents]:
-        if (c / "docs/project/state.md").is_file():
-            return c
-    return p
+    return hook_project({"cwd": cwd})
 
 
 def patch_targets(tool_input):
@@ -115,10 +111,12 @@ def required(root):
 
 def arm(data):
     root = project_root(data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or ".")
+    if not managed(root):
+        return 0
     if not (root / "docs/project/state.md").is_file():
         return 0
     needs = required(root)
-    key(root, data.get("session_id")).write_text(json.dumps({"needs": needs, "read": []}))
+    key(root, data.get("session_id")).write_text(json.dumps({"needs": needs, "read": [], "policy": policy(root)["token"]}))
     snaps = sorted((root / ".evidence/compact").glob("*.md"))
     snap = f", and the snapshot {snaps[-1].relative_to(root)}" if snaps else ""
     listed = ", then ".join(str(Path(p).relative_to(root)) for p in needs)
@@ -141,6 +139,8 @@ def load(path):
 
 def track(data):
     root = project_root(data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or ".")
+    if not managed(root):
+        return 0
     path = key(root, data.get("session_id"))
     record = load(path)
     if not record:
@@ -171,8 +171,12 @@ def track(data):
 
 def guard(data):
     root = project_root(data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or ".")
+    if not managed(root) or control_command((data.get("tool_input") or {}).get("command", "")):
+        return 0
     record = load(key(root, data.get("session_id")))
     if not record:
+        return 0
+    if record.get("policy") and record["policy"] != policy(root)["token"]:
         return 0
     remaining = [str(Path(p).relative_to(root)) for p in record["needs"] if p not in record["read"]]
     if not remaining:
@@ -191,6 +195,8 @@ def guard(data):
         for target in [t for t in targets if t]:
             path = Path(target).expanduser()
             path = path if path.is_absolute() else Path(data.get("cwd") or root) / path
+            if not managed(path):
+                continue
             try:
                 path.resolve().relative_to(root)
                 inside.append(target)

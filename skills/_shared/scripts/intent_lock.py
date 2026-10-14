@@ -161,6 +161,10 @@ def main(argv):
         return 2
     opts = {argv[i]: argv[i + 1] for i in range(2, len(argv) - 1) if argv[i] in ("--ruling", "--project")}
     project = Path(opts.get("--project") or path.resolve().parents[2])
+    if cmd in ("stamp", "verify"):
+        from project_policy import require  # noqa: E402
+        if not require(project):
+            return 3
     text = path.read_text(encoding="utf-8")
     if cmd == "hash":
         h = intent_hash(text)

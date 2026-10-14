@@ -93,6 +93,13 @@ def milestones(root):
 
 def status(root):
     root = Path(root).resolve()
+    from project_policy import read as policy  # noqa: E402
+    choice = policy(root)
+    if not choice["managed"]:
+        return {"project": str(root), "managed": False, "policy": choice, "record": "unmanaged",
+                "missing": [], "intent_locked": False, "phase": "direct development", "open": [],
+                "blockers": "", "in_flight": "", "milestones": [], "inbox": [],
+                "last_step": "not applicable", "recovery": False, "next": []}
     rec = root / "docs/project"
     from record_check import classify  # noqa: E402
     info = classify(root)
@@ -114,7 +121,7 @@ def status(root):
     except Exception:
         recovered = []
     ms = milestones(root)
-    s = {"project": str(root), "record": info["kind"], "missing": info.get("missing", []),
+    s = {"project": str(root), "managed": True, "policy": choice, "record": info["kind"], "missing": info.get("missing", []),
          "intent_locked": info["intent_locked"], "phase": phase or "none", "open": open_items,
          "blockers": "" if empty(blockers) else blockers, "in_flight": "" if empty(in_flight) else in_flight,
          "milestones": ms, "inbox": inbox, "last_step": section(state_text, "Last step") or "none recorded",
@@ -138,6 +145,9 @@ def step(who, action, why, fresh=False):
 
 
 def next_steps(s, root):
+    from project_policy import managed  # noqa: E402
+    if not managed(root):
+        return []
     out = []
     if s["recovery"]:
         out.append(step("builder", "/dev resume", "another conversation worked here after the last handoff note; its "
@@ -200,6 +210,9 @@ def next_steps(s, root):
 
 
 def render(s):
+    if not s.get("managed", True):
+        from project_policy import OFF_TEXT  # noqa: E402
+        return f"Project: {Path(s['project']).name}\n{OFF_TEXT}"
     lines = [f"Project: {Path(s['project']).name} · record {s['record']}"
              + (f" (missing: {', '.join(s['missing'])})" if s["missing"] else "")
              + f" · intent {'locked' if s['intent_locked'] else 'not locked'}",
@@ -220,6 +233,10 @@ def render(s):
 
 def record(root, skill, arg, outcome):
     root = Path(root).resolve()
+    from project_policy import managed, OFF_TEXT  # noqa: E402
+    if not managed(root):
+        print(OFF_TEXT)
+        return 0
     rec = root / "docs/project"
     rec.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")

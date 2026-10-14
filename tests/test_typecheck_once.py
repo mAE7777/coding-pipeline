@@ -27,6 +27,7 @@ class TypecheckOnceTest(unittest.TestCase):
         d = Path(self.tmp.name)
         self.proj = d / "proj"
         (self.proj / "src").mkdir(parents=True)
+        (self.proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
         (self.proj / "tsconfig.json").write_text("{}")
         (self.proj / "src/a.ts").write_text("const x: number = 1;\n")
         (self.proj / "src/untouched.ts").write_text("export {};\n")

@@ -51,9 +51,15 @@ sys.path.insert(0, str(HERE))
 from fingerprint import fingerprint  # noqa: E402
 from gate_keys import commands, read_keys  # noqa: E402
 import local_only  # noqa: E402
+from project_policy import read as policy, valid, require, OFF_TEXT  # noqa: E402
 
 PY = sys.executable
 CHILD = None  # the step running now; a stopped round stops its whole process group
+WORKFLOW_LEASE = None
+
+
+class WorkflowOff(Exception):
+    pass
 
 
 class Round:
@@ -112,19 +118,36 @@ def stop_child():
 
 def run(cmd, cwd=None, timeout=None):
     global CHILD
+    if WORKFLOW_LEASE and not valid(WORKFLOW_LEASE):
+        raise WorkflowOff(OFF_TEXT)
     try:
         CHILD = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                  start_new_session=True)
     except FileNotFoundError as exc:
         return 127, str(exc)
     try:
-        out, err = CHILD.communicate(timeout=timeout)
-        return CHILD.returncode, out + err
+        started = time.monotonic()
+        while True:
+            if WORKFLOW_LEASE and not valid(WORKFLOW_LEASE):
+                stop_child()
+                raise WorkflowOff(OFF_TEXT)
+            remaining = None if timeout is None else timeout - (time.monotonic() - started)
+            if remaining is not None and remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            try:
+                out, err = CHILD.communicate(timeout=min(0.5, remaining) if remaining is not None else 0.5)
+                return CHILD.returncode, out + err
+            except subprocess.TimeoutExpired:
+                continue
     except subprocess.TimeoutExpired:
         stop_child()
         out, err = CHILD.communicate()
         return 124, (out or "") + (err or "") + f"\n(stopped after {timeout}s)"
     finally:
+        if CHILD is not None:
+            for pipe in (CHILD.stdout, CHILD.stderr):
+                if pipe is not None:
+                    pipe.close()
         CHILD = None
 
 
@@ -214,10 +237,14 @@ def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, at
 
 
 def main(argv):
+    global WORKFLOW_LEASE
     if not argv or argv[0].startswith("--"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     project = Path(argv[0]).resolve()
+    if not require(project):
+        return 3
+    WORKFLOW_LEASE = policy(project)
     opts = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1) if argv[i] in ("--milestone", "--family", "--agents-dir")}
     if "--milestone" not in opts:
         print(__doc__.strip(), file=sys.stderr)
@@ -336,6 +363,9 @@ def main(argv):
                          "--evidence", str(r.ev), "--fingerprint", fp] + (["--intent-only"] if intent_only else []))
         r.say(out.strip()[-1200:])
         return 0 if code == 0 else 1
+    except WorkflowOff:
+        print(OFF_TEXT, file=sys.stderr)
+        return 3
     except Exception as exc:
         # The round broke, not the product: say so where the verdict would be, never leave a silent half-round.
         msg = f"{exc.__class__.__name__}: {exc}"
@@ -348,6 +378,7 @@ def main(argv):
         return 1
     finally:
         stop_child()
+        WORKFLOW_LEASE = None  # cleanup is allowed after revocation; no new workflow step is started
         canary.unlink(missing_ok=True)
         if base and Path(base).exists():
             run([PY, str(HERE / "gate_copies.py"), "cleanup", base, "--dest", str(Path(base).parent)])

@@ -29,6 +29,8 @@ from pathlib import Path
 PAUSE = re.compile(r"\b(stop|pause|wait|hold on|hang on|halt|stand by|don'?t (continue|go on|keep going))\b|"
                    r"\u6682\u505c|\u505c\u4e0b|\u5148\u505c|\u505c\u4e00\u4e0b|\u7b49\u7b49|\u7b49\u4e00\u4e0b|\u5148\u522b|\u522b\u7ee7\u7eed|\u4e0d\u8981\u7ee7\u7eed", re.I)
 SHARED = Path(__file__).resolve().parents[2] / "_shared/scripts"
+sys.path.insert(0, str(SHARED))
+from project_policy import managed, hook_project  # noqa: E402
 STREAK_CAP = 3
 SESSION_CAP = 25
 ACTIVE_PHASES = ("building", "checkpoint", "fixing")
@@ -88,6 +90,8 @@ def asks_owner(message):
 
 
 def decide(data):
+    if not managed(hook_project(data)):
+        return allow()
     state = find_state(data)
     if state is None:
         return allow()

@@ -109,6 +109,7 @@ class SettingsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             proj = Path(d) / "proj"
             (proj / "docs/project").mkdir(parents=True)
+            (proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
             for name in ("intent", "brief", "milestones"):
                 (proj / f"docs/project/{name}.md").write_text(f"# {name}\nsome text\n")
             out = subprocess.run([sys.executable, str(RI), "cold-reader", "--dir", "auto", "--out", str(proj / ".evidence/plan"),
@@ -122,6 +123,7 @@ class SettingsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             proj, home = Path(d) / "proj", Path(d) / "home"
             (proj / "docs/project").mkdir(parents=True)
+            (proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
             (proj / "docs/project/intent.md").write_text("# intent\nsome text\n")
             env = {**os.environ, "HOME": str(home)}
             subprocess.run([sys.executable, str(RI.parent / "spend.py"), "start", str(proj), "--phase", "adopt",

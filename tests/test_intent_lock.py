@@ -60,6 +60,7 @@ class IntentLockTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.project = Path(self.tmp.name) / "proj"
         (self.project / "docs/project").mkdir(parents=True)
+        (self.project / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
         self.intent = self.project / "docs/project/intent.md"
         self.intent.write_text(INTENT)
         self.home = Path(self.tmp.name) / "home"

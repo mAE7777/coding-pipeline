@@ -516,6 +516,9 @@ def codex_cmd(role, opts, workdir, stem, sid):
 
 
 def run_once(role, family, opts, workdir, stem, pack):
+    from project_policy import valid, OFF_TEXT  # noqa: E402
+    if opts.get("_workflow_lease") and not valid(opts["_workflow_lease"]):
+        return {"status": "CANCELLED", "reason": OFF_TEXT, "family": family}
     sid = str(uuid.uuid4())
     result_path = Path(str(stem) + ".result.md")
     result_path.unlink(missing_ok=True)  # an earlier attempt's result must never stand in for this one
@@ -549,12 +552,38 @@ def run_once(role, family, opts, workdir, stem, pack):
 
 
 def launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, result_path):
+    from project_policy import read as policy, valid, OFF_TEXT  # noqa: E402
+    lease = opts.get("_workflow_lease") or (policy(opts["project"]) if opts.get("project") else None)
+    if lease and not valid(lease):
+        return {"status": "CANCELLED", "reason": OFF_TEXT, "family": family}
     if shutil.which(cmd[0]) is None:
         return {"status": "ERROR", "reason": f"{cmd[0]} is not installed", "family": family}
     try:
-        proc = subprocess.run(cmd, cwd=workdir, input=stdin, capture_output=True, text=True, env=env,
-                              timeout=int(opts["timeout"]))
-        stream, code, err = proc.stdout, proc.returncode, proc.stderr
+        # Poll a scoped process group so OFF also stops a checker already in flight.
+        with subprocess.Popen(cmd, cwd=workdir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, env=env, start_new_session=True) as proc:
+            try:
+                started = time.monotonic()
+                first = True
+                while True:
+                    revoked = lease and not valid(lease)
+                    expired = time.monotonic() - started >= int(opts["timeout"])
+                    if revoked or expired:
+                        stream, err = stop_checker(proc)
+                        if revoked:
+                            return {"status": "CANCELLED", "reason": OFF_TEXT, "family": family}
+                        raise subprocess.TimeoutExpired(cmd, int(opts["timeout"]), output=stream, stderr=err)
+                    try:
+                        stream, err = proc.communicate(input=stdin if first else None, timeout=0.5)
+                        code = proc.returncode
+                        break
+                    except subprocess.TimeoutExpired:
+                        first = False
+                if lease and not valid(lease):
+                    return {"status": "CANCELLED", "reason": OFF_TEXT, "family": family}
+            finally:
+                # Cancellation/signals must not leave a checker or its descendants alive.
+                stop_checker(proc)
     except subprocess.TimeoutExpired as exc:
         raw = exc.stdout or ""
         stream, code, err = (raw.decode() if isinstance(raw, bytes) else raw), -1, "timeout"
@@ -589,6 +618,21 @@ def launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, resul
             else "claude --restricted + OS sandbox"}
 
 
+def stop_checker(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        return proc.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return proc.communicate()
+
+
 def sweep_stale(hours=6):
     """Remove private folders left by runs that were killed outright (a run lasts at most its timeout)."""
     base = HOME / ".gate-copies"
@@ -607,7 +651,6 @@ def main(argv):
         return 2
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda signum, frame: sys.exit(128 + signum))
-    sweep_stale()
     role = argv[0]
     try:
         opts = parse_args(argv[1:])
@@ -617,6 +660,12 @@ def main(argv):
     if "dir" not in opts or "out" not in opts or ("pack" not in opts and "render" not in opts):
         print(__doc__.strip(), file=sys.stderr)
         return 2
+    from project_policy import require, read as policy, valid, OFF_TEXT  # noqa: E402
+    if opts.get("project") and not require(opts["project"]):
+        return 3
+    if opts.get("project"):
+        opts["_workflow_lease"] = policy(opts["project"])
+    sweep_stale()
     if opts["family"] != "claude" and role != "code-verifier":
         print("run_isolated: the Codex family is used only for code-verifier", file=sys.stderr)
         return 2
@@ -666,6 +715,11 @@ def main(argv):
     missing = [m for m in missing if m.strip() != "none"]
 
     def finish(summary):
+        if opts.get("_workflow_lease") and not valid(opts["_workflow_lease"]):
+            if auto_dir:
+                shutil.rmtree(workdir, ignore_errors=True)
+            print(OFF_TEXT, file=sys.stderr)
+            return 3
         summary.update({"role": role, "mode": opts.get("mode") or "review", "pack_sha256": pack_sha,
                         "workdir": str(workdir), "pack_missing": missing})
         if auto_dir:

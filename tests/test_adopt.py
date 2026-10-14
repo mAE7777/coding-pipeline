@@ -29,6 +29,7 @@ def unadopted(d):
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
+    (root / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "start"],

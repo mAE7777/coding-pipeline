@@ -351,6 +351,10 @@ def main(argv):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     project = Path(argv[0]).resolve()
+    from project_policy import require, read as policy, valid, OFF_TEXT  # noqa: E402
+    if not require(project):
+        return 3
+    lease = policy(project)
     opts = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1) if argv[i].startswith("--")}
     intent_only = "--intent-only" in argv
     for k in ("--milestone", "--round", "--evidence", "--fingerprint"):
@@ -362,14 +366,12 @@ def main(argv):
         print(f"gate_report: no evidence folder {ev}", file=sys.stderr)
         return 1
     reviews = project / "docs/project/reviews"
-    reviews.mkdir(parents=True, exist_ok=True)
     ledger_path = reviews / f"{mid}.findings.json"
     ledger = load(ledger_path) or {}
     try:
         verdict, reasons, exceptions, judge, summaries = compute(project, mid, rnd, ev, ledger, intent_only)
         if not intent_only:
             ledger = update_ledger(ledger, judge, rnd)
-            ledger_path.write_text(json.dumps(ledger, indent=2, ensure_ascii=False))
         diff_counts = {}
         for r in (judge or {}).get("intent_diff") or []:
             diff_counts[st(r)] = diff_counts.get(st(r), 0) + 1
@@ -380,6 +382,12 @@ def main(argv):
                    "run the round again"]
         exceptions = []
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not valid(lease):
+        print(OFF_TEXT, file=sys.stderr)
+        return 3
+    reviews.mkdir(parents=True, exist_ok=True)
+    if not intent_only and judge is not None:
+        ledger_path.write_text(json.dumps(ledger, indent=2, ensure_ascii=False))
     result = {"milestone": mid, "round": rnd, "fingerprint": fp, "verdict": verdict,
               "judge_verdict": (judge or {}).get("verdict"), "reasons": reasons, "exceptions": exceptions,
               "intent_diff": diff_counts, "checkers": {c: (s or {}).get("status") for c, s in summaries.items()},

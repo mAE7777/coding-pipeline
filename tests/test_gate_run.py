@@ -127,6 +127,7 @@ def make_project(d, test_cmd="python3 -c \"print('tests ok')\""):
     root = Path(d) / "proj"
     docs = root / "docs/project"
     docs.mkdir(parents=True)
+    (root / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
     (root / "app.py").write_text("items = []\n")
     (root / "AGENTS.md").write_text(f"# Map\n\n## Commands\ntest: {test_cmd}\nrun: python3 app.py\n")
     (docs / "intent.md").write_text(INTENT)
@@ -159,6 +160,7 @@ class GateRunTest(unittest.TestCase):
 
     def prepare(self, **kw):
         root = make_project(self.tmp.name, **kw)
+        (root / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
         self.env["FAKE_PROJECT"] = str(root)
         subprocess.run([sys.executable, str(SCRIPTS / "rulings.py"), "record", str(root), "--id", "D-001", "--quote",
                         "yes, lock it, that is the list I want"], env=self.env, check=True, capture_output=True)

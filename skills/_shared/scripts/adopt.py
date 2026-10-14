@@ -426,6 +426,9 @@ def main(argv):
     if len(argv) != 2 or argv[0] not in ("inventory", "commands", "check"):
         print(__doc__.strip(), file=sys.stderr)
         return 2
+    from project_policy import require  # noqa: E402
+    if not require(argv[1]):
+        return 3
     return {"inventory": inventory, "commands": run_commands, "check": check}[argv[0]](argv[1])
 
 

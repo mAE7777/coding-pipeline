@@ -57,6 +57,8 @@ wire the export button
 
 def adopted(d):
     root = Path(d) / "proj"
+    root.mkdir()
+    (root / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
     docs = root / "docs/project"
     docs.mkdir(parents=True)
     (docs / "intent.md").write_text("# Intent\nLocked by the owner 2026-09-27 · hash 0123456789abcdef · ruling D-001 · "
@@ -83,6 +85,7 @@ def hook(mode, payload, tool="claude", env=None):
 
 class RecordCheckTest(unittest.TestCase):
     def kind(self, root):
+        (Path(root) / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
         return json.loads(subprocess.run([sys.executable, str(RC), str(root), "--json"], capture_output=True,
                                          text=True).stdout)["kind"]
 
@@ -177,6 +180,7 @@ class ContinuityTest(unittest.TestCase):
     def test_only_a_pipeline_project_is_routed_to_adoption(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / ".git").mkdir()
+            (Path(d) / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
             (Path(d) / "main.go").write_text("package main\n")
             code, out, _ = hook("session-start", {"session_id": "s1", "cwd": d})
             self.assertEqual(code, 0)

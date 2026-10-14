@@ -44,10 +44,10 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
-SKILLS = ("next", "capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
+SKILLS = ("pipeline", "next", "capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
           "polish", "evolve")
 RETIRED_SKILLS = ("qa", "integrate")
-SHARED = ("gate.sh", "scripts", "templates", "references/pipeline-constitution.md", "references/steal-protocol.md",
+SHARED = ("gate.sh", "scripts", "templates", "references/project-control.md", "references/pipeline-constitution.md", "references/steal-protocol.md",
           "references/steal-spec.md", "references/record-glossary.md")
 AGENTS = ("code-verifier", "loyal-evaluator", "gate-judge", "cold-reader", "claim-verifier", "change-reviewer")
 RETIRED_AGENTS = ("dev-planner", "task-implementer", "qa-planner", "category-executor", "project-analyzer",
@@ -183,6 +183,8 @@ def cmd_apply(home, overwrite=False):
         return 1
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = home / ".claude/_backups" / f"pipeline-install-{stamp}"
+    # Hooks importing a new shared module must never see an incomplete upgrade.
+    actions.sort(key=lambda row: 0 if row[0] in ("add", "update") and row[1].name == "project_policy.py" else 1)
     for kind, a, b in actions:
         if kind in ("update", "remove") and a.is_file():
             target = backup / a.relative_to(home / ".claude")

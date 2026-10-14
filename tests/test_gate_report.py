@@ -39,6 +39,7 @@ class GateReportTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        (self.root / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
         (self.root / "docs/project").mkdir(parents=True)
         (self.root / "docs/project/intent.md").write_text(INTENT)
         (self.root / "docs/project/milestones.md").write_text(MS)

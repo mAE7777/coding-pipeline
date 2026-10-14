@@ -27,6 +27,8 @@ from pathlib import Path
 HEAVY_PY = Path(__file__).resolve().parents[1] / "skills/_shared/scripts/heavy.py"
 if not HEAVY_PY.exists():
     HEAVY_PY = Path.home() / ".claude/skills/_shared/scripts/heavy.py"
+sys.path.insert(0, str(HEAVY_PY.parent))
+from project_policy import managed, hook_project  # noqa: E402
 
 BOUNDED = [
     r"(npm|pnpm|yarn|bun)( run)? (test|build|e2e|typecheck|check)\b",
@@ -228,6 +230,8 @@ def main():
     except ValueError:
         return 0
     try:
+        if not managed(hook_project(data)):
+            return 0
         tool = data.get("tool_name") or ""
         if tool == "Bash":
             return check_bash(data)

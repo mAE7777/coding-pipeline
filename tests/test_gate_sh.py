@@ -14,6 +14,18 @@ GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "XDG_CONFIG_HOME": os.
 
 
 def gate(*args):
+    if args and not args[0].startswith("--"):
+        import tempfile
+        import shutil
+        target = Path(args[0])
+        if target.is_relative_to(FIX):
+            with tempfile.TemporaryDirectory() as d:
+                copy = Path(d) / "fixture"
+                shutil.copytree(target, copy)
+                return gate(str(copy), *args[1:])
+        sys.path.insert(0, str(ROOT / "skills/_shared/scripts"))
+        from project_policy import set_mode
+        set_mode(target, True)
     return subprocess.run(["bash", str(GATE), *args], capture_output=True, text=True, timeout=300, env=GIT_ENV)
 
 

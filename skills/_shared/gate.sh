@@ -26,6 +26,10 @@ fi
 if [ "$MODE" = inventory ]; then
   exec python3 "$HERE/scripts/inventory.py" .
 fi
+if ! python3 "$HERE/scripts/project_policy.py" check .; then
+  echo "Coding workflow OFF: formal milestone gating is disabled; follow the current request." >&2
+  exit 3
+fi
 
 FAILS=0
 WARNS=0

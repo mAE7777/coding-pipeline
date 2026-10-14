@@ -19,6 +19,7 @@ class Base(unittest.TestCase):
         self.proj = Path(self.tmp.name) / "proj"
         self.docs = self.proj / "docs/project"
         self.docs.mkdir(parents=True)
+        (self.proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
         self.env = {**os.environ, "RELOAD_STATE_DIR": str(Path(self.tmp.name) / "reload")}
 
     def tearDown(self):

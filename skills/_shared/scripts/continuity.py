@@ -46,6 +46,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from fingerprint import fingerprint  # noqa: E402
+from project_policy import managed, project_root, OFF_TEXT  # noqa: E402
 
 READ_LIST = ("intent.md", "brief.md", "milestones.md", "state.md", "interfaces.md", "decisions.md")
 WRITE_TOOLS = re.compile(r"^(Write|Edit|MultiEdit|NotebookEdit|apply_patch|write_file|edit_file)$", re.I)
@@ -56,13 +57,7 @@ def now():
 
 
 def find_root(start):
-    p = Path(start or ".").resolve()
-    for c in [p, *p.parents]:
-        if (c / "docs/project").is_dir() or (c / "AGENTS.md").is_file() or (c / ".git").exists():
-            return c
-        if c == Path.home():
-            break
-    return None
+    return project_root(start)
 
 
 def record_root(start):
@@ -70,11 +65,8 @@ def record_root(start):
     docs/project/state.md, or None."""
     if not start:
         return None
-    p = Path(start).resolve()
-    for c in [p, *p.parents]:
-        if (c / "docs/project/state.md").is_file():
-            return c
-    return None
+    root = project_root(start)
+    return root if (root / "docs/project/state.md").is_file() else None
 
 
 # Which project a session claimed, so its stop finds the project even when the session was started in a
@@ -151,6 +143,8 @@ def other_agents(root, own_pid):
 
 
 def write_packet(root, tool, session):
+    if not managed(root):
+        return "workflow OFF"
     rec = root / "docs/project"
     state = (rec / "state.md").read_text(encoding="utf-8") if (rec / "state.md").is_file() else ""
     fp, rows = fingerprint(root, "product")
@@ -290,6 +284,8 @@ def last_said(path, tool, tail=3_000_000):
 
 def recovery(root, tool, session):
     """Lines telling a new session about work in another conversation after the last handoff note, or []."""
+    if not managed(root):
+        return []
     packet = root / "docs/project/handoffs/latest.md"
     note = re.search(r"^Written:\s*(\S+)", packet.read_text(encoding="utf-8"), re.M) if packet.is_file() else None
     since = note.group(1) if note else ""
@@ -339,8 +335,11 @@ def emit(event, context=None, message=None):
 
 
 def session_start(data, tool):
-    root = find_root(os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd"))
+    root = find_root(data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR"))
     if root is None:
+        return 0
+    if not managed(root):
+        emit("SessionStart", OFF_TEXT)
         return 0
     from record_check import classify  # noqa: E402
     info = classify(root)
@@ -424,8 +423,10 @@ def claim(data, tool):
     targets = targets or [tool_input.get("file_path") or tool_input.get("path") or ""]
     base = Path(data.get("cwd") or ".")
     resolved = [str((Path(t) if Path(t).is_absolute() else base / t).resolve()) for t in targets if t]
+    if resolved and any(not managed(t) for t in resolved):
+        return 0
     root = build_root(data, tool, resolved)
-    if root is None:
+    if root is None or not managed(root):
         return 0
     state_path = root / "docs/project/state.md"
     if resolved and not any(inside(r, root) for r in resolved):
@@ -462,7 +463,10 @@ def claim(data, tool):
 
 def stop(data, tool):
     root = build_root(data, tool)
-    if root is None:
+    if root is None or not managed(root):
+        return 0
+    active = project_root(data.get("cwd") or root)
+    if active != root and not managed(active) and not root.is_relative_to(active):
         return 0
     state_path = root / "docs/project/state.md"
     session = data.get("session_id", "")

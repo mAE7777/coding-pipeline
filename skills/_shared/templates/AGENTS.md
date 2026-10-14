@@ -22,6 +22,14 @@ demo: <command that starts the product the way the demo ending needs, or the sam
 - <the non-obvious rules: naming, error handling, where state lives, what never to import>
 
 ## Working agreement
+<!-- coding-pipeline-policy:v1 -->
+The coding-pipeline working agreement below applies only when this project's
+`.coding-pipeline.json` explicitly sets `managed` to `true` (shared by Git worktrees).
+Otherwise follow the user's current request and existing project documents directly;
+adoption, owner lock, record maintenance, handoff intake and milestone stop rules
+are not prerequisites. Pipeline skills may be used as independent tools without
+enabling the workflow. This choice also applies after resume or compaction.
+
 - The plan, decisions, and current state live in docs/project/. Start by reading docs/project/state.md and
   docs/project/handoffs/latest.md; they say who worked last, what is open, and the next step. Then run
   `python3 ~/.claude/skills/_shared/scripts/continuity.py recover .`: it prints work another session did after
