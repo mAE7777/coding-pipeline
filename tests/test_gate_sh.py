@@ -221,6 +221,75 @@ class GateShTest(unittest.TestCase):
             self.assertIn("fatal:", line)
             self.assertNotIn("xcrun", line)
 
+    def test_record_tracked_edge_cases(self):
+        import shutil
+        import tempfile
+
+        def repo(d):
+            docs = Path(d) / "docs/project"
+            docs.mkdir(parents=True)
+            (docs / "fix-log.md").write_text("# Fix log\n")
+            subprocess.run(["git", "init", "-q", str(d)], check=True, env=GIT_ENV)
+            sys.path.insert(0, str(ROOT / "skills/_shared/scripts"))
+            from project_policy import set_mode
+            set_mode(Path(d), True)
+
+        def run(d, **env):
+            return subprocess.run(["bash", str(GATE), str(d)], capture_output=True, text=True, timeout=300,
+                                  env={**GIT_ENV, **env}).stdout
+
+        # An unreadable global git config may name the ignore file that hides a record file: never a pass.
+        with tempfile.TemporaryDirectory() as d:
+            repo(d)
+            rules = Path(d) / "rules"
+            rules.write_text("fix-log.md\n")
+            cfg = Path(d) / "gitconfig"
+            cfg.write_text(f"[core]\n\texcludesFile = {rules}\n")
+            cfg.chmod(0)
+            try:
+                out = run(d, GIT_CONFIG_GLOBAL=str(cfg))
+            finally:
+                cfg.chmod(0o644)
+            self.assertNotIn("PASS   record-tracked", out)
+            self.assertIn("gitconfig", out)
+        # Reached through a symlinked path, the walk for .gitignore files stops at the repository.
+        with tempfile.TemporaryDirectory() as d:
+            real = Path(d) / "real"
+            repo(real)
+            link = Path(d) / "link"
+            link.symlink_to(real, target_is_directory=True)
+            above = Path(d) / ".gitignore"
+            above.write_text("nothing\n")
+            above.chmod(0)
+            try:
+                out = run(link)
+            finally:
+                above.chmod(0o644)
+            self.assertIn("PASS   record-tracked", out, "a file above the repository is not one of its rules")
+        # Whether a rule file is missing does not depend on the language of ls's messages.
+        with tempfile.TemporaryDirectory() as d:
+            repo(d)
+            fake = Path(d) / "bin"
+            fake.mkdir()
+            (fake / "ls").write_text("#!/bin/bash\necho \"ls: $2: Datei oder Verzeichnis nicht gefunden\" >&2\nexit 1\n")
+            (fake / "ls").chmod(0o755)
+            out = run(d, PATH=f"{fake}:{os.environ['PATH']}")
+            self.assertIn("PASS   record-tracked", out, out[-600:])
+        # A repository on a machine without git: not checked, said so; never "not in a git repository".
+        with tempfile.TemporaryDirectory() as d:
+            repo(d)
+            farm = Path(d) / "farm"
+            farm.mkdir()
+            for src in ("/bin", "/usr/bin", "/usr/sbin", "/sbin"):
+                for f in Path(src).iterdir():
+                    if f.name != "git" and not (farm / f.name).exists():
+                        (farm / f.name).symlink_to(f)
+            (farm / "python3").unlink(missing_ok=True)
+            (farm / "python3").symlink_to(shutil.which("python3"))
+            out = run(d, PATH=str(farm))
+            self.assertRegex(out, r"NOT_RUN\s+record-tracked\s+git is not installed")
+            self.assertRegex(out, r"NOT_RUN\s+pipeline-traces\s+git is not installed")
+
 
 if __name__ == "__main__":
     unittest.main()
