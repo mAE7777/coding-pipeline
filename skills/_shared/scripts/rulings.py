@@ -79,19 +79,49 @@ def open_lines(path):
     return io.StringIO(proc.stdout.decode("utf-8", errors="replace"))
 
 
+ROLLOUT_NAME = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([^_.]+)")
+
+
+def rollout_meta(path):
+    """The first line's payload of a Codex rollout (its session_meta), or {} when it cannot be read."""
+    try:
+        with open_lines(path) as f:
+            first = json.loads(f.readline())
+    except (OSError, ValueError):
+        return {}
+    return first.get("payload") or {} if first.get("type") == "session_meta" else {}
+
+
+def is_subagent(path):
+    """True for a Codex rollout written by a subagent or a reviewer: what arrives there as the user is another
+    agent's prompt, never the person's."""
+    return Path(path).name.startswith("rollout-") and isinstance(rollout_meta(path).get("source"), dict)
+
+
 def thread_files(path):
     """All the files of the conversation a transcript belongs to: for a Codex rollout, every segment of its thread
-    (the thread id is its first line's session_id); for anything else, the file itself."""
+    (the thread id is its first line's session_id, else the one in its file name); for anything else, the file
+    itself."""
     path = Path(path)
     if not path.name.startswith("rollout-"):
         return [path]
-    try:
-        with open_lines(path) as f:
-            meta = (json.loads(f.readline()).get("payload") or {})
-    except (OSError, ValueError):
-        return [path]
-    thread = meta.get("session_id") or meta.get("id")
-    return codex_rollouts(thread) or [path] if thread else [path]
+    meta = rollout_meta(path)
+    named = ROLLOUT_NAME.match(path.name)
+    thread = meta.get("session_id") or meta.get("id") or (named.group(1) if named else None)
+    return (codex_rollouts(thread) or [path]) if thread else [path]
+
+
+def locate(stored):
+    """Where a transcript recorded earlier is now: the same file, its compressed form (.zst), or, for a Codex
+    rollout, the newest file of its thread; None when none is on disk."""
+    p = Path(stored)
+    if p.is_file():
+        return p
+    if Path(str(p) + ".zst").is_file():
+        return Path(str(p) + ".zst")
+    named = ROLLOUT_NAME.match(p.name)
+    hits = codex_rollouts(named.group(1)) if named else []
+    return hits[-1] if hits else None
 
 
 # Text the harness injects into the user role: agent hand-backs, task notifications, command echoes, reminders,
@@ -125,13 +155,18 @@ def typed_messages(path):
     """[(uuid or line number, timestamp, text)] for every message the person typed. Agent hand-backs and task
     notifications arrive in the user role (a queued prompt with origin kind "peer", or a user entry); they are
     model or harness output and never count, and neither does anything from a subagent's side chain."""
+    if is_subagent(path):
+        return []
     with open_lines(path) as f:
         return typed_in_lines(f)
 
 
 def last_typed(path, tail_bytes=2_000_000):
     """The person's latest typed message, read from the end of the transcript only (hooks call this on every
-    stop, and transcripts grow large). None when the tail holds no typed message."""
+    stop, and transcripts grow large). None when the tail holds no typed message, or the transcript is a Codex
+    subagent's (decided from its first line, which the tail may not hold)."""
+    if is_subagent(path):
+        return None
     if Path(path).suffix == ".zst":
         with open_lines(path) as f:
             text = f.read()
@@ -153,7 +188,7 @@ CARRIERS = ('"user"', "queued_command", "UserMessage", "user_message", "session_
 
 
 def typed_in_lines(lines):
-    out, codex_items = [], []
+    out, older, items = [], set(), set()  # in line order; which are Codex's older and current forms
     for n, line in enumerate(lines, 1):
         if not any(k in line for k in CARRIERS):
             continue
@@ -191,6 +226,7 @@ def typed_in_lines(lines):
         payload = e.get("payload") if isinstance(e.get("payload"), dict) else None
         if payload and e.get("type") == "event_msg" and payload.get("type") == "user_message" \
                 and typed(payload.get("message", "")):
+            older.add(len(out))
             out.append((f"line {n}", ts, payload.get("message", "")))
         # Codex 0.158 and later: the person's messages are UserMessage items sent by the client (a client_id);
         # injected instructions and context arrive as response_item messages in the user role, which never count
@@ -200,9 +236,12 @@ def typed_in_lines(lines):
             text = "\n".join(c.get("text", "") for c in item.get("content") or []
                              if isinstance(c, dict) and c.get("type") == "text")
             if typed(text):
-                codex_items.append((item.get("id") or f"line {n}", ts, text))
-    # A rollout that writes both forms says each message twice; the items are the current form.
-    return codex_items if codex_items else out
+                items.add(len(out))
+                out.append((item.get("id") or f"line {n}", ts, text))
+    # A rollout that writes both forms says each message twice: an older-form message with the same words as a
+    # current-form item is that item again; every other message stays, in order.
+    again = {out[i][2] for i in items}
+    return [m for i, m in enumerate(out) if not (i in older and m[2] in again)]
 
 
 EDGE = " .,;:!?\"'\u3002\uff0c\uff01\uff1f"
@@ -226,14 +265,18 @@ def quote_fits(quote, message):
     return False
 
 
-def find_quote(path, quote):
-    """The person's latest typed message the quote fits, searching every file of the conversation (a Codex
-    thread's segments, compressed ones included), or None."""
+def find_quote_in(path, quote):
+    """(message, file holding it): the person's latest typed message the quote fits, searching every file of the
+    conversation (a Codex thread's segments, compressed ones included), newest first; (None, None) when none."""
     for p in reversed(thread_files(path)):  # newest segment first: a ruling is usually recent
         found = [m for m in typed_messages(p) if quote_fits(quote, m[2])]
         if found:
-            return found[-1]
-    return None
+            return found[-1], p
+    return None, None
+
+
+def find_quote(path, quote):
+    return find_quote_in(path, quote)[0]
 
 
 def ledger_path(project):
@@ -281,12 +324,19 @@ def cmd_record(argv):
     if transcript is None:
         print(f"FAIL   ruling      no transcript found for session {session}")
         return 1
-    hit = find_quote(transcript, opts["--quote"])
+    hit, holder = find_quote_in(transcript, opts["--quote"])
     if hit is None:
-        print(f"FAIL   ruling      \"{opts['--quote'][:60]}\" is not a whole sentence (or the whole message) the owner "
-              f"typed in session {session}; quote their full sentence, or ask them and record their own words")
+        if is_subagent(transcript):
+            print(f"FAIL   ruling      session {session} is a Codex subagent's or reviewer's: what arrives there as the "
+                  "user is another agent's prompt, never the owner's words; quote the owner's own session")
+        elif not any(typed_messages(p) for p in thread_files(transcript)):
+            print(f"FAIL   ruling      no message typed by the owner was found in session {session} "
+                  f"({transcript.name}); its transcript may be in a form this script does not read")
+        else:
+            print(f"FAIL   ruling      \"{opts['--quote'][:60]}\" is not a whole sentence (or the whole message) the "
+                  f"owner typed in session {session}; quote their full sentence, or ask them and record their own words")
         return 1
-    row = {"id": opts["--id"], "quote": norm(opts["--quote"]), "session": session, "transcript": str(transcript),
+    row = {"id": opts["--id"], "quote": norm(opts["--quote"]), "session": session, "transcript": str(holder),
            "message": hit[0], "message_time": hit[1],
            "recorded": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     lp = ledger_path(project)
@@ -316,8 +366,8 @@ def quote_problems(did, owners, ledger):
             problems.append(f"{did} says [owner] \"{norm(q)[:50]}\" but no recorded proof equals those words "
                             "(rulings.py record with exactly the quoted words)")
             continue
-        t = Path(rows[-1].get("transcript", ""))
-        if not t.is_file():
+        t = locate(rows[-1].get("transcript", ""))  # Codex compresses finished rollouts: the proof follows the file
+        if t is None:
             warnings.append(f"{did}: transcript no longer on disk; proof recorded {rows[-1].get('recorded')}")
         elif find_quote(t, rows[-1]["quote"]) is None:
             problems.append(f"{did}: the recorded quote is no longer in the owner's messages in {t.name}")

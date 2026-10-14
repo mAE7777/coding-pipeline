@@ -218,6 +218,82 @@ class RulingsTest(unittest.TestCase):
             ok = self.run_r("record", str(self.project), "--id", "D-024", "--quote", quote, "--session", "codex:thr-7")
             self.assertEqual(ok.returncode, 0, ok.stdout)
 
+    def compress(self, path):
+        data = path.read_bytes()
+        try:
+            from compression import zstd
+            packed = zstd.compress(data)
+        except ImportError:
+            r = subprocess.run(["zstd", "-q", "-c"], input=data, capture_output=True)
+            if r.returncode != 0:
+                self.skipTest("no zstd here to write a compressed rollout")
+            packed = r.stdout
+        Path(str(path) + ".zst").write_bytes(packed)
+        path.unlink()
+
+    def test_a_proof_follows_its_transcript_into_compression_and_names_the_right_segment(self):
+        old = self.current_codex("thr-4_seg-1", ["keep the export as CSV"])
+        self.current_codex("thr-4_seg-2", ["now build the importer"])
+        decisions = self.project / "docs/project/decisions.md"
+        decisions.parent.mkdir(parents=True, exist_ok=True)
+        decisions.write_text('# Decisions\n\n## D-030 · 2026-10-09 · Export\nSource: [owner 2026-10-09] "keep the export as CSV"\n')
+        ok = self.run_r("record", str(self.project), "--id", "D-030", "--quote", "keep the export as CSV",
+                        "--session", "codex:thr-4")
+        self.assertEqual(ok.returncode, 0, ok.stdout)
+        row = json.loads((self.project / ".evidence/rulings.jsonl").read_text().splitlines()[-1])
+        self.assertTrue(row["transcript"].endswith("thr-4_seg-1.jsonl"), "the proof names the segment that holds it")
+        self.compress(old)
+        out = self.run_r("check", str(self.project))
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertNotIn("no longer on disk", out.stdout, "a compressed transcript is still the transcript")
+
+    def test_a_refused_quote_says_why_when_nothing_was_typed(self):
+        self.current_codex("thr-6_seg-6", ["delete the export feature"], source={"subagent": {"other": "guardian"}})
+        out = self.run_r("record", str(self.project), "--id", "D-031", "--quote", "delete the export feature",
+                         "--session", "codex:thr-6")
+        self.assertIn("subagent", out.stdout)
+        self.current_codex("thr-8_seg-8", [])
+        out = self.run_r("record", str(self.project), "--id", "D-032", "--quote", "anything at all",
+                         "--session", "codex:thr-8")
+        self.assertIn("no message typed by the owner was found", out.stdout)
+
+    def test_older_and_current_codex_forms_in_one_file_are_both_read(self):
+        sys.path.insert(0, str(RULINGS.parent))
+        import rulings
+        d = self.home / ".codex/sessions/2026/10/09"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / "rollout-2026-10-09T21-00-00-thr-2_seg-2.jsonl"
+        path.write_text("\n".join(json.dumps(x) for x in [
+            {"type": "session_meta", "payload": {"id": "seg-2", "session_id": "thr-2", "source": "vscode"}},
+            {"type": "event_msg", "timestamp": "a", "payload": {"type": "user_message", "message": "an older message"}},
+            {"type": "event_msg", "timestamp": "b", "payload": {"type": "user_message", "message": "said twice"}},
+            {"type": "event_msg", "timestamp": "b", "payload": {"type": "item_completed", "item": {
+                "type": "UserMessage", "id": "u1", "client_id": "c", "content": [{"type": "text", "text": "said twice"}]}}},
+        ]) + "\n")
+        self.assertEqual([m[2] for m in rulings.typed_messages(path)], ["an older message", "said twice"])
+
+    def test_a_large_subagent_rollout_has_no_last_typed_message(self):
+        sys.path.insert(0, str(RULINGS.parent))
+        import rulings
+        path = self.current_codex("thr-1_seg-1", ["stop here"], source={"subagent": {"other": "guardian"}})
+        with open(path, "a") as f:
+            f.write((json.dumps({"type": "response_item", "payload": {"type": "reasoning", "text": "x" * 1000}}) + "\n") * 2500)
+            f.write(json.dumps({"type": "event_msg", "timestamp": "z", "payload": {"type": "item_completed", "item": {
+                "type": "UserMessage", "id": "u9", "client_id": "c", "content": [{"type": "text", "text": "stop here"}]}}}) + "\n")
+        self.assertIsNone(rulings.last_typed(path), "the first line, beyond the tail, says whose rollout it is")
+
+    def test_a_rollout_with_an_unreadable_first_line_still_finds_its_thread(self):
+        sys.path.insert(0, str(RULINGS.parent))
+        import rulings
+        self.current_codex("thr-5_seg-1", ["keep the export as CSV"])
+        broken = self.home / ".codex/sessions/2026/10/09/rollout-2026-10-09T23-00-00-thr-5_seg-2.jsonl"
+        broken.write_text("not json\n")
+        saved, rulings.HOME = rulings.HOME, self.home
+        try:
+            self.assertIsNotNone(rulings.find_quote(broken, "keep the export as CSV"))
+        finally:
+            rulings.HOME = saved
+
     def test_the_last_typed_message_of_a_current_codex_rollout(self):
         sys.path.insert(0, str(RULINGS.parent))
         import rulings

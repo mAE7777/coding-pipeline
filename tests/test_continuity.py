@@ -266,6 +266,42 @@ class ContinuityTest(unittest.TestCase):
         self.assertNotIn("not the owner", ctx)
         self.assertIn("Switching the export writer to CSV now.", ctx, "and what the agent said last")
 
+    def test_the_owners_words_in_an_earlier_compressed_segment_are_recovered(self):
+        home = Path(self.tmp.name) / "home4"
+        subprocess.run([sys.executable, str(CONT), "packet", str(self.root), "--tool", "claude", "--session", "c-old"],
+                       check=True, capture_output=True, env={**os.environ, "HOME": str(home)})
+        packet = self.root / "docs/project/handoffs/latest.md"
+        written = re.search(r"^Written: (\S+)", packet.read_text(), re.M).group(1)
+        os.utime(packet, (time.time() - 600, time.time() - 600))
+        d = home / ".codex/sessions/2026/10/09"
+        d.mkdir(parents=True)
+        later = "2099-01-01T00:00:00.000Z"
+        meta = lambda seg: {"type": "session_meta", "timestamp": written, "payload": {
+            "id": seg, "session_id": "thr-77", "cwd": str(self.root), "source": "vscode"}}
+        first = d / "rollout-2026-10-09T10-00-00-thr-77_seg-a.jsonl"
+        first.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in [meta("seg-a"), {
+            "type": "event_msg", "timestamp": later, "payload": {"type": "item_completed", "item": {
+                "type": "UserMessage", "id": "u1", "client_id": "c1",
+                "content": [{"type": "text", "text": "keep the importer behind a flag"}]}}}]) + "\n")
+        data = first.read_bytes()
+        try:
+            from compression import zstd
+            packed = zstd.compress(data)
+        except ImportError:
+            r = subprocess.run(["zstd", "-q", "-c"], input=data, capture_output=True)
+            if r.returncode != 0:
+                self.skipTest("no zstd here to write a compressed rollout")
+            packed = r.stdout
+        Path(str(first) + ".zst").write_bytes(packed)
+        first.unlink()
+        (d / "rollout-2026-10-09T11-00-00-thr-77_seg-b.jsonl").write_text("\n".join(json.dumps(x) for x in [meta("seg-b"), {
+            "type": "event_msg", "timestamp": later, "payload": {"type": "item_completed", "item": {
+                "type": "AgentMessage", "id": "a1", "content": [{"type": "Text", "text": "Wiring the flag now."}]}}}]) + "\n")
+        code, out, _ = hook("session-start", {"session_id": "c-new", "cwd": str(self.root)}, env={"HOME": str(home)})
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"keep the importer behind a flag"', ctx, "words in an earlier, compressed segment are not lost")
+        self.assertIn("Wiring the flag now.", ctx)
+
     def test_a_clean_handoff_adds_no_recovery(self):
         home = Path(self.tmp.name) / "home2"
         rollout = home / ".codex/sessions/2026/09/28/rollout-x-thr-7.jsonl"

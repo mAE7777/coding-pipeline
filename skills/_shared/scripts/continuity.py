@@ -246,25 +246,31 @@ def other_conversations(root, skip):
                 out.append((f.stat().st_mtime, "claude", f.stem, f))
     sessions = home / ".codex/sessions"
     if sessions.is_dir():
-        newest = sorted(sessions.glob("*/*/*/rollout-*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)[:300]
+        from rulings import rollout_meta  # noqa: E402
+        files = list(sessions.glob("*/*/*/rollout-*.jsonl")) + list(sessions.glob("*/*/*/rollout-*.jsonl.zst"))
+        newest = sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:300]
         for f in newest:
-            try:
-                with open(f, encoding="utf-8") as fh:
-                    meta = (json.loads(fh.readline()).get("payload") or {})
-            except (OSError, ValueError):
-                continue
+            meta = rollout_meta(f)  # Codex compresses finished rollouts (.zst); their first line is read the same way
             sid = meta.get("id") or ""
+            if isinstance(meta.get("source"), dict):
+                continue  # a subagent's or reviewer's rollout is not a conversation with the owner
             if sid and sid not in skip and inside(meta.get("cwd") or "", root):
                 out.append((f.stat().st_mtime, "codex", sid, f))
     return sorted(out, key=lambda r: r[0], reverse=True)
 
 
 def last_said(path, tool, tail=3_000_000):
-    """The conversation's last message (what it said it was doing), read from the end of its file."""
-    with open(path, "rb") as f:
-        f.seek(0, 2)
-        f.seek(max(0, f.tell() - tail))
-        lines = f.read().decode("utf-8", errors="replace").splitlines()
+    """The conversation's last message (what it said it was doing), read from the end of its file (a compressed
+    Codex rollout is read through its decompressor)."""
+    if Path(path).suffix == ".zst":
+        from rulings import open_lines  # noqa: E402
+        with open_lines(path) as f:
+            lines = f.read()[-tail:].splitlines()
+    else:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - tail))
+            lines = f.read().decode("utf-8", errors="replace").splitlines()
     for line in reversed(lines):
         try:
             e = json.loads(line)
@@ -300,12 +306,22 @@ def recovery(root, tool, session):
     mtime, other_tool, sid, path = convs[0]
     if packet.is_file() and mtime <= packet.stat().st_mtime + 5:
         return []
-    from rulings import typed_in_lines  # noqa: E402
-    with open(path, "rb") as f:
-        f.seek(0, 2)
-        f.seek(max(0, f.tell() - 6_000_000))
-        lines = f.read().decode("utf-8", errors="replace").splitlines()
-    owner = [(ts, text) for _, ts, text in typed_in_lines(lines) if not since or (ts or "") > since]
+    from rulings import typed_in_lines, thread_files, open_lines  # noqa: E402
+    # The owner's words after the note can sit in any segment of the conversation written since then, an earlier
+    # compressed one included: read each, newest first, from the end (6 MB is far more than a cutoff's last words).
+    owner, noted = [], packet.stat().st_mtime if packet.is_file() else 0
+    for seg in reversed(thread_files(path) if other_tool == "codex" else [path]):
+        if seg != path and seg.stat().st_mtime <= noted:
+            break
+        if seg.suffix == ".zst":
+            with open_lines(seg) as f:
+                lines = f.read()[-6_000_000:].splitlines()
+        else:
+            with open(seg, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 6_000_000))
+                lines = f.read().decode("utf-8", errors="replace").splitlines()
+        owner = [(ts, text) for _, ts, text in typed_in_lines(lines) if not since or (ts or "") > since] + owner
     changed = changed_since_packet(root) or []
     last = last_said(path, other_tool)
     if not owner and not changed and packet.is_file():
