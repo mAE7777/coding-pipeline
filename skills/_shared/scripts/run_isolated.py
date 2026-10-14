@@ -250,9 +250,16 @@ def agents_json(role, agent_file, out_path):
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+OUTPUT_LIMIT = "Output token limit hit."  # how Claude Code asks a model cut at its output limit to go on
+
+
 def parse_claude_stream(lines):
+    """What a checker's stream says. The result is the final result event's text, unless the answer ran past the
+    output limit: Claude Code then asks the model to resume, and the result event holds only the resumed part, so the
+    parts written before each cut are put back in front of it."""
     info = {"session_id": None, "model": None, "tool_uses": 0, "denials": [], "turns": None,
             "result": None, "is_error": None, "tools_seen": None}
+    texts, cut = [], []  # the assistant's text since the last tool result; what came before an output-limit cut
     for line in lines:
         try:
             ev = json.loads(line)
@@ -267,8 +274,22 @@ def parse_claude_stream(lines):
             for block in (ev.get("message") or {}).get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     info["tool_uses"] += 1
+                    texts, cut = [], []
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(block.get("text") or "")
+        elif t == "user":
+            content = (ev.get("message") or {}).get("content")
+            blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
+            if any(isinstance(b, dict) and b.get("type") == "text" and (b.get("text") or "").startswith(OUTPUT_LIMIT)
+                   for b in blocks):
+                cut.append("".join(texts))
+            else:
+                cut = []
+            texts = []
         elif t == "result":
             info["result"] = ev.get("result")
+            if cut and isinstance(info["result"], str):
+                info["result"] = "".join(cut) + info["result"]
             info["turns"] = ev.get("num_turns")
             info["is_error"] = ev.get("is_error")
             info["denials"] = [str(d.get("tool_name")) + ":" + json.dumps(d.get("tool_input"))[:160]
