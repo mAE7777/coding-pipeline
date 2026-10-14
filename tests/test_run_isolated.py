@@ -509,6 +509,25 @@ class StopAndSandboxTest(unittest.TestCase):
             self.assertEqual(list((home / ".gate-copies").glob("tmp-*")), [], "stopping the run removes it")
 
 
+    def test_a_stop_while_the_command_is_built_leaves_no_private_folder(self):
+        """The stop handler raises SystemExit; one that lands after the private folder is made and before the run
+        starts must still remove it (deterministic form of a race the timing test above can lose under load)."""
+        sys.path.insert(0, str(RI.parent))  # as when the script runs: its own folder holds its modules
+        with tempfile.TemporaryDirectory() as d:
+            saved = ri.HOME, ri.settings
+
+            def stopped(*args, **kwargs):
+                raise SystemExit(128 + signal.SIGTERM)
+            ri.HOME, ri.settings = Path(d), stopped
+            try:
+                opts = {"deny": [], "allow_read": [], "network": [], "effort": "high"}
+                with self.assertRaises(SystemExit):
+                    ri.run_once("loyal-evaluator", "claude", opts, Path(d), Path(d) / "x", "pack")
+            finally:
+                ri.HOME, ri.settings = saved
+            self.assertEqual(list((Path(d) / ".gate-copies").glob("tmp-*")), [], "stopping the run removes it")
+
+
 class ProjectServerTest(unittest.TestCase):
     def test_server_from_the_real_project_blocks(self):
         with tempfile.TemporaryDirectory() as d:
