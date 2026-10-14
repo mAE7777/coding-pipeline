@@ -115,6 +115,9 @@ class ReloadGateTest(Base):
         cont = ROOT / "skills/_shared/scripts/continuity.py"
         other = Path(self.tmp.name) / "continuity.py"
         other.write_text("print('not the pipeline')\n")
+        copy = Path(self.tmp.name) / "copy"
+        copy.mkdir()
+        (copy / "continuity.py").write_bytes(cont.read_bytes())  # identical, but its neighbours are not the pipeline's
         reads = ('grep -n "Open\\|Next step" docs/project/milestones.md',
                  'grep -n "^## \\|export" docs/project/state.md | head -80',
                  "git show HEAD@{1} --stat",
@@ -171,6 +174,13 @@ class ReloadGateTest(Base):
                   "sed -nf p app.py",
                   "sort --out=out.txt app.py",
                   "rg --pr ./run.sh x",
+                  # a byte-identical copy of the recovery script elsewhere imports whatever sits beside it
+                  f"python3 {Path(self.tmp.name) / 'copy' / 'continuity.py'} recover .",
+                  # gawk -o in a cluster writes the program to a file
+                  "awk -bo out.awk '{print}' app.py",
+                  # git reads a folder's own config, which can name a command to run (core.fsmonitor)
+                  "git -C /tmp status --short",
+                  f"git -C {Path(self.tmp.name)} status",
                   # brace expansion turns one word into several
                   "sed -n s/a/b/ {-i,} app.py",
                   "find . {-delete,}",

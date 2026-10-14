@@ -26,7 +26,6 @@ import json
 import os
 import re
 import shlex
-import stat
 import sys
 from pathlib import Path
 
@@ -65,7 +64,7 @@ BRANCH_WRITE_LONG = ("--delete", "--move", "--copy", "--force", "--set-upstream-
                      "--edit-description", "--track", "--no-track", "--create-reflog", "--recurse-submodules")
 # Short options of read programs that write: sort -o and tree -o name an output file, tree -R writes index pages,
 # sed -i and -I edit in place. A cluster such as -ro or -ni holds them too.
-WRITING_SHORT = {"sort": set("o"), "tree": set("oR"), "sed": set("iI")}
+WRITING_SHORT = {"sort": set("o"), "tree": set("oR"), "sed": set("iI"), "awk": set("opd")}
 BRANCH_VALUE = {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
 
 
@@ -249,13 +248,8 @@ def pipeline_read(words):
     if len(words) != 3 or words[1] != "recover":
         return False
     try:
-        script = Path(words[0]).expanduser()
-        if script.name != "continuity.py":
-            return False
-        mine, theirs = (SCRIPTS / "continuity.py").stat(), script.resolve().stat()
-        # a regular file of the same size first: a pipe named continuity.py would hang a read
-        return stat.S_ISREG(theirs.st_mode) and theirs.st_size == mine.st_size and \
-            script.resolve().read_bytes() == (SCRIPTS / "continuity.py").read_bytes()
+        # This very file, not a copy: a copy elsewhere would import whatever modules sit beside it.
+        return Path(words[0]).expanduser().resolve() == (SCRIPTS / "continuity.py").resolve()
     except (OSError, RuntimeError, ValueError):  # ~user names no one, a NUL in a path: never a read
         return False
 
@@ -457,11 +451,22 @@ def program_writes(head, words):
     return any(w == flag or w.startswith(flag) or long_option(w, flags) for w in words[1:] for flag in flags)
 
 
-def git_reads(words):
-    """True for a git command that only shows: global -C <dir> and --no-pager allowed, -c (which can set a command to
+def git_reads(words, root=None, cwd=None):
+    """True for a git command that only shows: --no-pager allowed, and -C <dir> only into the project itself (another
+    folder's git config can name a command for git to run, such as core.fsmonitor), -c (which can set a command to
     run) never; a read subcommand; no --output file; a branch listing, never a branch change."""
     rest = words[1:]
     while rest and rest[0] in GIT_GLOBAL:
+        if rest[0] == "-C":
+            if len(rest) < 2 or root is None:
+                return False
+            target = Path(cwd or ".") / Path(rest[1]).expanduser()
+            try:
+                target = target.resolve()
+                if target != Path(root).resolve() and not target.is_relative_to(Path(root).resolve()):
+                    return False
+            except (OSError, RuntimeError, ValueError):
+                return False
         rest = rest[GIT_GLOBAL[rest[0]]:]
     if not rest or rest[0] not in GIT_READ or any(w.startswith("--output") for w in rest):
         return False
@@ -479,13 +484,13 @@ def git_reads(words):
     return True
 
 
-def read_only(command, depth=0):
+def read_only(command, depth=0, root=None, cwd=None):
     """True when every piece of a shell command only reads, and so does every command its substitutions run."""
     try:
         pieces, inner, writes = scan(command)
     except Unclear:
         return False
-    if writes or depth > 4 or not all(read_only(c, depth + 1) for c in inner):
+    if writes or depth > 4 or not all(read_only(c, depth + 1, root, cwd) for c in inner):
         return False
     for seg in pieces:
         try:
@@ -508,7 +513,7 @@ def read_only(command, depth=0):
             return False
         if head == "uniq" and len([w for w in words[1:] if not w.startswith("-")]) >= 2:
             return False  # uniq <input> <output> writes the output file
-        if head == "git" and not git_reads(words):
+        if head == "git" and not git_reads(words, root, cwd):
             return False
     return True
 
@@ -576,7 +581,7 @@ def track(data):
     targets = []
     if data.get("tool_name") == "Bash":
         command = tool_input.get("command", "")
-        if read_only(command):
+        if read_only(command, root=root, cwd=data.get("cwd")):
             for seg in [s for line in pipelines(command) for k, s in enumerate(line) if shown(line, k)]:
                 if not prints(seg):
                     continue
@@ -610,7 +615,7 @@ def guard(data):
         return 0
     tool_input = data.get("tool_input") or {}
     if data.get("tool_name") == "Bash":
-        if read_only(tool_input.get("command", "")):
+        if read_only(tool_input.get("command", ""), root=root, cwd=data.get("cwd")):
             return 0
         what = "shell commands that change files"
     else:
