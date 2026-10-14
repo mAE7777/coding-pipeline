@@ -139,6 +139,22 @@ class ProjectPolicyTest(unittest.TestCase):
         policy.set_mode(self.project, True)
         self.assertEqual(self.call(hook, "guard", payload=payload).stdout, "", "old gate does not revive")
 
+    def test_a_control_command_lets_nothing_else_through_the_reload_gate(self):
+        self.old_record()
+        policy.set_mode(self.project, True)
+        hook = ROOT / "hooks/reload-gate.py"
+        payload = {"cwd": str(self.project), "session_id": "current", "tool_name": "Bash",
+                   "tool_input": {"command": "python3 app.py"}}
+        self.call(hook, "arm", payload=payload)
+        ctl = f"{sys.executable} {S / 'project_policy.py'}"
+        for tail in (f"status {self.project};touch x", "status\ntouch x", f"status {self.project} &touch x",
+                     "status &touch x", 'status "$(touch x)"', "status `touch x`", "status x|tee y",
+                     "status <(touch x)"):
+            payload["tool_input"]["command"] = f"{ctl} {tail}"
+            self.assertIn('"deny"', self.call(hook, "guard", payload=payload).stdout, tail)
+        payload["tool_input"]["command"] = f"{ctl} status {self.project} --json"
+        self.assertEqual(self.call(hook, "guard", payload=payload).stdout, "")
+
     def test_compaction_and_loaded_stop_hook_do_not_restart_an_off_project(self):
         self.old_record()
         payload = {"cwd": str(self.project), "session_id": "current"}

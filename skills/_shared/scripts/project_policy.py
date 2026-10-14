@@ -111,14 +111,16 @@ def hook_project(data):
 
 
 def control_command(command):
+    # Only the controller alone: any separator, redirection, or substitution would run something else too.
+    if not isinstance(command, str) or re.search(r"[;&|<>`$()\n\r]", command):
+        return False
     try:
         words = shlex.split(command)
     except ValueError:
         return False
     if words and re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(words[0]).name):
         words = words[1:]
-    if not (2 <= len(words) <= 4 and words[1] in ("on", "off", "status", "check")
-            and not any(w in (";", "&&", "||", "|", ">", ">>") for w in words)):
+    if not (2 <= len(words) <= 4 and words[1] in ("on", "off", "status", "check")):
         return False
     script = Path(words[0]).expanduser().resolve()
     try:
