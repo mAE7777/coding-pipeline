@@ -11,12 +11,21 @@ settings (gate keys, heavy commands) live in docs/project/gate.md, which stays l
 - <folder> · <what lives there>
 
 ## Commands
-<!-- one labeled line each; checkers and the demo run exactly these -->
+<!-- one labeled line each, plain: checkers and the demo run exactly these, and the gate takes the machine lock for them -->
 install: <command>
 build: <command>
 test: <command>
 run: <command>
 demo: <command that starts the product the way the demo ending needs, or the same as run>
+
+### Running them in a session
+When the pipeline manages this project, run a heavy command (install, build, test, typecheck) through the
+machine lock with bounded output, so the guard never has to deny it first:
+`python3 ~/.claude/skills/_shared/scripts/heavy.py run --owner <session> --tail 60 -- <command>`.
+It prints the exit code, the failing lines, and the last 60 lines; the full log stays in `.evidence/logs/`.
+Run a server (run, demo) in the background:
+`python3 ~/.claude/skills/_shared/scripts/heavy.py serve --owner <session> -- <command>`.
+`<session>` is this session's ID.
 
 ## Conventions
 - <the non-obvious rules: naming, error handling, where state lives, what never to import>
