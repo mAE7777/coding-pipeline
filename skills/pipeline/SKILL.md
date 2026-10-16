@@ -1,7 +1,8 @@
 ---
 name: pipeline
-description: "Set or inspect a project's coding workflow choice. Use for /pipeline on, /pipeline off, /pipeline status, or an explicit request to enable or disable project workflow management. Never enables a project from 'continue', an existing record, a lock or another skill invocation."
+description: "Set or inspect a project's coding workflow choice: /pipeline on, /pipeline off, /pipeline status, each with an optional project folder. Typed by the owner; no other skill, 'continue', existing record, or lock ever turns a project on."
 argument-hint: "on | off | status [project]"
+disable-model-invocation: true
 ---
 
 # Project workflow control

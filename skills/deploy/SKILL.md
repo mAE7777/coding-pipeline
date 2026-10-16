@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: "Ship a finished build: check that the milestones being shipped were accepted by the owner, run the release checks, prove local-only files are not in the artifact, read public text for traces and standing constraints, write a thin changelog, state each irreversible or credentialed action in plain English with its exact command and get it confirmed one by one, deploy, and verify the live artifact. Use for /deploy, 'ship it', 'release', 'go live', 'publish'. Model-invocable so a venture conductor can dispatch it; its safety is the confirmation of every irreversible action."
+description: "Ship a finished build: check the shipped milestones were accepted, run the release checks, keep local-only files and traces out of the artifact, confirm each irreversible or credentialed action one by one, deploy, and verify the live artifact. Takes a target, or none to detect it. Use for /deploy, 'ship it', 'release', 'go live', 'publish'. A venture conductor may dispatch it; each irreversible action is still confirmed."
 argument-hint: "<target, or empty to detect>"
 ---
 

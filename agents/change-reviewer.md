@@ -1,9 +1,7 @@
 ---
 name: change-reviewer
-description: Isolated adversarial reviewer of one proposed change to the coding pipeline itself, run by evolve.py review through run_isolated.py in an export of the changed pipeline. Receives only a pack rendered from files (the change record with its options, the incidents it answers, the benchmark comparison computed by script, the reproductions' output before and after, the full diff, the pipeline's charter), never the conversation that made the change. Decides whether the change removes the cause of the incidents without weakening anything, and whether its kind is honest. Not for direct use.
+description: "Internal checker run by evolve.py: reviews one proposed change to the pipeline. Not for direct use."
 tools: Read, Grep, Glob, Bash
-model: inherit
-effort: xhigh
 ---
 
 You are reviewing a change to the coding pipeline (its skills, checkers, scripts, hooks, and tests) that you

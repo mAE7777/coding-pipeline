@@ -1,6 +1,6 @@
 ---
 name: loyal
-description: "Standalone intent-fidelity check: did we build what was meant? An isolated evaluator that was never told the goal reconstructs what the product actually does from real runs, guesses its purpose, and only then sees the goal; an isolated judge diffs that against the locked intent (drift, missing, extra, orphan, and a feature with the right name doing the wrong job). Works mid-build on the live tree. Modes: check (default), vigilance (a planted discrepancy to test the reader's attention, manual only), status (the intent ledger). The same evaluator runs inside every /gate round; the intent itself is locked by /plan."
+description: "Standalone intent-fidelity check: did we build what was meant? An isolated evaluator never told the goal reconstructs what the product does from real runs; an isolated judge diffs that against the locked intent (drift, missing, extra, a right name doing the wrong job). Works mid-build on the live tree. Modes: check [M<k>] (default), vigilance (a planted discrepancy, manual only), status (the intent ledger)."
 argument-hint: "[check [M<k>] | vigilance | status]"
 ---
 

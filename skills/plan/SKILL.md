@@ -1,6 +1,6 @@
 ---
 name: plan
-description: "Turn an idea, a capture dossier, a pile of documents, or an existing codebase into the project's build record (intent, brief, milestone map, interfaces, AGENTS.md, gate settings), run the cold read, and lock the intent with the owner. Modes: /plan (new work), /plan adopt (an existing project without a complete record: read everything, reconstruct, verify, lock), /plan amend (an owner-ruled intent change), /plan convert (an earlier pipeline's files). Use before any code; /dev and /gate refuse to run without a locked plan."
+description: "Turn an idea, a capture dossier, documents, or an existing codebase into the project's build record, run the cold read, and lock the intent with the owner. /plan (new work), /plan adopt (an existing project without a complete record), /plan amend (an owner-ruled intent change), /plan convert (an earlier pipeline's files); each takes notes, files, or paths. Use before any code; /dev and /gate refuse to run without a locked plan."
 argument-hint: "[adopt | amend | convert] [notes, files, or paths]"
 ---
 

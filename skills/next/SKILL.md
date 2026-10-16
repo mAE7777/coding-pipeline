@@ -1,6 +1,6 @@
 ---
 name: next
-description: "The front door: says where the project stands and what comes next, computed from its record (never from memory), then does it. /next takes the next step when no one else's judgment is needed and otherwise asks the owner the one question that is theirs; /next auto keeps going step after step (plan, build, gate, fix loop, inbox) and stops only where the owner must decide: the intent lock, a milestone acceptance, a stand-in consent, an inbox ruling, an irreversible action, or a blocker; /next status only reports. Use for /next, 'what now', 'continue', 'keep going', 'where are we', and whenever the owner does not name a step."
+description: "The front door: where the project stands and what comes next, computed from its record, then done. /next takes the next step or asks the owner the one question that is theirs; /next auto keeps going until the owner must decide (lock, acceptance, stand-in consent, inbox ruling, irreversible action, blocker); /next status only reports. Use for /next, 'what now', 'continue', 'keep going', 'where are we', and when the owner names no step."
 argument-hint: "[auto | status]"
 ---
 

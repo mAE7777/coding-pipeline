@@ -1,7 +1,8 @@
 ---
 name: evolve
-description: "The pipeline's own improvement loop, started by the owner in any session that used the pipeline. /evolve harvests the session (every failure, block, inconclusive or stuck step, the owner's pushback, and the friction a script cannot see, with what the session did about each, even a stopgap) into incidents in a private ledger; then /evolve run proves each problem with a reproduction that fails on the current pipeline, designs the fix against the session's own workaround, and keeps a change only when a rule fixed in advance says the pipeline got better (the reproduction flips, no benchmark gets worse, measured by the same instrument in the same environment) and an isolated reviewer finds the cause removed and nothing weakened. Every problem, measurement, and decision stays on record, so the pipeline only ever moves forward. Use for /evolve, 'improve the pipeline from this session', 'log these pipeline problems', 'what went wrong with the pipeline'."
+description: "The pipeline's own improvement loop, typed by the owner in a session that used the pipeline. /evolve harvests the session's failures, blocks, stuck steps, pushback, and friction into incidents in a private ledger; /evolve run [INC-nnnn ...] proves each with a failing reproduction and keeps a fix only when a rule fixed in advance says the pipeline got better and an isolated reviewer agrees; /evolve status reports."
 argument-hint: "[run [INC-nnnn ...] | status]"
+disable-model-invocation: true
 ---
 
 ## Project workflow choice (first)

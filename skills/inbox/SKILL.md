@@ -1,6 +1,6 @@
 ---
 name: inbox
-description: "Keep and weigh what arrives while a project is being built: other people's opinions, proposed changes, new or supplementary ideas, user feedback, review notes, and ideas the owner floats without deciding. /inbox add records an item in the proposer's own words. /inbox review weighs each open item against the locked intent, the milestones, and earlier decisions, researches what it rests on, and recommends adopt, adopt part, reshape, place in a milestone, or reject, with what, how, and why; once decided (by the owner unless it is a whole adoption inside the current contract) the item goes where it belongs and leaves the inbox with a decision entry, checked by script. Use for /inbox, 'someone suggested', 'add this idea', 'feedback from', 'what do you think of this proposal', and for new ideas in a conversation captured after the lock."
+description: "Keep and weigh what arrives mid-build: others' opinions, proposed changes, new ideas, feedback, review notes, and ideas the owner floats undecided. /inbox add <who>: <their words> records one verbatim; /inbox review [IN-nnn] weighs it against the intent and recommends; /inbox list shows the open items. Use for /inbox, 'someone suggested', 'add this idea', 'feedback from', 'what do you think of this proposal', and new ideas after the lock."
 argument-hint: "[add <who>: <their words> | review [IN-nnn] | list]"
 ---
 

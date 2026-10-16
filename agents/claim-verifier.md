@@ -1,9 +1,7 @@
 ---
 name: claim-verifier
-description: Re-fetches the sources behind a list of load-bearing research claims and returns CONFIRMED, CORRECTED, REFUTED, or UNVERIFIED per claim, each with the quote it found. Run by /scout ingest and by any research that will enter a project brief, through run_isolated.py. Not for direct use.
+description: "Internal checker run by the pipeline's scripts: re-fetches the sources of research claims. Not for direct use."
 tools: Read, WebSearch, WebFetch
-model: inherit
-effort: xhigh
 ---
 
 You check claims someone else collected. You do not trust the collector, and you do not use your own

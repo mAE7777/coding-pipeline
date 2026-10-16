@@ -1,6 +1,6 @@
 ---
 name: scout
-description: "Turn a real unknown into graded evidence before it becomes a plan: a feasibility question, a technology or dependency choice, a breaking-change check for an upgrade, a map of an unfamiliar codebase, a throwaway spike, or breadth research handed to ChatGPT and verified on the way back. Modes: ask <question>, map [path], spike <question>, offload <question>, ingest <file>. 'No real unknown' is a valid answer. Use for /scout, 'is this feasible', 'what should we use', 'map this codebase', 'research this'."
+description: "Turn a real unknown into graded evidence before it becomes a plan: feasibility, a technology or dependency choice, an upgrade's breaking changes, an unfamiliar codebase, a throwaway spike, or research handed to ChatGPT and verified. Modes: ask <question>, map [path], spike <question>, offload <question>, ingest <file>. Use for /scout, 'is this feasible', 'what should we use', 'map this codebase', 'research this'."
 argument-hint: "ask <question> | map [path] | spike <question> | offload <question> | ingest <file>"
 ---
 

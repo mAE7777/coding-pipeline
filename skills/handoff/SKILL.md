@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: "Hand work over without losing anything: between sessions, between Claude Code and Codex, or to an outside reviewer (a ChatGPT chat, a colleague). Switching tools needs no command (the continuity hooks keep docs/project/handoffs/latest.md current and brief the next session); use this to write a checked packet on purpose, render a paste-ready prompt for another model with its limits and hand-back, run the receiving intake explicitly, or check a packet. Modes: write [to: session | codex | claude | chatgpt | reviewer], receive [packet], check [packet]."
+description: "Hand work over without losing anything: between sessions, between Claude Code and Codex, or to an outside reviewer (a ChatGPT chat, a colleague). Switching tools needs no command (hooks keep the handoff current); use this for a checked packet on purpose, a paste-ready prompt for another model, receiving one, or checking one. Modes: write [to: session | codex | claude | chatgpt | reviewer], receive [packet], check [packet]."
 argument-hint: "write [to: codex | claude | chatgpt | reviewer | session] | receive [packet] | check [packet]"
 ---
 

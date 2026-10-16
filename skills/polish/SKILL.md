@@ -1,7 +1,8 @@
 ---
 name: polish
-description: "Optional outside-in scrutiny of a finished product before real users or investors see it: real users driving it, the market and competitors, a skeptical investor, a blunt domain expert. Finds what would make it fail or fall flat, with evidence, and routes real defects to /fix or a milestone. Not part of the build loop: skip it for a CLI, a library, or a personal tool. Use for /polish, 'stress-test the product', 'is this ready for real users'."
+description: "Optional outside-in scrutiny of a finished product before real users or investors see it, through the users, market, investor, or expert lens, or all: finds what would make it fail or fall flat, with evidence, and routes real defects to /fix or a milestone. Typed by the owner; not part of the build loop, and skipped for a CLI, a library, or a personal tool."
 argument-hint: "[users | market | investor | expert | all]"
+disable-model-invocation: true
 ---
 
 ## Project workflow choice (first)

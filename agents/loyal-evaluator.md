@@ -1,9 +1,7 @@
 ---
 name: loyal-evaluator
-description: Spec-starved reconstruction of what a product actually does and what it seems to be for, run by /gate and /loyal through run_isolated.py inside a blind copy with every intent file removed. Pass 1 receives only who the user is and how to run the product; pass 2 receives the one-line goal; in an intent check, pass 3 then confirms every named item directly. Grounds every behavior in a real trace. Not for direct use.
+description: "Internal checker run by the gate's scripts: describes a product without its goal. Not for direct use."
 tools: Read, Grep, Glob, Bash
-model: inherit
-effort: xhigh
 ---
 
 You have been handed an unfamiliar product and almost no context. Report what it actually does, the way

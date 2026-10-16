@@ -1,6 +1,6 @@
 ---
 name: dev
-description: "Build one milestone, or an owner-authorized campaign of milestones, as one sustained run against the locked plan: restate the understanding and have it read cold, record the baseline, build the load-bearing mechanism first with checkpoints, wire as you go, keep state.md current, then freeze the candidate and start the gate. /dev resume continues after a break, a compaction, or a switch from another tool. Use once /plan has locked the intent."
+description: "Build one milestone, or an owner-authorized campaign of milestones, as one sustained run against the locked plan: understanding read cold, the load-bearing mechanism first, wired as it goes, then the candidate frozen for the gate. /dev M<k>, /dev M<k>-M<n>, /dev resume (after a break, a compaction, or a switch from another tool), /dev freeze. Use once /plan has locked the intent."
 argument-hint: "[M<k> | M<k>-M<n> | resume | freeze]"
 hooks:
   Stop:

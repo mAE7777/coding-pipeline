@@ -1,6 +1,6 @@
 ---
 name: explain
-description: "Explain what was built, a milestone, the whole product, or the current status, in one audience register: engineer, founder, investor, or user, re-derived for that reader rather than reskinned. Also renders a milestone's demo script for the owner and a gate result as a standalone one-screen summary. Grounded only in the build record and collected evidence; the code stays out of sight. Use for /explain, 'what did we build', 'explain this for an investor', 'release notes', 'walk me through the demo'."
+description: "Explain what was built (a milestone, the whole product, or the current status) for one audience: engineer, founder, investor, or user, re-derived for that reader. Also renders a milestone's demo script (demo M<k>) and a gate result as a one-screen summary (gate M<k>). Grounded only in the build record and evidence. Use for /explain, 'what did we build', 'explain this for an investor', 'release notes', 'walk me through the demo'."
 argument-hint: "[engineer | founder | investor | user] [M<k> | product | status | demo M<k> | gate M<k>]"
 ---
 

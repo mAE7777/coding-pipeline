@@ -1,6 +1,6 @@
 ---
 name: fix
-description: "Make a targeted change outside a milestone's build run: a bug, a blocking gate finding, a production hotfix, a flaky test, a small tweak. Reproduce first, change the smallest thing that fixes it, turn the reproduction into a regression test, re-run what the change touches, log it in the fix log. Redirects to /plan amend or a milestone when the change grows past a fix. Use for /fix, 'fix this', 'patch', or a finding the gate sent back."
+description: "Make a targeted change outside a milestone's build run: a bug, a blocking gate finding (an ID such as M2-F03), a production hotfix, a flaky test, a small tweak. Reproduction first, the smallest change, a regression test, an entry in the fix log; redirects to /plan amend or a milestone when it grows past a fix. Use for /fix, 'fix this', 'patch', or a finding the gate sent back."
 argument-hint: "<the problem, or a gate finding ID such as M2-F03>"
 ---
 

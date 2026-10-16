@@ -1,6 +1,6 @@
 ---
 name: gate
-description: "Accept or reject one frozen milestone. Runs the whole round in the background (copies of the candidate, the deterministic checks, the isolated code review preferring the other model family, the blind two-pass intent reconstruction, the isolated demo run, the isolated judge), computes the verdict from the evidence, drives the fix loop, and brings the owner a one-screen summary. /gate accept M<k> records the owner's acceptance in their own words. Use after /dev freezes a milestone, and on M0 during adoption."
+description: "Accept or reject one frozen milestone: runs the round in the background (deterministic checks, isolated code review, blind intent reconstruction, demo, judge), computes the verdict from the evidence, drives the fix loop, and brings the owner a one-screen summary. /gate M<k> runs it; /gate accept M<k> records the owner's acceptance in their words; /gate status reports. Use after /dev freezes a milestone, and on M0 during adoption."
 argument-hint: "M<k> | accept M<k> | status"
 ---
 
