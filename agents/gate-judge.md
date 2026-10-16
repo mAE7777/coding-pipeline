@@ -38,9 +38,16 @@ verdict rule stated there.
 - **Triage**: blocking = correctness, requirement, security, wiring, silent degradation, intent (DRIFT,
   MISSING confirmed, INACCURATE, a must-not-lose violation, an unconsented stand-in), and a failed demo
   step. Everything else is logged, including `clarity` findings (the interface baseline) unless one hides a
-  failure from the user, which is silent degradation. For each blocking finding name where the fix loops back and what would
-  show it fixed; mark `needs_owner` when only the owner can settle it (a real intent fork, a missing
+  failure from the user, which is silent degradation. For each blocking finding name where the fix loops back, what would
+  show it fixed, and in `files` the paths a fix must touch (from the reviewer's `where`; a finding without them
+  makes the next round a full one); mark `needs_owner` when only the owner can settle it (a real intent fork, a missing
   credential, a scope question).
+- **A focused round** (scope.json and `carried-*.result.md` among the inputs): the evaluator did not run this
+  round. Its results are CARRIED from the earlier round and fingerprint scope.json names, and the code-verifier
+  re-verified the open findings (FIXED or NOT_FIXED; a NOT_FIXED finding stays blocking under its ledger ID)
+  and reviewed the delta. Weigh whether the delta could change what the evaluator observed (a behavior it
+  tried, its purpose reading); when it could, the carried results no longer stand: return INCONCLUSIVE with
+  loyal-evaluator in `rerun`, and the next round runs in full.
 - **Later rounds**: the findings ledger from earlier rounds is in the pack. A finding that is the same
   defect as a ledger entry keeps that entry's ID; a ledger entry that no longer reproduces goes in
   `resolved`. New findings take the next free ID (M<k>-F<nn>).
@@ -57,7 +64,8 @@ A short summary for the owner, exception first, in plain words, then one fenced 
 {"verdict": "ACCEPT-READY | CHANGES | BLOCKED | INCONCLUSIVE",
  "intent_diff": [{"id": "I-D1 | M1.D1 | L-01 | EXTRA-1", "status": "HOLDS | DRIFT | MISSING | EXTRA | ORPHAN | INACCURATE", "evidence": "quote from a checker output"}],
  "purpose": {"goal": "...", "guess": "...", "understanding": "...", "same_product": true},
- "blocking": [{"id": "M1-F01", "summary": "...", "evidence": "quote", "loop_back": "...", "fixed_when": "...", "needs_owner": false}],
+ "blocking": [{"id": "M1-F01", "summary": "...", "evidence": "quote", "loop_back": "...", "fixed_when": "...",
+               "files": ["src/store.py"], "needs_owner": false}],
  "logged": [{"id": "M1-F02", "summary": "...", "evidence": "quote"}],
  "resolved": ["M1-F00"],
  "not_run": ["..."],

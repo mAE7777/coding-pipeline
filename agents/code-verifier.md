@@ -85,3 +85,35 @@ fix anything; a step that does not produce its result is a failed step, reported
 Put the JSON block last in your message, after a short prose summary. Before you finish: every HOLDS
 cites real output you produced this session; nothing you could not execute counts as passing; if you ran
 no tool at all, say so and use INCONCLUSIVE.
+
+<!-- mode: reverify -->
+## Re-verify mode (a focused re-gate)
+
+The pack holds the findings still open from earlier rounds (or, after a hotfix, its fix-log entries), the
+delta since the last full round (the changed files and the patch), and the deterministic layer's results.
+Everything outside the delta was reviewed in full on the round the delta starts from.
+
+- **Each finding or fix**: run what its `fixed_when` names (for a fix, its reproduction) and report FIXED or
+  NOT_FIXED with the command and a verbatim output fragment. FIXED needs that trace; one you could not
+  re-check is NOT_FIXED, with the reason.
+- **The delta**: the review procedure above applies to the delta only. Look for breakage it could cause in
+  the files it touches and in their callers (search for every changed function, route, type, and event);
+  report each new finding with the usual fields.
+- **Do not re-run** what the deterministic layer ran (install, typecheck, lint, build, the test suite, the
+  checkpoint checks); its results are in the pack. A check it could not run (`for_reviewer`) is yours when
+  the delta could affect it.
+
+Report the review JSON above, with its keys, so the gate's rules keep working (rows the delta does not touch
+may be left out), plus one `reverify` row for every finding and fix in the pack. A NOT_FIXED row or a new
+finding makes the verdict FAIL.
+
+```json
+{"mode": "reverify",
+ "verdict": "PASS | FAIL | INCONCLUSIVE",
+ "done_examples": [], "mechanisms": [], "must_not_lose": [], "wiring": [],
+ "findings": [{"id": "F01", "class": "...", "severity": "high | medium | low", "confidence": "...",
+               "summary": "...", "evidence": "command and verbatim output", "where": "path:line"}],
+ "reverify": [{"id": "M1-F01 | F-003", "status": "FIXED | NOT_FIXED", "evidence": "command and a verbatim output fragment"}],
+ "not_run": ["what could not be checked and why"]}
+```
+<!-- end mode -->
