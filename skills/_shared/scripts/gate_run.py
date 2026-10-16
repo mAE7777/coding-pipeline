@@ -76,7 +76,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from fingerprint import fingerprint  # noqa: E402
-from gate_copies import DEP_DIRS  # noqa: E402
+from gate_copies import DEP_DIRS, clone, resolution_probe, rewrite_paths  # noqa: E402
 from gate_keys import commands, read_keys  # noqa: E402
 from languages import CODE  # noqa: E402
 import local_only  # noqa: E402
@@ -467,6 +467,34 @@ def escalation(first, route, resumed):
                                                       "served_model")}}
 
 
+def shadowed(route):
+    """True when the personal override sets a shadow for this route (run_isolated.py runs it after the checker)."""
+    try:
+        return bool(models.shadow(route))
+    except models.ModelsError:
+        return False  # run_isolated records the routing problem
+
+
+def shadow_copy(r, route, src):
+    """A fresh copy of src for the shadow of a route whose checker changes its copy (the code-verifier's review,
+    re-verify, and demo), made before the main run touches src; None when the route has no shadow or the copy
+    still points into src. It sits beside src in the round's copies folder, so cleanup removes it in any case."""
+    if not shadowed(route):
+        return None
+    dst = src.parent / f"shadow-{src.name}"  # never "<src>-shadow": the probe would find src's path inside it
+    try:
+        clone(src, dst)
+        _, failed = rewrite_paths(src, dst)
+        left = resolution_probe(src, dst)
+    except (OSError, RuntimeError) as exc:
+        failed, left = [str(exc)], []
+    if failed or left:
+        r.say(f"  {route}: the shadow copy still points into {src.name}; no shadow this round")
+        shutil.rmtree(dst, ignore_errors=True)
+        return None
+    return dst
+
+
 def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, attempts=2, route=None, pin=None):
     """One checker step through run_isolated.py, re-run once when it ends ERROR or INCONCLUSIVE (never more).
     route names its models.json route; pin (a resumed pass) repeats pass 1's model and effort."""
@@ -489,8 +517,14 @@ def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, at
     stem = f"{role}{'-demo' if mode == 'demo' else ''}" + \
         ((f"-pass{pass_no}" if pass_no and pass_no != "1" else "-pass2") if resume else "")
     summary, bump, record = {}, [], {}
+    sdir = None
+    if role == "code-verifier" and not resume:
+        sdir = shadow_copy(r, route, Path(workdir))
+        if sdir:
+            cmd += ["--shadow-dir", str(sdir)]
+    limit = 8000 if shadowed(route) else 4000  # a shadow runs after the checker, inside the same call
     for attempt in range(1, attempts + 1):
-        run(cmd + bump, timeout=4000)
+        run(cmd + bump, timeout=limit)
         try:
             summary = json.loads((r.ev / f"{stem}.summary.json").read_text())
         except (OSError, ValueError):
@@ -502,6 +536,8 @@ def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, at
         if attempt < attempts:
             bump, record = escalation(summary, route, bool(resume))
             r.say(f"  {stem}: retry: {record['escalation_reason']}")
+    if sdir:
+        shutil.rmtree(sdir, ignore_errors=True)  # the shadow keeps what it needs in <ev>/shadow/
     record.update({"follows_pass1": pinned} if pinned else {})
     if record:
         summary.update(record)

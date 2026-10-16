@@ -373,6 +373,24 @@ class GateRunTest(unittest.TestCase):
         self.assertEqual((judge["require_read"]["globs"], judge["require_read"]["files"]), (["captures/*"], 1))
         self.assertFalse(any("escalated" in v for v in routes.values()))
 
+    def test_a_shadow_runs_on_its_own_copy_and_never_changes_the_verdict(self):
+        root = self.prepare()
+        (self.home / ".claude/.pipeline-models.json").write_text(json.dumps({"shadow": {
+            "code-verifier.demo": {"model": "claude-sonnet-5-5", "effort": "high"},
+            "gate-judge": {"model": "claude-opus-5-5", "effort": "high"}}}))
+        self.env.pop("PIPELINE_MODELS_IGNORE_OVERRIDE", None)
+        out, verdict, ev = self.gate(root)
+        self.assertEqual(verdict["verdict"], "ACCEPT-READY", out.stdout[-1500:])
+        demo = json.loads((ev / "code-verifier-demo.summary.json").read_text())
+        judge = json.loads((ev / "gate-judge.summary.json").read_text())
+        self.assertNotIn("skipped", demo["shadow"], demo["shadow"])
+        self.assertEqual((demo["shadow"]["model"], demo["shadow"]["effort"]), ("claude-sonnet-5-5", "high"))
+        self.assertNotIn("skipped", judge["shadow"], judge["shadow"])
+        self.assertTrue((ev / "shadow/code-verifier-demo.summary.json").is_file())
+        self.assertNotIn("shadow", json.loads((ev / "code-verifier.summary.json").read_text()),
+                         "a route without a shadow runs alone")
+        self.assertEqual(list((self.home / ".gate-copies").glob("*/*/shadow-*")), [], "the shadow copy is removed")
+
     def test_a_judge_that_never_opens_a_capture_is_inconclusive(self):
         root = self.prepare()
         out, verdict, ev = self.gate(root, mode="judge-skips-captures")
