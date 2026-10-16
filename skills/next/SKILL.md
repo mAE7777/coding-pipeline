@@ -4,16 +4,7 @@ description: "The front door: where the project stands and what comes next, comp
 argument-hint: "[auto | status]"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /next
 
@@ -33,15 +24,16 @@ takes it and why. Nothing else happens.
    `/plan adopt`, and so on) exactly as if the owner had typed it. When it is the owner's, ask the one question
    it names, in plain words, with what the options mean, and stop. When it is wait, say what is running and
    continue when it reports.
-3. When the step is done, its skill records it and prints the new next step; report that and stop.
+3. When the step is done, its skill's End records it and prints the new next step; report that and stop.
 
 ## /next auto
 The same, but after each builder step, run the status again and take the next builder step, until the first
 owner step, a wait (continue when the running work reports), or a failure the step's own loop cannot clear.
-Then stop with a plain summary: every step taken with its outcome, where the project stands, and the owner's
-question. It never takes an owner step on the owner's behalf, never treats an earlier approval as covering a new
-decision, and never skips a skill's own checks to go faster. The owner can stop it at any time; the record is
-current after every step, so `/next` picks up exactly there.
+When the status says the last 3 steps repeated without changing the record, that is an owner step: say what
+is looping and what was tried. Then stop with a plain summary: every step taken with its outcome, where the
+project stands, and the owner's question. It never takes an owner step on the owner's behalf, never treats an
+earlier approval as covering a new decision, and never skips a skill's own checks to go faster. The owner
+can stop it at any time; the record is current after every step, so `/next` picks up exactly there.
 
 ## Sessions
 Work inside one phase (a milestone's build through its gate, a plan up to its lock, a batch of capture rounds)
@@ -55,7 +47,5 @@ step with the suggestion. Never start another session yourself. In the new sessi
 - The status script is the authority on what comes next. When it and your own reading disagree (the record
   looks wrong, a note is stale), fix the record first (state.md, a stale In flight line, a missing decision),
   then run it again; never act on the disagreement silently.
-- Every step ends with `project_status.py record <project> --skill <name> [--arg <what>] --outcome "<one
-  line>"`, which appends the journal (`docs/project/journal.md`), updates the Last step in `state.md`, and
-  prints the next step.
+- Every step ends with `project_status.py record`, which prints the next step (`project-control.md`, End).
 - In Codex, the skills are `$next`, `$dev`, and so on; everything else is the same.

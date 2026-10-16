@@ -4,38 +4,30 @@ description: "Hand work over without losing anything: between sessions, between 
 argument-hint: "write [to: codex | claude | chatgpt | reviewer | session] | receive [packet] | check [packet]"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /handoff
 
 Load-bearing rules:
-- Pass references and fingerprints, never a paraphrase: the receiver reads the same files and proves it by
-  restating and reconciling before acting.
-- Nothing is lost: every active constraint, must-not-lose item, open item, parked item, and open or logged
-  gate finding is carried, and `handoff_check.py` must pass before a packet goes anywhere.
+- A packet passes references and fingerprints, never a paraphrase, and loses nothing: `handoff_check.py`
+  fails one that drops an active constraint, a must-not-lose item, an open or parked item, or an open or
+  logged gate finding, and it must pass before a packet goes anywhere. The receiver restates and reconciles
+  before acting.
 - One writer per checkout. A receiver becomes the writer only when it starts changing files.
-- Send outside this machine only what may leave it (see Privacy).
-- Venture projects: when the project has a `truth/` folder, read
-  `~/.claude/skills/_shared/references/venture-mode.md` before writing or receiving a packet; if it is missing, stop with BLOCKED (this is a
-  venture project and its rules are not installed).
+- A prompt for a chat model outside this machine (ChatGPT, a colleague) carries no secrets, credentials,
+  `.env` values, customer data, or private documents the owner has not cleared. When unsure, say what you
+  would send and ask. Codex and Claude Code sessions on this machine read the files directly and need no copy.
+
+Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/venture-mode.md` first; if it is missing, stop BLOCKED.
 
 Scripts: `~/.claude/skills/_shared/scripts/`.
 
 ## write [to: ...]
-1. `python3 continuity.py packet <project>` (the tool and session are read from the environment) writes
-   `docs/project/handoffs/latest.md` from `state.md`, the record, and the live fingerprint. Before that, make
-   sure `state.md` is true right now (Done with evidence, Open, In flight, Blockers, Next step).
-2. `handoff_check.py docs/project/handoffs/latest.md --project <project>` must pass; fix `state.md` and
-   re-run until it does.
+1. Make `state.md` true right now (Done with evidence, Open, In flight, Blockers, Next step); then
+   `python3 continuity.py packet <project>` (the tool and session are read from the environment) writes
+   `docs/project/handoffs/latest.md` from it, the record, and the live fingerprint.
+2. `handoff_check.py docs/project/handoffs/latest.md --project <project>`; on a FAIL, fix `state.md` and
+   write the packet again.
 3. For a packet that must survive later notes, copy it to `docs/project/handoffs/<UTC time>-<to>.md`.
 4. Render the prompt for the receiver (`references/prompts.md` has one per target) and give it to the
    owner to paste, or, for a reviewer, the file to attach.
@@ -50,17 +42,13 @@ The session-start note already says who worked last and what changed; this is th
    before acting.
 2. Read the read list, restate the milestone promise and the must-not-lose items in your own words, and list
    every discrepancy between the packet and the tree.
-3. Resolve or record each discrepancy (a Blockers row for any that needs the owner), then continue with the
-   packet's next step; the continuity hook records you as the writer on your first edit.
+3. Resolve or record each discrepancy (a decision through `decisions.py add`; a Blockers row for any that
+   needs the owner), then continue with the packet's next step; the continuity hook records you as the writer
+   on your first edit.
 
 ## check [packet]
 `handoff_check.py` on the packet, and the cold reader when the packet will be read by someone without this
 project's context.
 
-## Privacy
-A prompt for a chat model outside this machine (ChatGPT, a colleague) carries no secrets, credentials, `.env`
-values, customer data, or private documents the owner has not cleared. When unsure, say what you would send
-and ask. Codex and Claude Code sessions on this machine read the files directly and need no copy.
-
 ## End
-Every packet written or received ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill handoff --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill handoff --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).

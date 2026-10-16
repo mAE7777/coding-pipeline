@@ -4,16 +4,7 @@ description: "Keep and weigh what arrives mid-build: others' opinions, proposed 
 argument-hint: "[add <who>: <their words> | review [IN-nnn] | list]"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /inbox
 
@@ -21,17 +12,16 @@ The inbox is where input waits until it is decided, so nothing said about the pr
 nothing enters the build without being weighed. The failure it prevents runs both ways: a good idea
 forgotten, and an idea quietly merged in, bending the intent without anyone deciding it.
 
-Load-bearing rules:
-- Nothing in the inbox is a decision, and nothing leaves it without one. An item leaves only through
-  `inbox.py resolve`, which requires a decision entry that quotes it, gives the verdict, and names where
-  each adopted part went; `inbox.py check` (also run by the gate) fails on any item that vanished.
+Load-bearing rules (`inbox.py` refuses what breaks the first three):
+- Nothing in the inbox is a decision, and nothing leaves it without one: `inbox.py resolve` needs a decision
+  entry that quotes the item, gives the verdict, and names where each adopted part went; `inbox.py check`
+  (also run by the gate) fails on any item that vanished.
 - The proposer's words are kept verbatim (or, for a captured conversation, cited by turn). Your reading of
   them goes beside them, never in their place.
 - Who decides: the builder may decide alone only a whole adoption that stays inside the current contract
-  (an approach, a detail the intent leaves open), recorded as `[proposed]` and reported. Declining input in
-  whole or in part, reshaping it, placing it in a milestone, and anything that changes the intent or a
-  milestone contract are the owner's rulings, in their words, proven with `rulings.py record`. One owner
-  message may rule on a batch.
+  (an approach, a detail the intent leaves open), written `--proposed` and reported. Declining input in whole
+  or in part, reshaping it, placing it in a milestone, and anything that changes the intent or a milestone
+  contract are the owner's rulings, in their words. One owner message may rule on a batch.
 - The owner's own instruction is a ruling, not an inbox item: apply it (`/plan amend` when it changes the
   intent). An idea the owner floats without deciding ("maybe we could ...") goes in, in their words.
 - A proposal that reopens a settled decision says so, cites the earlier entry, and its weighing must show
@@ -74,19 +64,18 @@ Every open item, oldest first, or the one named. For each:
    - inside the current contract: `state.md` Open, and `interfaces.md` when an interface changes;
    - a defect: `/fix` (fix log), or the current milestone's Open list;
    - a research question: a research note through `/scout`, and an unknown U-nn when it blocks.
-8. **Record and clear**: append to `decisions.md`
+8. **Record and clear**: `decisions.py add <project> --title "Inbox IN-<nnn>: <title>" --body "<these four
+   lines>" --source-owner "<their words>"` (or `--proposed` for a whole in-contract adoption):
 
    ```
-   ## D-<nnn> · <date> · Inbox IN-<nnn>: <title>
    Resolves: IN-<nnn> (from <who>, <date>, via <channel>)
    Item: "<the item's words, exactly as in the inbox>"
    Verdict: <ADOPT | ADOPT-PART | RESHAPE | PLACE M<k> | REJECT> · <in / out and why, one line>
    Routed: <file and anchor for each part, e.g. milestones.md M3 (M3.D4); intent.md RF-2>, or none
-   Source: [owner <date>] "<their words>"   (or [proposed] for a whole in-contract adoption)
    ```
 
-   then `rulings.py record` for an owner ruling, `inbox.py resolve <project> IN-<nnn> --decision D-<nnn>`,
-   and `inbox.py check <project>`.
+   then `inbox.py resolve <project> IN-<nnn> --decision <the D-<nnn> it printed>` and
+   `inbox.py check <project>`.
 
 ## list
 `inbox.py list <project>`: the open items with who sent them and their status.
@@ -96,4 +85,4 @@ Report in plain words: each item and what happened to it, anything still open an
 what the decisions changed in the current milestone.
 
 ## End
-Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill inbox --arg IN-<nnn> --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill inbox --arg IN-<nnn> --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).

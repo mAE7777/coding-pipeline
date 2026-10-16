@@ -10,8 +10,9 @@ opening Codex in the project is enough. When the owner wants to say it explicitl
     Continue the work in <absolute project path>. Read docs/project/handoffs/latest.md and
     docs/project/state.md first, restate the milestone promise and the must-not-lose items, reconcile any
     file the note lists as changed, then continue with its next step. Keep state.md current as you go and
-    record decisions in docs/project/decisions.md when you make them. Stop and ask before any stand-in on
-    the product path, contract change, or irreversible action. When done, freeze with `$dev freeze`.
+    record each decision when you make it with `python3 ~/.claude/skills/_shared/scripts/decisions.py add`.
+    Stop and ask before any stand-in on the product path, contract change, or irreversible action. When
+    done, freeze with `$dev freeze`.
 
 Differences to state when they matter: Codex has no `/dev` stop hook (it runs until its own turn ends, so
 the note asks it to finish its Open list), and its checks run under Codex's own sandbox rules.
