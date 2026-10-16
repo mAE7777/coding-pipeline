@@ -177,6 +177,99 @@ class ValidationTest(HomeCase):
         self.assertIn("the --model flag", str(cm.exception))
 
 
+class ShadowTest(HomeCase):
+    """The override's shadow section: a candidate setting run beside a route on real work (plan 7.3 step 4)."""
+
+    def shadow(self, entries, routes=None):
+        self.override(routes or {}, shadow=entries)
+
+    def test_a_valid_shadow_is_read_beside_the_route(self):
+        self.shadow({"gate-judge": {"model": "claude-opus-5-5", "effort": "high", "note": "candidate"}},
+                    routes={"gate-judge": {"effort": "xhigh"}})
+        s = models.shadow("gate-judge")
+        self.assertEqual((s["model"], s["effort"], s["source"], s["note"]),
+                         ("claude-opus-5-5", "high", "override", "candidate"))
+        self.assertIsNone(models.shadow("code-verifier.demo"), "a route without a shadow has none")
+        r = models.resolve("gate-judge")
+        self.assertEqual((r["model"], r["effort"]), ("default", "xhigh"), "the shadow never changes the route")
+        (self.home / ".claude/.pipeline-models.json").write_text(json.dumps(
+            {"shadow": {"code-verifier.demo": {"model": "claude-sonnet-5-5", "effort": "high"}}}))
+        self.assertEqual(models.shadow("code-verifier.demo")["model"], "claude-sonnet-5-5",
+                         "an override may hold only shadows")
+
+    def test_each_invalid_shadow_is_refused_naming_the_route(self):
+        cases = (
+            ({"gate-judge": {"model": "default", "effort": "high"}}, ("shadow gate-judge", "not a model ID")),
+            ({"gate-judge": {"model": "session", "effort": "high"}}, ("shadow gate-judge", "not a model ID")),
+            ({"gate-judge": {"model": "claude-fable-5", "effort": "high"}}, ("shadow gate-judge", "Fable or Mythos")),
+            ({"gate-judge": {"model": "claude-mythos-1", "effort": "high"}}, ("Fable or Mythos",)),
+            ({"gate-judge": {"model": "claude-opus-4-1", "effort": "high"}}, ("not allowed",)),
+            ({"gate-jduge": {"model": "claude-opus-5-5", "effort": "high"}}, ("shadow gate-jduge", "unknown route")),
+            ({"explorer": {"model": "claude-sonnet-5-5", "effort": "medium"}}, ("shadow explorer", "builder-side")),
+            ({"scout-map": {"model": "claude-sonnet-5-5", "effort": "medium"}}, ("builder-side",)),
+            ({"gate-judge": {"model": "claude-opus-5-5", "effort": "extreme"}}, ("effort 'extreme'",)),
+            ({"gate-judge": {"model": "claude-opus-5-5", "effort": "inherit"}}, ("effort 'inherit'",)),
+            ({"gate-judge": {"model": "claude-opus-5-5"}}, ("shadow gate-judge", "no effort")),
+            ({"gate-judge": {"model": "claude-opus-5-5", "effort": "high", "modle": "x"}}, ("unknown field(s) modle",)),
+            ({"gate-judge": "claude-opus-5-5"}, ("must be an object",)),
+            (["gate-judge"], ("shadow must be an object",)),
+        )
+        for entries, words in cases:
+            self.shadow(entries)
+            with self.assertRaises(models.ModelsError, msg=entries) as cm:
+                models.shadow("gate-judge")
+            for w in words:
+                self.assertIn(w, str(cm.exception), entries)
+            with self.assertRaises(models.ModelsError, msg="every lookup fails until the file is fixed"):
+                models.resolve("code-verifier.review")
+
+    def test_the_ignore_variable_ignores_the_shadows_too(self):
+        self.shadow({"gate-judge": {"model": "claude-opus-5-5", "effort": "high"}})
+        with mock.patch.dict(os.environ, {"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"}):
+            self.assertIsNone(models.shadow("gate-judge"))
+            self.assertIsNone(models.shadow_choice("gate-judge"))
+        self.assertIsNotNone(models.shadow("gate-judge"))
+        self.assertIsNone(models.shadow("gate-judge", ignore_override=True))
+
+    def test_the_flag_wins_and_is_held_to_the_same_rules(self):
+        self.shadow({"gate-judge": {"model": "claude-opus-5-5", "effort": "high"}})
+        self.assertEqual(models.shadow_choice("gate-judge")["source"], "override")
+        c = models.shadow_choice("gate-judge", "claude-sonnet-5-5:medium")
+        self.assertEqual((c["model"], c["effort"], c["source"]), ("claude-sonnet-5-5", "medium", "flag"))
+        for flag, words in (("claude-sonnet-5-5", "<model>:<effort>"), ("default:high", "not a model ID"),
+                            ("claude-fable-5:high", "Fable or Mythos"), ("claude-opus-5-5:huge", "effort 'huge'")):
+            with self.assertRaises(models.ModelsError) as cm:
+                models.shadow_choice("gate-judge", flag)
+            self.assertIn(words, str(cm.exception), flag)
+        with self.assertRaises(models.ModelsError) as cm:
+            models.shadow_choice("explorer", "claude-sonnet-5-5:medium")
+        self.assertIn("builder-side", str(cm.exception))
+
+    def test_list_and_check_show_the_shadows(self):
+        self.shadow({"gate-judge": {"model": "claude-opus-5-5", "effort": "high"}})
+        out = self.cli("list")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        lines = out.stdout.splitlines()
+        judge = next(i for i, x in enumerate(lines) if x.startswith("gate-judge:"))
+        self.assertIn("shadow: claude-opus-5-5 high", lines[judge + 1])
+        listed = json.loads(self.cli("list", "--json").stdout)
+        self.assertEqual(listed["shadows"]["gate-judge"]["effort"], "high")
+        self.assertNotIn("code-verifier.demo", listed["shadows"])
+        out = self.cli("check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("shadow gate-judge: claude-opus-5-5 high", out.stdout)
+        self.assertIn("1 shadow(s)", out.stdout)
+        out = self.cli("check", env={"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"})
+        self.assertNotIn("shadow gate-judge", out.stdout)
+        self.assertIn("shadows included", out.stdout)
+        self.shadow({"explorer": {"model": "claude-sonnet-5-5", "effort": "medium"}})
+        out = self.cli("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("FAIL shadow explorer", out.stdout)
+        out = self.cli("check", str(self.home / ".claude/.pipeline-models.json"))
+        self.assertEqual(out.returncode, 1, "an override file checked on its own checks its shadows")
+
+
 class DerivationTest(unittest.TestCase):
     def test_route_for(self):
         rows = [

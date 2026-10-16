@@ -3,9 +3,10 @@
 
 Usage:
   models.py resolve <route> [--json]   the model and effort one route runs on, and where each comes from
-  models.py list [--json]              every route, resolved
-  models.py check [<file>]             check the routing table and the personal override file, or one file
-                                       (a full table, or an override checked against the table)
+  models.py list [--json]              every route, resolved, and the shadow beside it when one is set
+  models.py check [<file>]             check the routing table and the personal override file (its shadows
+                                       included), or one file (a full table, or an override checked against
+                                       the table)
 
 The table is skills/_shared/models.json, in the folder above this script (the installed copy when run from
 ~/.claude). A route is a checker role, or <role>.<mode> for a role whose modes differ in what they judge:
@@ -25,6 +26,13 @@ or INCONCLUSIVE on another model or a lower effort.
 Override: ~/.claude/.pipeline-models.json, {"routes": {"<route>": {"model": ..., "effort": ...}}}, for some
 routes and some fields; the rest come from the table. PIPELINE_MODELS_IGNORE_OVERRIDE=1 ignores it (the
 /evolve benchmarks measure the repository's own table).
+
+Shadow: the same file may hold {"shadow": {"<route>": {"model": ..., "effort": ...}}} beside "routes": a candidate
+setting that runs beside the route's own on real work (run_isolated.py runs it after the main run, and only the
+main run's result counts; shadow_diff.py compares the two and says when a candidate is ready to promote, plan 7.3
+step 4). A shadow names both fields: a model ID from allowed_models (never default or session) and an effort level
+(never inherit). Only checker routes can have one; builder-side routes cannot. The ignore variable ignores the
+shadows too. list and check show them.
 
 Nothing falls back silently: an unknown route, a model outside allowed_models, any ID containing fable or
 mythos, an unknown effort, or a malformed file is an error that names the route and the file, and every
@@ -158,7 +166,7 @@ def table_problems(data, where):
 
 def override_problems(data, table, where):
     out = []
-    routes = data.get("routes")
+    routes = data.get("routes", {})
     if not isinstance(routes, dict):
         return [f"{where}: routes must be an object of route: {{model, effort}}"]
     known = table.get("routes") or {}
@@ -168,10 +176,55 @@ def override_problems(data, table, where):
             out.append(f"route {route} ({where}): unknown route (known: {', '.join(known)})")
             continue
         out += entry_problems(route, entry, allowed, where, partial=True)
-    extra = sorted(set(data) - {"version", "routes", "note"})
+    if "shadow" in data:
+        out += shadow_problems(data["shadow"], table, where)
+    extra = sorted(set(data) - {"version", "routes", "shadow", "note"})
     if extra:
         out.append(f"{where}: unknown field(s) {', '.join(extra)}")
     return out
+
+
+def shadow_problems(shadow, table, where):
+    """The problems of a shadow section: each route a known checker route, each entry a full setting."""
+    if not isinstance(shadow, dict):
+        return [f"{where}: shadow must be an object of route: {{model, effort}}"]
+    known = table.get("routes") or {}
+    allowed = [m for m in table.get("allowed_models") or [] if isinstance(m, str)]
+    out = []
+    for route, entry in shadow.items():
+        if route not in known:
+            out.append(f"shadow {route} ({where}): unknown route (known: {', '.join(known)})")
+        elif route not in CHECKER_ROUTES:
+            out.append(f"shadow {route} ({where}): {route} is a builder-side route, which cannot be shadowed "
+                       "(a shadow runs beside an isolated checker run)")
+        elif not isinstance(entry, dict):
+            out.append(f"shadow {route} ({where}): must be an object with model and effort")
+        else:
+            out += shadow_entry_problems(route, entry, allowed, where)
+    return out
+
+
+def shadow_entry_problems(route, entry, allowed, where):
+    """A shadow names a full model ID and an effort level: never default, session, or inherit."""
+    out = []
+    extra = sorted(set(entry) - {"model", "effort", "note"})
+    if extra:
+        out.append(f"shadow {route} ({where}): unknown field(s) {', '.join(extra)}")
+    out += [f"shadow {route} ({where}): no {k}" for k in ("model", "effort") if k not in entry]
+    if "model" in entry:
+        model, problem = entry["model"], model_problem(route, entry["model"], allowed, where)
+        if model in SPECIAL_MODELS:
+            out.append(f"shadow {route} ({where}): model {model} is not a model ID; a shadow names the full model "
+                       f"ID it runs on (one of {', '.join(allowed)})")
+        elif problem and "not allowed" in problem:
+            out.append(f"shadow {route} ({where}): model {model} is not allowed (use one of {', '.join(allowed)})")
+        elif problem:
+            out.append(problem.replace(f"route {route} (", f"shadow {route} (", 1))
+    if "effort" in entry and entry["effort"] not in EFFORTS:
+        out.append(f"shadow {route} ({where}): effort {entry['effort']!r} is not one of {', '.join(EFFORTS)}")
+    if "note" in entry and not isinstance(entry["note"], str):
+        out.append(f"shadow {route} ({where}): note must be a string")
+    return [p for p in out if p]
 
 
 def load(root=None, ignore_override=None):
@@ -236,6 +289,36 @@ def choose(route, model=None, effort=None, root=None, ignore_override=None):
     return out
 
 
+def shadow_entry(route, over, opath):
+    """The override's shadow setting for one route (load has checked it), or None."""
+    entry = ((over or {}).get("shadow") or {}).get(route)
+    if not entry:
+        return None
+    return {"route": route, "model": entry["model"], "effort": entry["effort"], "source": "override",
+            "override_file": str(opath), **({"note": entry["note"]} if entry.get("note") else {})}
+
+
+def shadow(route, root=None, ignore_override=None):
+    """The personal override's shadow setting for one route, or None; ModelsError when the files are invalid."""
+    table, over, path, opath = load(root, ignore_override)
+    return shadow_entry(route, over, opath)
+
+
+def shadow_choice(route, flag=None, root=None, ignore_override=None):
+    """The shadow beside one isolated run: the --shadow flag (<model>:<effort>) over the override's entry, or None.
+    The flag is held to the override's rules; any problem raises ModelsError."""
+    table, over, path, opath = load(root, ignore_override)
+    if flag is None:
+        return shadow_entry(route, over, opath)
+    model, sep, effort = str(flag).partition(":")
+    if not sep:
+        raise ModelsError(f"the --shadow flag takes <model>:<effort>, not {flag!r}")
+    problems = shadow_problems({route: {"model": model, "effort": effort}}, table, "the --shadow flag")
+    if problems:
+        raise ModelsError("; ".join(problems))
+    return {"route": route, "model": model, "effort": effort, "source": "flag"}
+
+
 def route_for(role, mode=None, previous=False, inputs=None):
     """The route of one checker run, from its role and how its pack is rendered (render_pack's precedence)."""
     inputs = inputs or []
@@ -284,8 +367,20 @@ def describe(r):
     return f"{r['route']}: model {said}, effort {r['effort']}, from {src}"
 
 
+def describe_shadow(s):
+    return (f"  shadow: {s['model']} {s['effort']} runs beside it on real work (only the routed run counts; "
+            f"from {'the --shadow flag' if s['source'] == 'flag' else 'the personal override'})")
+
+
+def shadow_lines(data):
+    """One line per shadow an override file names (the well-formed ones; check prints the problems)."""
+    shadow = data.get("shadow") if isinstance(data, dict) else None
+    return [f"shadow {route}: {e.get('model')} {e.get('effort')} beside the routed setting"
+            for route, e in (shadow.items() if isinstance(shadow, dict) else []) if isinstance(e, dict)]
+
+
 def cmd_check(args):
-    problems = []
+    problems, shadows = [], []
     if args:
         path = Path(args[0])
         try:
@@ -305,7 +400,9 @@ def cmd_check(args):
                 print(f"FAIL {exc}")
                 return 1
             problems = override_problems(data, table, str(path))
-            what = f"override of {len(data.get('routes') or {})} route(s), checked against {table_path()}"
+            shadows = shadow_lines(data)
+            what = f"override of {len(data.get('routes') or {})} route(s) and {len(shadows)} shadow(s), checked " \
+                   f"against {table_path()}"
     else:
         path = table_path()
         try:
@@ -318,18 +415,22 @@ def cmd_check(args):
                      if r not in (table.get("routes") or {})]
         opath = override_path()
         if override_ignored():
-            state = "override ignored (PIPELINE_MODELS_IGNORE_OVERRIDE)"
+            state = "override ignored, shadows included (PIPELINE_MODELS_IGNORE_OVERRIDE)"
         elif opath.exists():
             try:
-                problems += override_problems(read_json(opath, "personal override file"), table, str(opath))
+                over = read_json(opath, "personal override file")
+                problems += override_problems(over, table, str(opath))
+                shadows = shadow_lines(over)
             except ModelsError as exc:
                 problems.append(str(exc))
-            state = f"override {opath} checked"
+            state = f"override {opath} checked" + (f", {len(shadows)} shadow(s)" if shadows else "")
         else:
             state = "no personal override"
         what = f"{len(table.get('routes') or {})} routes, {state}"
     for p in problems:
         print(f"FAIL {p}")
+    for s in shadows:
+        print(s)
     print(f"models: {'FAIL' if problems else 'OK'} ({what})")
     return 1 if problems else 0
 
@@ -357,16 +458,20 @@ def main(argv):
         loaded = load()
         table, path, opath = loaded[0], loaded[2], loaded[3]
         rows = [pick(route, *loaded) for route in table["routes"]]
+        shadows = {r["route"]: shadow_entry(r["route"], loaded[1], opath) for r in rows}
     except ModelsError as exc:
         print(f"models: {exc}", file=sys.stderr)
         return 1
     if as_json:
         print(json.dumps({"table": str(path), "override": str(opath) if opath else None,
                           "override_ignored": override_ignored(), "escalate": table["escalate"],
-                          "routes": {r["route"]: r for r in rows}}, indent=2))
+                          "routes": {r["route"]: r for r in rows},
+                          "shadows": {k: v for k, v in shadows.items() if v}}, indent=2))
     else:
         for r in rows:
             print(describe(r))
+            if shadows.get(r["route"]):
+                print(describe_shadow(shadows[r["route"]]))
         print(f"escalate: {table['escalate']['model']} {table['escalate']['effort']}; table {path}; "
               + (f"override {opath}" if opath else "override ignored" if override_ignored() else "no personal override"))
     return 0
