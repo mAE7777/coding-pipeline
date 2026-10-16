@@ -13,8 +13,8 @@ The principles are in [`skills/_shared/references/pipeline-constitution.md`](ski
 
 Projects default to **OFF**, including projects with old or partially adopted records. Use `/pipeline on`
 (Codex: `$pipeline on`) to enable the formal workflow, `/pipeline off` to disable it immediately, or
-`/pipeline status` to inspect the choice. Each command accepts an optional project folder. A plain request
-to enable or disable management has the same effect; no adoption or owner ruling is needed to change it.
+`/pipeline status` to inspect the choice. Each command accepts an optional project folder. Type the command:
+the model does not start `/pipeline` itself. No adoption or owner ruling is needed to change the choice.
 
 The choice is stored outside the build record in `.coding-pipeline.json`:
 
@@ -74,11 +74,17 @@ ritual inside the build.
 | `/explain` | Explains what exists to an engineer, founder, investor, or user |
 | `/polish` | Optional outside-in scrutiny before real users see it |
 | `/evolve` | Improves the pipeline itself from real use: in any session that used it, harvests every failure, block, stuck step, and piece of friction with what the session did about it into a private ledger; then proves each problem with a reproduction, weighs the fix against the session's own workaround, and keeps a change only when a rule fixed in advance says the pipeline got better (the reproduction flips, nothing measured gets worse, both sides measured alike) and an isolated reviewer finds the cause removed and nothing weakened |
+| `/craft` | Code craft vendored from pstack and read on demand: `review` (a read-only review of the current diff), `architect`, `blast-radius`, `unslop`, `verify-skill`, and `pr <open \| check \| babysit \| ship>`; usable on projects where the pipeline is OFF. Pipeline steps open the same files when their trigger fires |
+
+`/pipeline`, `/evolve`, and `/polish` run only when you type them: they are left out of the model's skill listing
+(`disable-model-invocation`), so the model never starts them on its own or from another skill.
 
 ## Checkers
 
 Each runs as a separate headless process in a prepared copy of the project, under the operating system's
-sandbox, with its inputs rendered by a script from files. None sees the builder's conversation.
+sandbox, with its inputs rendered by a script from files. None sees the builder's conversation. Each one's model
+and effort come from the routing table, `skills/_shared/models.json` (`models.py list` shows them), never from
+the agent file.
 
 | Agent | Catches |
 |---|---|
@@ -126,6 +132,12 @@ python3 settings_patch.py        # show the hook registrations; add --apply to w
 python3 codex_hooks_patch.py     # the same for Codex; Codex asks you to trust new hooks once
 python3 install.py check         # prove the installed files match this repository, with no shadow copies
 ```
+
+`apply` puts the skills (the craft layer included) in `~/.claude/skills/`; the shared scripts, templates,
+references, and the routing table (`models.json`) in `~/.claude/skills/_shared/`; the checkers in
+`~/.claude/agents/`; and the hooks in `~/.claude/hooks/`. Its manifest, `~/.claude/.pipeline-install.json`, records
+every installed file's hash, and the routing table's on its own. Your personal routing override
+(`~/.claude/.pipeline-models.json`) and shadow-run records (`~/.claude/.pipeline-shadow.jsonl`) are never touched.
 
 Tests: `bash tests/pipeline-selftest.sh` runs every script and hook suite and the static checks.
 `python3 tests/agent_fixtures.py` runs each checker against planted-defect and clean projects, three times each.
