@@ -527,11 +527,14 @@ class BaselineChecksTest(unittest.TestCase):
             subprocess.run(["git", "-C", d, "add", "app.py"], check=True, env=env)
             subprocess.run(["git", "-C", d, "commit", "-qm", "start", "--no-gpg-sign"], check=True, env=env)
             root = with_baseline(d, {})
-            got = lines_of(gate(d).stdout, "prose-lint")
-            self.assertIn("commit messages not checked: the M1 baseline records no git commit", got[0][1])
             head = subprocess.run(["git", "-C", d, "rev-parse", "HEAD"], capture_output=True, text=True,
                                   env=env).stdout.strip()
-            (root / ".evidence/baseline-M1.head").write_text(head + "\n")
+            recorded = root / ".evidence/baseline-M1.head"
+            self.assertEqual(recorded.read_text(), head + "\n", "baseline.py record notes the commit it started from")
+            recorded.unlink()
+            got = lines_of(gate(d).stdout, "prose-lint")
+            self.assertIn("commit messages not checked: the M1 baseline records no git commit", got[0][1])
+            recorded.write_text(head + "\n")
             write(d, {"app.py": "x = 2\n"})
             subprocess.run(["git", "-C", d, "commit", "-qam", "Make it faster \u2014 a pivotal change\n\nCertainly!",
                             "--no-gpg-sign"], check=True, env=env)
