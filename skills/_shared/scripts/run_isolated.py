@@ -64,7 +64,7 @@ served model's ID does not start with it; null when the stream named none). The 
 model and effort: its summary records the route with route_applies false.
 
 Mode sections. An agent body may hold blocks between `<!-- mode: NAME -->` and `<!-- end mode -->` lines (NAME
-may list several names, separated by commas). The Claude prompt keeps the common text and only the blocks
+may list several names, separated by commas). The prompt (Claude or Codex) keeps the common text and only the blocks
 named for this run: the route's mode (after the dot), that mode's earlier name (models.py section_names:
 documents for reread, fidelity for refidelity, review for reverify, extraction for extract), and the --mode
 given. A body without markers is passed unchanged; an unclosed or nested block ends the run ERROR. The summary
@@ -754,7 +754,9 @@ def codex_cmd(role, opts, workdir, stem, sid):
                         "CLAUDE_PROJECT_DIR")}
     env.update({"CODEX_HOME": str(home), "HEAVY_OWNER": f"codex-{sid}", "TMPDIR": str(private_tmp),
                 "PYTEST_DEBUG_TEMPROOT": str(private_tmp), "CHECKER_TMP": str(private_tmp)})
-    agent_path, meta, body = read_agent(role, opts.get("agent_file"))
+    # The same mode cut as the Claude family: a Codex review never carries the demo or re-verify instructions.
+    rt = opts.get("_routing")
+    agent_path, meta, body = read_agent(role, opts.get("agent_file"), rt["sections"] if rt else None)
     return cmd, env, {"agent_file": str(agent_path), "codex_home": str(home), "prefix": body + "\n\n",
                       "owner": f"codex-{sid}", "private_tmp": str(private_tmp),
                       "last_message": str(private_tmp / "result.md")}
@@ -772,7 +774,11 @@ def run_once(role, family, opts, workdir, stem, pack):
     made, extra = len(MADE), {}
     try:
         if family == "codex":
-            cmd, env, extra = codex_cmd(role, opts, workdir, stem, sid)
+            try:
+                cmd, env, extra = codex_cmd(role, opts, workdir, stem, sid)
+            except AgentError as exc:
+                return {"status": "ERROR", "reason": f"the agent definition cannot be cut to this run's mode: {exc}",
+                        "family": family}
             if cmd is None:
                 return {"status": "UNAVAILABLE", "reason": extra["unavailable"], "family": "codex"}
             stdin = extra.pop("prefix") + pack

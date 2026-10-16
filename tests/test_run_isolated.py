@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import socketserver
+import shutil
 import signal
 import subprocess
 import sys
@@ -706,11 +707,33 @@ class RoutingTest(unittest.TestCase):
         self.assertNotIn("DEMO TEXT", prompt)
         self.assertNotIn("<!--", prompt)
 
+    def test_a_codex_run_gets_the_same_mode_cut(self):
+        agent = self.d / "code-verifier.md"
+        agent.write_text(AGENT_WITH_MODES)
+        (self.bin / "codex").write_text(FAKE_CODEX_OK)
+        os.chmod(self.bin / "codex", 0o755)
+        work = self.d / "work"
+        work.mkdir(exist_ok=True)
+        saved = (ri.HOME, os.environ["PATH"])
+        ri.HOME, os.environ["PATH"] = self.home, f"{self.bin}:{saved[1]}"
+        try:
+            opts = {"allow_read": [], "effort": "xhigh", "agent_file": str(agent),
+                    "_routing": {"sections": ["review"]}}
+            cmd, env, extra = ri.codex_cmd("code-verifier", opts, work, self.d / "code-verifier", "sid")
+        finally:
+            ri.HOME, os.environ["PATH"] = saved
+            for made in ri.MADE:
+                shutil.rmtree(made, ignore_errors=True)
+        self.assertIn("REVIEW TEXT", extra["prefix"])
+        self.assertNotIn("DEMO TEXT", extra["prefix"], "a Codex review never carries the demo instructions")
+        self.assertNotIn("REVERIFY TEXT", extra["prefix"])
+
     def test_a_body_without_markers_is_unchanged(self):
-        for role in ("cold-reader", "code-verifier", "gate-judge"):
-            path, meta, body = ri.read_agent(role, str(AGENTS / f"{role}.md"))
-            self.assertEqual(ri.mode_sections(body, {"documents", "demo"}), (body, None))
-            self.assertEqual(ri.read_agent(role, str(AGENTS / f"{role}.md"), {"x"})[2], body)
+        agent = self.d / "plain.md"
+        agent.write_text("---\nname: gate-judge\ndescription: x\n---\nRead the evidence.\n\n<!-- a note -->\nDecide.\n")
+        path, meta, body = ri.read_agent("gate-judge", str(agent))
+        self.assertEqual(ri.mode_sections(body, {"documents", "demo"}), (body, None))
+        self.assertEqual(ri.read_agent("gate-judge", str(agent), {"x"})[2], body)
 
     def test_broken_mode_markers_are_named(self):
         for body, words in (("a\n<!-- mode: demo -->\nb", "never closed"),
