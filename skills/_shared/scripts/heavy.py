@@ -310,7 +310,12 @@ def bounded(command, opts, env):
         code, _ = run_group(command, env=env, timeout=opts["timeout"])
         return code
     project, inside = project_of(Path.cwd())
-    log = new_log(project, command)
+    try:
+        log = new_log(project, command)
+    except OSError as exc:  # the job still runs; only the summary is lost, and that is said
+        say(f"cannot keep a log in {project / '.evidence/logs'} ({exc}); the output passes through in full instead")
+        code, _ = run_group(command, env=env, timeout=opts["timeout"])
+        return code
     with open(log, "wb") as out:
         code, _ = run_group(command, env=env, timeout=opts["timeout"], output=out)
     total, failing, tail = read_log(log, opts["tail"])

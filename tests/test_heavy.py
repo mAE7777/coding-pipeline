@@ -277,6 +277,14 @@ class HeavyTailTest(HeavyTestBase):
         self.assertNotIn("heavy.py: exit", out.stdout)
         self.assertFalse((self.proj / ".evidence").exists())
 
+    def test_a_log_folder_that_cannot_be_written_still_runs_the_job_and_says_so(self):
+        (self.proj / ".evidence").write_text("a file where the folder would go\n")
+        out = self.run_tail()
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("cannot keep a log", out.stderr)
+        self.assertIn("progress 100 ok", out.stdout, "the output passes through in full")
+        self.assertNotIn("Traceback (most recent call last):\n  File", out.stderr)
+
     def test_a_bad_tail_value_is_bad_usage(self):
         for value in ("many", "-3"):
             out = self.heavy("run", "--tail", value, "--", "echo", "x", owner="A", cwd=self.proj)
@@ -407,6 +415,8 @@ class HeavyGuardTest(unittest.TestCase):
     def test_a_bounded_suggestion_bounds_its_output_and_a_server_suggestion_does_not(self):
         _, reason = bash("pytest -q", payload={"session_id": "S9"})
         self.assertIn("heavy.py run --owner S9 --tail 60 -- pytest -q", reason, "the first try is already bounded")
+        suggested = reason.split("Run instead: ", 1)[1].split("  (", 1)[0]
+        self.assertEqual(bash(suggested)[0], "allow", "the suggested command passes the guard as given")
         _, reason = bash("pnpm dev", payload={"session_id": "S9"})
         self.assertIn("heavy.py serve --owner S9 -- pnpm dev", reason)
         self.assertNotIn("--tail", reason)
