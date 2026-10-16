@@ -5,55 +5,42 @@ argument-hint: "[run [INC-nnnn ...] | status]"
 disable-model-invocation: true
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /evolve
 
-Every session that uses the pipeline finds out something about it: a check that stopped the wrong thing, a
-step that looped, an instruction two readings could take differently, a stopgap that got the work through.
-Without this loop those lessons stay in one transcript. With it, each becomes an incident, is proven real,
-and is fixed only in a way that measurably improves the pipeline and cannot quietly make anything else worse.
+Each lesson a session teaches about the pipeline becomes an incident, is proven real, and is fixed only in a
+way that measurably improves the pipeline and cannot quietly make anything else worse.
 
 Load-bearing rules:
-- **No fix without a reproduction.** A problem is real when a suite fails on the current pipeline because of
-  it. Until then it is a report, kept and counted, never acted on.
+- **No fix without a reproduction** that fails on the current pipeline because of the problem. Until then it
+  is a report, kept and counted, never acted on (`evolve.py record` and `check` refuse a fix without one).
 - **The judge is fixed before the change.** `evolve.py compare` decides BETTER, SAME, WORSE, or INCOMPARABLE
   by the rule in its own documentation; run it from the installed copy
   (`~/.claude/skills/_shared/scripts/evolve.py`), which is the pipeline before the change, never from the
   branch being judged. A change to the judge itself (evolve.py, the change reviewer, the fixtures'
   expectations) is a rule change: the owner rules on it and the old judge measures it.
-- **Fair measurement.** Both sides run the same suites, with the same instrument (the branch's `tests/`),
-  in the same environment (the same Claude Code, Codex, Python, and checker models), with the same number
-  of runs; every measurement is kept; a noisy result is measured again on both sides (`--again`), never on
-  one side until it looks good.
-- **Never weaker.** No test, fixture expectation, lint, gate rule, or checker instruction may accept more
-  than before inside a fix. Removing a test counts as worse. A fix that trades a loud failure for a quiet one
-  breaks the fourth law and is not a fix.
-- **The session's workaround is an option.** What the session actually did is weighed like any other design,
-  measured when it is a change to the pipeline, and the record says whether the chosen change adopts it,
-  generalizes it, or replaces it and why.
-- **Who decides.** A fix to a defect or a clearer document inside the pipeline's rules is the builder's. A
-  new capability, a changed rule, a changed owner gate, anything that lets a checker decide differently, and
-  anything that relaxes a check are the owner's rulings, in their words, proven with the transcript.
+- **Fair measurement.** `compare` is INCOMPARABLE unless both sides ran the same suites, instrument (the
+  branch's `tests/`), environment, and number of runs. A noisy result is measured again on both sides
+  (`--again`), never on one side until it looks good.
+- **Never weaker.** No test, fixture expectation, lint, gate rule, or checker instruction may accept more than
+  before inside a fix, and trading a loud failure for a quiet one is not a fix (`compare` counts fewer tests as
+  WORSE; the change reviewer refuses a weakened check).
+- **The session's workaround is an option**, weighed like any other design and measured when it is a change to
+  the pipeline; the record says whether the chosen change adopts, generalizes, or replaces it and why.
+- **Who decides.** A fix to a defect or a clearer document inside the pipeline's rules is the builder's. A new
+  capability, a changed rule or owner gate, anything that lets a checker decide differently, and anything that
+  relaxes a check are the owner's rulings (`record` takes those kinds only with the owner's words proven in
+  their transcript).
 - **Private in, public out.** The ledger (`$HOME/.claude/pipeline-evolution/`, one for Claude Code and Codex)
-  keeps project details and stays on this machine. What enters the repository (tests, fixtures, text) is synthetic and carries no project's
-  content, names, or paths.
+  keeps project details and stays on this machine. What enters the repository (tests, fixtures, text) is
+  synthetic and carries no project's content, names, or paths.
 
 Script: `python3 ~/.claude/skills/_shared/scripts/evolve.py` (subcommands and every rule in its header).
 
 ## /evolve (harvest, in the session that had the trouble)
-1. `evolve.py harvest [--project <dir>]` reads this session's whole transcript (compacted parts included)
-   and writes `candidates.md`: each signal once, grouped by a signature, with its evidence. Known problems
-   only get an occurrence added; a fixed problem seen again is flagged as a REGRESSION.
+1. `evolve.py harvest [--project <dir>]` turns this session's whole transcript into `candidates.md` (its usage
+   says what counts as a signal; a known problem gets an occurrence, a fixed one seen again is a REGRESSION).
 2. Judge every new candidate: a pipeline problem, something outside the pipeline (the environment, the
    project's own code, a choice that was right), or noise. Say which, with the reason.
 3. Add what no script sees, from this session's own memory and record: an instruction that was unclear or
@@ -78,17 +65,18 @@ frequent first). Work through them one cause at a time.
    (`repro:test:tests/<file>.py::<Class>.<test>`); a checker or probe fixture for model behavior
    (`repro:fixtures:<name>`, a planted case the current checker or text gets wrong; a probe embeds the text
    under test with `{repo:<path>}`, see `tests/agent_fixtures.py`); a scenario only for a whole flow. It must
-   fail for the incident's reason: a test that fails only because a name the fix adds is missing proves
-   nothing. Record it in the incident's Reproduction section and set `Status: confirmed`. Not reproducible
-   after real attempts: `Status: not-reproduced`, each attempt recorded; it stays counted and is retried
-   when it recurs. Outside the pipeline after all: `environment (...)` or `not-pipeline (...)`.
+   fail for the incident's reason (`compare` does not count a test that fails only for a name the fix adds).
+   Record it in the incident's Reproduction section and set `Status: confirmed`. Not reproducible after real
+   attempts: `Status: not-reproduced`, each attempt recorded; it stays counted and is retried when it recurs.
+   Outside the pipeline after all: `environment (...)` or `not-pipeline (...)`.
 3. **Open the change**: `evolve.py new-change --title ... --incidents ... --kind fix|doc|capability|rule-change`,
    then, from a clean main, `git switch -c evolve/chg-<nnnn> <Base>` in the repository, and commit the
    reproduction first.
-4. **Design**: the root cause with file and line; at least two options with what, how, and why, the
-   session's workaround among them (on its own branch and measured when it is a pipeline change); the choice
-   and why it beats the others. For an owner kind, ask the owner now, in plain words with the options, and
-   write their answer as `[owner <date>] "<their words>" · session <id>`.
+4. **Design**, with `references/design.md` (the fix hierarchy, the rule ledger, when a text change is worth
+   making, blinding a probe): the root cause with file and line; at least two options with what, how, and
+   why, the session's workaround among them (on its own branch and measured when it is a pipeline change); the
+   choice and why it beats the others. For an owner kind, ask the owner now, in plain words with the options,
+   and fill the change record's Owner line with their answer (`new-change` writes its form).
 5. **Build** the fix on the branch; the reproduction stays in the suite for good.
 6. **Measure**: `evolve.py touchmap <Base> <branch>` names the suites the change can affect (selftest
    always; the checker fixtures for any checker text or runner change; a flow scenario when the change
@@ -96,22 +84,28 @@ frequent first). Work through them one cause at a time.
    `evolve.py bench <Base> --suites "..." --instrument <branch>` and `evolve.py bench <branch> --suites "..."`,
    then `evolve.py compare <Base> <branch> --suites "..."`. A scenario is measured against the installed
    pipeline, so install the branch for its after-run and reinstall main if the change is not kept.
+   - A model or effort change in `skills/_shared/models.json`: the reproduction is
+     `repro:route:fixtures:<prefix>`, benched with `--runs 5` on both sides; it holds by compare's pooled
+     rule (no more problems over the planted fixtures, every clean fixture passing, 20 percent cheaper).
+   - A change made to spend less: `repro:cost:fixtures:<prefix>` or `repro:cost:scenario:<name>`.
+   - A side whose stored measurements hold no raw usage cannot be priced: `bench --again` on both sides.
+     Benches ignore the personal model override, so both sides measure the repository's own table.
+   The exact rules are in `evolve.py`'s usage text (Suites, and compare's rule).
 7. **Only BETTER goes on.** WORSE: fix what got worse or choose another option. SAME: the reproduction did not
    flip, so the fix is wrong or the reproduction is. INCOMPARABLE: measure what is missing, alike on both
    sides.
 8. **Review**: `evolve.py review CHG-<nnnn>` runs the change reviewer (`change-reviewer`) in isolation on the
-   branch. Its findings
-   are addressed on the branch, then measured and reviewed again. A review covers the change's own diff: rebased
-   onto unrelated work (same diff, no file it touches changed underneath) it still stands, and only the
-   measurements run again.
+   branch. Its findings are addressed on the branch, then measured and reviewed again; a rebase onto unrelated
+   work keeps the review (`evolve.py`'s usage says when), and only the measurements run again.
 9. **Record**: `evolve.py record CHG-<nnnn>` refuses any missing proof; on success the incidents are fixed.
 10. **Release**: fast-forward main to the branch, `python3 install.py apply`, the Codex sync that
     `install.py check` names when Codex's copies are behind, `python3 install.py check` until it passes, push,
-    then `evolve.py check` (every fixed incident proven and merged). A commit message says what changed for a user of the pipeline, in plain words.
+    then `evolve.py check` (every fixed incident proven and merged). A commit message says what changed for a
+    user of the pipeline, in plain words.
 
-A change the owner orders directly, outside this loop, still closes its incidents on the record: `Status:
-resolved (<commit> · <how it was verified>)`; `evolve.py check` requires the commit on main, and a harvest that
-sees the problem again flags it as a regression like any fixed one.
+A change the owner orders directly, outside this loop, still closes its incidents on the record with the
+commit and how it was verified (`evolve.py check` names the form and requires the commit on main); a harvest
+that sees the problem again flags it as a regression like any fixed one.
 
 ## /evolve status
 `evolve.py status` and `evolve.py check`: the ledger in plain words, what is open and how often it recurs,
