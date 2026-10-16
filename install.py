@@ -10,9 +10,11 @@ Usage:
   python3 install.py check [--home <dir>]     compare the installed files with this repository and hunt shadows
 
 What is managed:
-  skills/<name>/          SKILL.md, references/, scripts/ of each pipeline skill; files the repository no longer
-                          has are removed, except the owner's own brain.md, friction.log, and tests/
-  skills/_shared/         gate.sh, scripts/, templates/, and the pipeline's references (other _shared files are
+  skills/<name>/          every file of each pipeline skill (SKILL.md, references/, scripts/; for craft, the
+                          vendored pstack layer with UPSTREAM.json and LICENSE-pstack); files the repository no
+                          longer has are removed, except the owner's own brain.md, friction.log, and tests/
+  skills/_shared/         gate.sh, scripts/, templates/, models.json (the routing table: each checker's model and
+                          effort), and the pipeline's references, agent-product/ included (other _shared files are
                           never touched)
   agents/<name>.md        the pipeline's checkers
   hooks/<name>.py         the pipeline's hooks (their registration in settings.json is settings_patch.py's job)
@@ -23,7 +25,10 @@ folder Claude Code loads from. Every file apply replaces or removes is first cop
 ~/.claude/_backups/pipeline-install-<UTC time>/. An installed file that changed since the last install (an edit
 made under ~/.claude, by hand or by /update) stops apply, which lists it: port the change into this repository
 (or its private/ overlay) and apply again, or pass --overwrite-live-edits to replace it (the backup keeps it). The manifest (~/.claude/.pipeline-install.json) records the sha256 of every
-installed file and the repository revision.
+installed file, the repository revision, and the routing table's sha256 on its own (routing_table): which model
+and effort each checker runs on is part of the released behavior. The owner's personal files beside it,
+~/.claude/.pipeline-models.json (the routing override) and ~/.claude/.pipeline-shadow.jsonl (shadow-run records),
+are never written or removed, not even from the private/ overlay.
 
 Codex. When ~/.agents/skills links into a Codex package (the folder holding scripts/convert_helm.py) and Codex's
 copies are older than what was just installed, apply brings them up to date in the same run (--no-codex skips it
@@ -56,10 +61,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 SKILLS = ("pipeline", "next", "capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
-          "polish", "evolve")
+          "polish", "evolve", "craft")
 RETIRED_SKILLS = ("qa", "integrate")
-SHARED = ("gate.sh", "scripts", "templates", "references/project-control.md", "references/pipeline-constitution.md", "references/steal-protocol.md",
-          "references/steal-spec.md", "references/record-glossary.md")
+# scripts/ goes whole, so every shared script (models.py, pr_watch.py, craft_sync.py, and the rest) is installed.
+SHARED = ("gate.sh", "scripts", "templates", "models.json", "references/project-control.md",
+          "references/pipeline-constitution.md", "references/steal-protocol.md", "references/steal-spec.md",
+          "references/record-glossary.md", "references/agent-product")
+ROUTING_TABLE = "skills/_shared/models.json"
+# The owner's own files under ~/.claude that the pipeline's scripts read or append to: never installed over, never
+# removed, never listed in the manifest.
+PERSONAL = (".pipeline-models.json", ".pipeline-shadow.jsonl")
 AGENTS = ("code-verifier", "loyal-evaluator", "gate-judge", "cold-reader", "claim-verifier", "change-reviewer")
 RETIRED_AGENTS = ("dev-planner", "task-implementer", "qa-planner", "category-executor", "project-analyzer",
                   "migration-planner", "doc-generator", "market-researcher", "winners-board")
@@ -112,6 +123,8 @@ def desired(home):
         for f in files_under(overlay):
             if f.relative_to(overlay).parts[0] == "tests":
                 continue  # the overlay's own tests run from the repository, never from ~/.claude
+            if f.relative_to(overlay).as_posix() in PERSONAL:
+                continue  # the owner's routing override and shadow records are theirs alone
             want[claude / f.relative_to(overlay)] = f
     return want
 
@@ -216,8 +229,11 @@ def cmd_apply(home, overwrite=False, no_codex=False):
                 p.chmod(p.stat().st_mode | 0o111)
     for p in (home / ".claude/skills/_shared/scripts").glob("*.py"):
         p.chmod(p.stat().st_mode | 0o111)
+    table = home / ".claude" / ROUTING_TABLE
     manifest = {"installed": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "revision": revision(), "repo": str(REPO), "files": {str(d): sha(s) for d, s in sorted(want.items())}}
+                "revision": revision(), "repo": str(REPO),
+                "routing_table": {"path": str(table), "sha256": sha(want[table])} if table in want else None,
+                "files": {str(d): sha(s) for d, s in sorted(want.items())}}
     (home / ".claude/.pipeline-install.json").write_text(json.dumps(manifest, indent=1))
     print(f"installed: {len(actions)} action(s); manifest {home / '.claude/.pipeline-install.json'}"
           + (f"; replaced files backed up in {backup}" if backup.exists() else ""))
@@ -462,7 +478,10 @@ def codex_conversion_check(home, want):
     if stale:
         fails.append(f"Codex's copies were converted from older versions of {len(stale)} file(s) ({', '.join(stale[:5])}"
                      + (" ..." if len(stale) > 5 else "") + "): " + fix)
-    # Every managed file must be carried, except the hooks, which Codex runs from ~/.claude/hooks directly.
+    # Every managed file must be carried, except the hooks, which Codex runs from ~/.claude/hooks directly. Nothing
+    # newer is left out on purpose: the craft skill converts like every other skill, models.json must reach Codex
+    # because models.py (imported by run_isolated.py) reads the table beside the scripts and fails without it, and
+    # the agent-product reference ships like the other references.
     absent = [str(dst.relative_to(claude)) for dst in sorted(want)
               if dst.relative_to(claude).parts[0] != "hooks" and str(dst.relative_to(claude)) not in recorded]
     if absent:
@@ -505,11 +524,14 @@ def runtime_notes(home):
 def cmd_check(home):
     want = desired(home)
     fails = []
+    table = home / ".claude" / ROUTING_TABLE
     for dst, src in sorted(want.items()):
+        what = " (the routing table, so checkers would not run on the repository's models and efforts)" \
+            if dst == table else ""
         if not dst.exists():
-            fails.append(f"missing: {dst}")
+            fails.append(f"missing: {dst}{what}")
         elif sha(dst) != sha(src):
-            fails.append(f"differs from the repository: {dst}")
+            fails.append(f"differs from the repository: {dst}{what}")
     for f in stale_in_skill_dirs(home, want):
         fails.append(f"left over from an earlier version: {f}")
     for name in RETIRED_SKILLS:

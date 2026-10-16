@@ -263,6 +263,93 @@ class InstallTest(unittest.TestCase):
         self.assertNotIn("FAIL   install     differs", out.stdout)
         self.assertNotIn("missing:", out.stdout)
 
+    def test_apply_installs_the_craft_layer_the_routing_table_and_every_shared_script(self):
+        out = self.run_i("apply")
+        claude = self.home / ".claude"
+        expected = [p for p in (ROOT / "skills/craft").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+        self.assertGreater(len(expected), 60)
+        for src in expected:
+            dst = claude / "skills/craft" / src.relative_to(ROOT / "skills/craft")
+            self.assertTrue(dst.is_file(), f"craft file not installed: {dst}")
+            self.assertEqual(dst.read_bytes(), src.read_bytes(), dst)
+        for rel in ("UPSTREAM.json", "LICENSE-pstack", "index.md", "principles/principle-fix-root-causes.md",
+                    "methods/pr/babysit.md", "verify/feature-map-example/README.md"):
+            self.assertTrue((claude / "skills/craft" / rel).is_file(), rel)
+        for rel in ("models.json", "references/agent-product/README.md",
+                    "references/agent-product/reference/coordination.py",
+                    "references/agent-product/reference/test_coordination.py",
+                    "references/agent-product/reference/SOURCE.md"):
+            self.assertEqual((claude / "skills/_shared" / rel).read_bytes(), (ROOT / "skills/_shared" / rel).read_bytes())
+        for src in (ROOT / "skills/_shared/scripts").glob("*.py"):
+            self.assertTrue((claude / "skills/_shared/scripts" / src.name).is_file(), f"script not installed: {src.name}")
+        manifest = json.loads((claude / ".pipeline-install.json").read_text())
+        import hashlib
+        table = claude / "skills/_shared/models.json"
+        self.assertEqual(manifest["routing_table"], {"path": str(table), "sha256": hashlib.sha256(
+            (ROOT / "skills/_shared/models.json").read_bytes()).hexdigest()}, "the routing table's hash is on record")
+        self.assertIn(str(claude / "skills/craft/index.md"), manifest["files"])
+        self.assertNotIn("missing:", out.stdout)
+        self.assertNotIn("differs from the repository", out.stdout)
+        self.assertNotIn("left over from an earlier version", out.stdout)
+
+    def test_check_names_a_routing_table_that_drifted(self):
+        self.run_i("apply")
+        table = self.home / ".claude/skills/_shared/models.json"
+        table.write_text(table.read_text().replace('"effort": "xhigh"', '"effort": "low"', 1))
+        out = self.run_i("check")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn(f"differs from the repository: {table} (the routing table", out.stdout)
+        table.unlink()
+        self.assertIn(f"missing: {table} (the routing table", self.run_i("check").stdout)
+
+    def test_the_owners_routing_override_and_shadow_records_are_never_touched(self):
+        claude = self.home / ".claude"
+        mine = {claude / ".pipeline-models.json": '{"routes": {"gate-judge": {"effort": "high"}}}\n',
+                claude / ".pipeline-shadow.jsonl": '{"round": 1}\n'}
+        for path, text in mine.items():
+            path.write_text(text)
+        plan = self.run_i("plan")
+        self.run_i("apply")
+        self.run_i("apply")
+        manifest = json.loads((claude / ".pipeline-install.json").read_text())
+        for path, text in mine.items():
+            self.assertNotIn(str(path), plan.stdout)
+            self.assertEqual(path.read_text(), text, f"{path.name} is the owner's")
+            self.assertNotIn(str(path), manifest["files"])
+        self.assertFalse(list((claude / "_backups").rglob(".pipeline-*")), "nothing of theirs was replaced")
+        # not even a private overlay installs over them
+        sys.dont_write_bytecode = True  # no __pycache__ beside install.py
+        sys.path.insert(0, str(ROOT))
+        try:
+            import install
+        finally:
+            sys.path.remove(str(ROOT))
+        with tempfile.TemporaryDirectory() as repo:
+            (Path(repo) / "private").mkdir()
+            for name in install.PERSONAL + ("owner-notes.md",):
+                (Path(repo) / "private" / name).write_text("overlay\n")
+            real = install.REPO
+            install.REPO = Path(repo)
+            try:
+                want = install.desired(self.home)
+            finally:
+                install.REPO = real
+            self.assertIn(claude / "owner-notes.md", want)
+            for name in install.PERSONAL:
+                self.assertNotIn(claude / name, want)
+
+    def test_codex_carries_the_craft_skill_and_the_new_shared_files(self):
+        pkg = self.codex_package({"pipeline": "PASS"})
+        out = self.run_i("apply")
+        self.assertIn("Codex synced from the package", out.stdout, out.stdout[-800:])
+        self.assertNotIn("Codex has no", out.stdout)
+        self.assertNotIn("does not carry", out.stdout)
+        self.assertTrue((pkg / ".agents/skills/craft/SKILL.md").is_file())
+        recorded = (pkg / "source-manifest.sha256").read_text()
+        for rel in ("skills/craft/index.md", "skills/_shared/models.json",
+                    "skills/_shared/references/agent-product/reference/coordination.py"):
+            self.assertIn(f"  {rel}\n", recorded)
+
     def test_check_catches_a_modified_install(self):
         self.run_i("apply")
         (self.home / ".claude/skills/gate/SKILL.md").write_text("edited by hand\n")
