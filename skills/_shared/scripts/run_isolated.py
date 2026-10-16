@@ -19,8 +19,10 @@ A real gate run takes longer than a shell tool call may last: start this in the 
 
 Inputs. The pack is a file (--pack, used by the fixture harness) or rendered by render_pack.py into the
 evidence folder immediately before launch (--render ... --), so nothing editable sits between rendering and
-running; its sha256 is recorded. For the loyal-evaluator's first pass the pack is checked against
-intent.md first, and a hit stops the run with status LEAK. The agent definition comes from --agent-file
+running; its sha256 is recorded. When render_pack.py writes <stem>.change.patch beside the pack (the full
+change, for a code-verifier review or re-verify pack), its absolute path joins the read allow list as an
+--allow-read path would, in either family's fence; the summary records it as change_patch. For the
+loyal-evaluator's first pass the pack is checked against intent.md first, and a hit stops the run with status LEAK. The agent definition comes from --agent-file
 (staging) or ~/.claude/agents/<role>.md and is passed inline, so the checker runs exactly that text.
 
 Claude family: `claude -p --agents <file> --agent <role>` with cwd=<workdir>, the pack on standard input, and
@@ -1051,6 +1053,10 @@ def main(argv):
                 shutil.rmtree(workdir, ignore_errors=True)
             print(f"run_isolated: pack not rendered: {r.stderr.strip()[:400]}", file=sys.stderr)
             return 1
+        patch = Path(str(stem) + ".change.patch")
+        if patch.is_file():  # the full change render_pack wrote beside the pack: readable as --allow-read
+            opts["_patch"] = str(patch.resolve())
+            opts["allow_read"].append(opts["_patch"])
     else:
         shutil.copyfile(opts["pack"], pack_path)
     pack = raw_pack = pack_path.read_text(encoding="utf-8")
@@ -1074,6 +1080,8 @@ def main(argv):
         if opts.get("_route_error"):
             summary.update({"route": route_name(role, opts)[0], "route_applies": False,
                             "route_error": opts["_route_error"]})
+        if opts.get("_patch"):
+            summary["change_patch"] = opts["_patch"]
         path = Path(str(stem) + ".summary.json")
         path.write_text(json.dumps(summary, indent=2))  # the main run's final status, before any shadow
         if plan:

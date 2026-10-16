@@ -971,6 +971,49 @@ class ShadowRunTest(unittest.TestCase):
         self.assertFalse(self.log.exists())
 
 
+class ChangePatchTest(unittest.TestCase):
+    """render_pack.py writes <stem>.change.patch beside a review pack; the run may read it, in both fences."""
+
+    def render(self, d, *extra, patch=True, env=None):
+        proj, out = Path(d) / "proj", Path(d) / "ev"
+        (proj / "docs/project").mkdir(parents=True, exist_ok=True)
+        (proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
+        out.mkdir(exist_ok=True)
+        p = out / "code-verifier.change.patch"
+        p.unlink(missing_ok=True)
+        if patch:
+            p.write_text("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n")
+        (Path(d) / "work").mkdir(exist_ok=True)
+        proc = subprocess.run([sys.executable, str(RI), "code-verifier", "--dir", str(Path(d) / "work"), "--out",
+                               str(out), "--project", str(proj), "--agent-file", str(AGENTS / "code-verifier.md"),
+                               "--render", "--milestone", "M1", "--", "--dry-run", *extra],
+                              capture_output=True, text=True, env=env, timeout=120)
+        return proc, p.resolve(), out
+
+    def test_the_patch_joins_the_read_allow_list_when_it_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc, patch, out = self.render(d)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+            allow = json.loads((out / "code-verifier.settings.json").read_text())["sandbox"]["filesystem"]["allowRead"]
+            self.assertIn(str(patch), allow)
+            self.assertEqual(json.loads(proc.stdout)["change_patch"], str(patch))
+            proc, patch, out = self.render(d, patch=False)
+            allow = json.loads((out / "code-verifier.settings.json").read_text())["sandbox"]["filesystem"]["allowRead"]
+            self.assertFalse([a for a in allow if a.endswith(".change.patch")])
+            self.assertNotIn("change_patch", json.loads(proc.stdout))
+
+    def test_the_codex_fence_reads_it_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            bindir = Path(d) / "bin"
+            bindir.mkdir()
+            (bindir / "codex").write_text(FAKE_CODEX_OK)
+            os.chmod(bindir / "codex", 0o755)
+            env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+            proc, patch, out = self.render(d, "--family", "codex", env=env)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+            self.assertIn(f'(allow file-read* (subpath "{patch}"))', (out / "code-verifier.sb").read_text())
+
+
 class ProjectServerTest(unittest.TestCase):
     def test_server_from_the_real_project_blocks(self):
         with tempfile.TemporaryDirectory() as d:
