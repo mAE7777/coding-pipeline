@@ -6,10 +6,8 @@ GPT-6 Astra class), in Claude Code and in Codex. Each skill carries its own rule
 they are shaped the way they are, and the tie-breaker when a situation is not covered.
 
 ## Applicability
-The project's workflow choice is checked before every law below. No explicit ON means direct development:
-existing documents and design can be used without adoption or an owner lock. The user can turn management
-off immediately, independently of every old record or ruling. Skills remain available as independent tools.
-See `project-control.md`; a control choice is not an intent amendment or a missing owner approval.
+The project's workflow choice comes before every law below: OFF by default, switched only by the owner
+through `/pipeline`, and never an intent amendment or a missing ruling. The contract is `project-control.md`.
 
 ## Why the pipeline looks like this
 Current models plan, decompose, write tests, and check their own work well, and they sustain multi-hour
@@ -33,7 +31,8 @@ can enforce is enforced by a script or a hook rather than asked for in prose.
    checks run as separate processes in prepared copies under an OS sandbox, with inputs rendered by script
    from files, so isolation never depends on prompt text or on the builder's wording.
 4. **Nothing silent.** Every non-success has a name and a count; every built part is wired and proven, or
-   parked and unreachable; every fact carries its source and date; evidence from another fingerprint is STALE.
+   parked and unreachable; every fact carries its source and date; evidence from another fingerprint is STALE,
+   unless a script proves the change since that fingerprint lies outside what the evidence covered.
 5. **Enough context, within the owner's budget.** Every load-bearing point is read and checked; a detail that
    decides nothing stays one lookup away in the verbatim sources rather than being read again and again. Every
    loop (audits, cold reads, the fix loop) ends when a pass finds nothing material, never at a count; a count
@@ -53,18 +52,18 @@ changes, new ideas) waits in the inbox, verbatim, until `/inbox` weighs it and t
 record only through a decision. `/scout` answers real unknowns, `/fix` makes targeted changes, `/handoff`
 moves work between sessions and tools on purpose (switching tools is automatic), `/deploy` ships, `/explain`
 tells any audience what exists, `/polish` scrutinizes a product from outside. The owner never has to know which
-step comes next: `project_status.py` computes it from the record, every skill ends by recording its step and
-naming the next one, and `/next` (or `/next auto`, which chains steps until the owner must decide) takes it.
-The pipeline improves from its own use: `/evolve` turns what went wrong in a session into incidents, and
-changes the pipeline only when a reproduction proves the problem and a rule fixed before the change,
-applied to both sides measured alike, says the result is better.
+step comes next: `project_status.py` computes it from the record each skill's End writes, and `/next` (or
+`/next auto`, which chains steps until the owner must decide) takes it. The pipeline improves from its own
+use: `/evolve` turns what went wrong in a session into incidents and keeps a change only when `evolve.py`
+proves it better.
 
 ## The build record
 `AGENTS.md` (the map: labeled commands, conventions, a working agreement both tools read) plus
 `docs/project/`: `intent.md` (locked and hashed; changed only by an owner-ruled re-freeze), `milestones.md`,
-`interfaces.md`, `decisions.md` (append-only), `fix-log.md`, `inbox.md` (all committed); `brief.md`, `state.md`,
-`gate.md`, `handoffs/`, `reviews/`, `research/`, `sources/`, `.evidence/`, and by default `AGENTS.md` and
-`CLAUDE.md` (local-only, through git's local exclude file written by `local_only.py`, never `.gitignore`). One concern, one file: new input goes into the right file with its
+`interfaces.md`, `decisions.md` (append-only, entries through `decisions.py add`), `fix-log.md`, `inbox.md`
+(all committed); `brief.md`, `state.md`, `gate.md`, `handoffs/`, `reviews/`, `research/`, `sources/`,
+`.evidence/`, and by default `AGENTS.md` and `CLAUDE.md` (local-only, through git's local exclude file written
+by `local_only.py`, never `.gitignore`). One concern, one file: new input goes into the right file with its
 source, the old entry marked superseded. Templates are in `_shared/templates/`.
 
 Authority when sources disagree: the owner's latest instruction once written down, then `intent.md`, then
@@ -94,15 +93,19 @@ once, nesting depth 2; workflows run at most 3 agents at once. Machine-wide at m
 kernel lock and leases in `_shared/scripts/heavy.py`, enforced by a hook. Subagents are for isolation or for
 large independent work that would flood the context, never for double-checking one's own work, and not
 in capture or adoption, where reading is the builder's or an isolated run's so its cost stays bounded and measured.
+Each isolated run's model and effort come from the role table, `_shared/models.json` (an owner's override in
+`~/.claude/.pipeline-models.json`; never a Fable model). No skill switches the session's model or effort
+midway: prompt caches are per model, so a switch re-sends the whole conversation uncached.
 
 ## Writing the skills
-Each SKILL.md stays under about 200 lines with its load-bearing rules first, states outcomes and
-constraints with their reasons, keeps curated knowledge in references loaded on demand, and names the one
-failure each checker exists to catch. Owner-facing text decodes on its own: plain meaning first, any ID only
-in parentheses after it.
+Each SKILL.md stays under about 200 lines with its load-bearing rules first, keeps only prose that changes a
+decision, states outcomes and constraints with their reasons, keeps curated knowledge in references loaded on
+demand, and names the one failure each checker exists to catch. Owner-facing text decodes on its own: plain
+meaning first, any ID only in parentheses after it.
 
 ## Output that leaves the machine
 Commits, READMEs, changelogs, and shipped text read as written by a human developer: no AI or tooling
-traces, no skill or agent names, and no spaced em-dashes. Committed planning files use neutral labels
-(`[owner <date>]`, `[proposed]`, `[research <ref> <grade>]`, `[environment <date>]`); files that name models
-and tools stay local.
+traces, no skill or agent names, and no spaced em-dashes. The writing standard is `craft/writing/unslop.md`
+and `craft/writing/technical-writing.md`; `gate.sh` prose-lint WARNs on what it can see. Committed planning
+files use neutral labels (`[owner <date>]`, `[proposed]`, `[research <ref> <grade>]`, `[environment <date>]`);
+`gate.sh` pipeline-traces FAILs a committed record file that names a pipeline tool.
