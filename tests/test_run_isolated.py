@@ -753,6 +753,224 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(ri.parse_claude_stream(lines)["read_paths"], ["/w/a.png"])
 
 
+FAKE_CLAUDE_SHADOW = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+sys.stdin.read()
+model = args[args.index("--model") + 1] if "--model" in args else "claude-default-x"
+shadow = model == os.environ.get("FAKE_SHADOW_MODEL", "claude-opus-5-5")
+side = "SHADOW_" if shadow else ""
+with open(os.environ["FAKE_CALLS"], "a") as f:
+    f.write(json.dumps({"model": model, "cwd": os.getcwd(), "args": args}) + "\n")
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "S", "model": model, "tools": ["Read"]}))
+for name in [x for x in os.environ.get(f"FAKE_{side}READS", "").split(",") if x]:
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Read", "input": {"file_path": os.path.join(os.getcwd(), name)}}]}}))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Grep",
+                                                              "input": {"pattern": "x"}}]}}))
+error = os.environ.get(f"FAKE_{side}ERROR") == "1"
+answer = os.environ.get(f"FAKE_{side}RESULT") or "verdict"
+print(json.dumps({"type": "result", "result": None if error else answer, "num_turns": 2, "is_error": error,
+                  "permission_denials": [], "usage": {"input_tokens": 5, "output_tokens": 7}}))
+'''
+
+
+def judge_answer(drift):
+    rows = [{"id": "I-D1", "status": "HOLDS"}, {"id": "I-D2", "status": "DRIFT" if drift else "HOLDS"}]
+    return "Prose.\n```json\n" + json.dumps({"verdict": "CHANGES" if drift else "ACCEPT-READY",
+                                             "intent_diff": rows}) + "\n```"
+
+
+class ShadowRunTest(unittest.TestCase):
+    """Shadow runs beside a checker (plan 7.3 step 4): no model calls, a stand-in claude that logs each call."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.home = self.d / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.bin = self.d / "bin"
+        self.bin.mkdir()
+        (self.bin / "claude").write_text(FAKE_CLAUDE_SHADOW)
+        os.chmod(self.bin / "claude", 0o755)
+        self.work = self.d / "work"
+        self.work.mkdir()
+        (self.d / "pack.md").write_text("pack")
+        self.calls = self.d / "calls.jsonl"
+        self.env = {k: v for k, v in os.environ.items() if k != "PIPELINE_MODELS_IGNORE_OVERRIDE"}
+        self.env.update({"HOME": str(self.home), "PATH": f"{self.bin}:{os.environ['PATH']}",
+                         "HEAVY_LOCK_DIR": str(self.d / "lock"), "FAKE_CALLS": str(self.calls)})
+        self.log = self.home / ".claude/.pipeline-shadow.jsonl"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_ri(self, role, *extra, env=None, out=None, workdir=None):
+        ev = Path(out or self.d / "ev")
+        stem = f"{role}{'-demo' if '--mode' in extra and 'demo' in extra else ''}" + \
+            ("-pass2" if "--resume" in extra else "")
+        path = ev / f"{stem}.summary.json"
+        path.unlink(missing_ok=True)
+        proc = subprocess.run([sys.executable, str(RI), role, "--dir", str(workdir or self.work), "--pack",
+                               str(self.d / "pack.md"), "--out", str(ev), "--agent-file", str(AGENTS / f"{role}.md"),
+                               *extra], capture_output=True, text=True, env={**self.env, **(env or {})}, timeout=120)
+        return proc, (json.loads(path.read_text()) if path.is_file() else {"err": proc.stderr}), ev
+
+    def ran(self):
+        return [json.loads(x) for x in self.calls.read_text().splitlines()] if self.calls.is_file() else []
+
+    def override(self, shadow):
+        (self.home / ".claude/.pipeline-models.json").write_text(json.dumps({"shadow": shadow}))
+
+    def test_no_shadow_by_default(self):
+        proc, s, ev = self.run_ri("gate-judge")
+        self.assertEqual(s["status"], "OK", proc.stderr[-400:])
+        self.assertNotIn("shadow", s)
+        self.assertEqual(len(self.ran()), 1)
+        self.assertFalse((ev / "shadow").exists())
+        self.assertFalse(self.log.exists())
+
+    def test_the_flag_runs_a_shadow_and_compares_it(self):
+        proj = self.d / "proj"
+        proj.mkdir()
+        (proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
+        out = proj / ".evidence/gate/M1/r2"
+        proc, s, ev = self.run_ri("gate-judge", "--project", str(proj), "--shadow", "claude-opus-5-5:high",
+                                  out=out, env={"FAKE_RESULT": judge_answer(True), "FAKE_SHADOW_RESULT": judge_answer(False)})
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        self.assertEqual(s["status"], "OK")
+        sh = s["shadow"]
+        self.assertEqual((sh["route"], sh["model"], sh["effort"], sh["source"], sh["status"]),
+                         ("gate-judge", "claude-opus-5-5", "high", "flag", "OK"))
+        self.assertEqual((sh["misses"], sh["extras"]), (1, 0), "the shadow called the primary's DRIFT a HOLDS")
+        calls = self.ran()
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("--model", calls[0]["args"], "the main run keeps its own route")
+        self.assertEqual((calls[1]["args"][calls[1]["args"].index("--model") + 1],
+                          calls[1]["args"][calls[1]["args"].index("--effort") + 1]), ("claude-opus-5-5", "high"))
+        self.assertEqual(calls[1]["cwd"], str(self.work.resolve()), "a role that only reads reuses the main folder")
+        shadow = json.loads((out / "shadow/gate-judge.summary.json").read_text())
+        self.assertEqual((shadow["requested_model"], shadow["requested_effort"], shadow["served_model"]),
+                         ("claude-opus-5-5", "high", "claude-opus-5-5"))
+        self.assertEqual(shadow["usage"]["output"], 7, "the shadow's usage is in its own summary")
+        self.assertEqual((out / "shadow/gate-judge.pack.md").read_text(), (out / "gate-judge.pack.md").read_text())
+        diff = json.loads((out / "shadow/gate-judge.shadow-diff.json").read_text())
+        self.assertEqual(diff["shadow_missed"][0]["key"], "I-D2")
+        self.assertEqual(sh["diff"], str(out / "shadow/gate-judge.shadow-diff.json"))
+        self.assertIn("ACCEPT-READY", (out / "shadow/gate-judge.result.md").read_text())
+        self.assertIn("CHANGES", (out / "gate-judge.result.md").read_text(), "the main result is its own")
+        line = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual((line["project"], line["evidence"], line["route"], line["round"], line["misses"],
+                          line["extras"]), (str(proj.resolve()), str(out.resolve()), "gate-judge", 2, 1, 0))
+        self.assertEqual(line["primary"], {"model": "default", "effort": "xhigh", "served": "claude-default-x"})
+        self.assertEqual(line["shadow"], {"model": "claude-opus-5-5", "effort": "high", "served": "claude-opus-5-5",
+                                          "status": "OK"})
+        spec = importlib.util.spec_from_file_location("spend", RI.parent / "spend.py")
+        spend = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(RI.parent))
+        spec.loader.exec_module(spend)
+        counted = {r["path"] for r in spend.run_summaries(proj) if r["usage"]}
+        self.assertIn("gate/M1/r2/shadow/gate-judge.summary.json", counted, "spend.py counts the shadow run")
+
+    def test_the_override_entry_applies_and_the_flag_wins(self):
+        self.override({"gate-judge": {"model": "claude-opus-5-5", "effort": "high"}})
+        proc, s, _ = self.run_ri("gate-judge")
+        self.assertEqual((s["shadow"]["effort"], s["shadow"]["source"], s["shadow"]["status"]),
+                         ("high", "override", "OK"), proc.stderr[-400:])
+        proc, s, _ = self.run_ri("gate-judge", "--shadow", "claude-opus-5-5:medium")
+        self.assertEqual((s["shadow"]["effort"], s["shadow"]["source"]), ("medium", "flag"))
+        proc, s, _ = self.run_ri("gate-judge", env={"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"})
+        self.assertNotIn("shadow", s, "the benchmarks ignore the override's shadows too")
+
+    def test_no_shadow_turns_it_off(self):
+        self.override({"gate-judge": {"model": "claude-opus-5-5", "effort": "high"}})
+        proc, s, ev = self.run_ri("gate-judge", "--no-shadow")
+        self.assertEqual(s["shadow"]["skipped"], "turned off by --no-shadow")
+        self.assertEqual(len(self.ran()), 1)
+        self.assertFalse((ev / "shadow").exists())
+
+    def test_a_shadow_never_changes_the_main_run(self):
+        answer = judge_answer(True)
+        proc, s, ev = self.run_ri("gate-judge", "--shadow", "claude-opus-5-5:high",
+                                  env={"FAKE_SHADOW_ERROR": "1", "FAKE_RESULT": answer})
+        self.assertEqual((proc.returncode, s["status"]), (0, "OK"), proc.stderr[-400:])
+        self.assertEqual(s["shadow"]["status"], "ERROR")
+        self.assertIsNone(s["shadow"]["misses"])
+        self.assertIn("shadow result", s["shadow"]["diff_error"])
+        self.assertEqual((ev / "gate-judge.result.md").read_text(), answer)
+        self.assertEqual(len(self.ran()), 2, "never retried, never escalated")
+        line = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual((line["shadow"]["status"], line["misses"], line["round"]), ("ERROR", None, None))
+        proc, s, ev = self.run_ri("gate-judge", "--shadow", "claude-opus-5-5:high", env={"FAKE_ERROR": "1"})
+        self.assertEqual((proc.returncode, s["status"]), (1, "ERROR"))
+        self.assertEqual(s["shadow"]["skipped"], "the main run ended ERROR")
+        self.assertEqual(len(self.ran()), 3, "no shadow beside a main run that did not end OK")
+        proc, s, _ = self.run_ri("gate-judge", "--shadow", "claude-fable-5:high")
+        self.assertEqual(s["status"], "OK", "a bad shadow setting never stops the main run")
+        self.assertIn("Fable or Mythos", s["shadow"]["skipped"])
+
+    def test_require_read_applies_to_the_shadow(self):
+        (self.work / "captures").mkdir()
+        (self.work / "captures/M1-1.png").write_text("x")
+        proc, s, _ = self.run_ri("gate-judge", "--require-read", "captures/*", "--shadow", "claude-opus-5-5:high",
+                                 env={"FAKE_READS": "captures/M1-1.png"})
+        self.assertEqual(s["status"], "OK", proc.stderr[-400:])
+        self.assertEqual(s["shadow"]["status"], "INCONCLUSIVE")
+
+    def test_the_code_verifier_needs_its_own_copy(self):
+        proc, s, ev = self.run_ri("code-verifier", "--mode", "demo", "--shadow", "claude-sonnet-5-5:high",
+                                  env={"FAKE_SHADOW_MODEL": "claude-sonnet-5-5"})
+        self.assertEqual(s["status"], "OK", proc.stderr[-400:])
+        self.assertEqual(s["shadow"]["skipped"], "no separate copy (--shadow-dir)")
+        self.assertIn("shadow skipped: no separate copy (--shadow-dir)", proc.stderr)
+        self.assertEqual(len(self.ran()), 1)
+        copy = self.d / "shadow-copy"
+        (copy / ".demo-captures").mkdir(parents=True)
+        (copy / ".demo-captures/M1-1.txt").write_text("seen")
+        proc, s, ev = self.run_ri("code-verifier", "--mode", "demo", "--shadow", "claude-sonnet-5-5:high",
+                                  "--shadow-dir", str(copy), env={"FAKE_SHADOW_MODEL": "claude-sonnet-5-5"})
+        self.assertEqual(s["shadow"]["status"], "OK", proc.stderr[-400:])
+        self.assertEqual(self.ran()[-1]["cwd"], str(copy.resolve()))
+        cfg = json.loads((ev / "shadow/code-verifier-demo.settings.json").read_text())
+        self.assertIn(str(copy.resolve()), cfg["sandbox"]["filesystem"]["allowWrite"])
+        self.assertNotIn(str(self.work.resolve()), cfg["sandbox"]["filesystem"]["allowWrite"])
+        spack = (ev / "shadow/code-verifier-demo.pack.md").read_text()
+        self.assertIn(f"Working copy: {copy.resolve()}", spack)
+        self.assertNotIn(str(self.work.resolve()), spack, "the shadow's pack names its own copy")
+        self.assertEqual((ev / "shadow/captures/M1-1.txt").read_text(), "seen", "its captures are kept")
+        proc, s, _ = self.run_ri("code-verifier", "--shadow", "claude-sonnet-5-5:high", "--shadow-dir",
+                                 str(self.work), env={"FAKE_SHADOW_MODEL": "claude-sonnet-5-5"})
+        self.assertIn("own copy", s["shadow"]["skipped"])
+
+    def test_the_loyal_evaluator_and_a_resumed_run_are_never_shadowed(self):
+        self.override({"loyal-evaluator": {"model": "claude-opus-5-5", "effort": "high"},
+                       "gate-judge": {"model": "claude-opus-5-5", "effort": "high"}})
+        proc, s, _ = self.run_ri("loyal-evaluator")
+        self.assertEqual(s["status"], "OK", proc.stderr[-400:])
+        self.assertIn("its later passes resume pass 1's session", s["shadow"]["skipped"])
+        proc, s, _ = self.run_ri("gate-judge", "--resume", "abc")
+        self.assertIn("resumed pass is never shadowed", s["shadow"]["skipped"])
+        self.assertEqual(len(self.ran()), 2)
+
+    def test_the_codex_family_is_never_shadowed(self):
+        (self.bin / "codex").write_text(FAKE_CODEX_OK)
+        os.chmod(self.bin / "codex", 0o755)
+        proc, s, _ = self.run_ri("code-verifier", "--dry-run", "--family", "codex", "--shadow",
+                                 "claude-opus-5-5:high", "--shadow-dir", str(self.d))
+        self.assertEqual(s["family"], "codex", proc.stderr[-400:])
+        self.assertIn("Codex family", s["shadow"]["skipped"])
+
+    def test_a_dry_run_shows_the_shadow_command_and_runs_nothing(self):
+        proc, s, ev = self.run_ri("gate-judge", "--dry-run", "--shadow", "claude-opus-5-5:high")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        sh = json.loads(proc.stdout)["shadow"]
+        self.assertEqual(sh["status"], "DRY_RUN")
+        self.assertEqual(sh["cmd"][sh["cmd"].index("--model") + 1], "claude-opus-5-5")
+        self.assertEqual(self.ran(), [])
+        self.assertFalse((ev / "shadow/gate-judge.summary.json").exists())
+        self.assertFalse(self.log.exists())
+
+
 class ProjectServerTest(unittest.TestCase):
     def test_server_from_the_real_project_blocks(self):
         with tempfile.TemporaryDirectory() as d:

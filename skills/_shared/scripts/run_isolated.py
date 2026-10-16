@@ -6,7 +6,8 @@ Usage:
                   [--project <real project>] [--mode demo] [--resume <session-id>] [--family claude|codex|auto]
                   [--agent-file <path>] [--canary <text> ...] [--deny <path> ...] [--allow-read <path> ...]
                   [--network <host> ...] [--route <route>] [--model <id>] [--effort <level>]
-                  [--require-read <glob> ...] [--timeout <seconds>] [--dry-run]
+                  [--require-read <glob> ...] [--shadow <model>:<effort> | --no-shadow] [--shadow-dir <copy>]
+                  [--timeout <seconds>] [--dry-run]
 
 Roles: code-verifier, loyal-evaluator, gate-judge, cold-reader, claim-verifier, change-reviewer (a proposed
 change to the pipeline itself, run by evolve.py review), and probe (a fixture that measures how a model
@@ -66,6 +67,23 @@ records prompt_sha256 (the prompt as passed) beside agent_sha256 (the file).
 --require-read <glob> (repeatable; relative to --dir): a Claude run that otherwise ended OK must have opened
 every existing file the globs match with its Read tool; otherwise it is INCONCLUSIVE with the reason
 "did not open: <files>".
+
+Shadow runs (plan 7.3 step 4). --shadow <model>:<effort> sets a candidate setting for this run; otherwise the
+personal override's shadow entry for this run's route applies (models.py); --no-shadow turns any off. After the
+main run has written its summary with its final status, the same role runs with the same pack on the shadow
+setting into <evidence-dir>/shadow/ (the same stem: shadow/<stem>.summary.json, .result.md, ...), then
+shadow_diff.py compares the two results into shadow/<stem>.shadow-diff.json. The main summary gains "shadow":
+{route, model, effort, source, status, summary, diff, misses, extras}, or {..., skipped: <reason>}, and each shadow
+run appends one line to ~/.claude/.pipeline-shadow.jsonl (time, project, evidence, route, primary and shadow model,
+effort, and served model, misses, extras, round: r<n> in the evidence path, else null), which `shadow_diff.py
+summary` reads. The shadow never changes the main run's status, files, or exit code, is never escalated or
+retried, and is skipped, with the reason, when the main run did not end OK, when the main run was Codex, for a
+--resume run, for the loyal-evaluator (its later passes resume pass 1's session), when the project's phase is
+over its spend cap, and for the code-verifier without --shadow-dir <a fresh copy> (it changes its copy; the
+pack's mentions of the main copy are pointed at the shadow's). The roles that only read (gate-judge, cold-reader,
+claim-verifier, change-reviewer, probe) reuse the main run's folder; --require-read applies to the shadow too. A
+demo shadow's captures are kept in shadow/captures. A dry run puts the shadow command it would run in the summary
+and runs nothing. The shadow's usage is in its own summary, so spend.py counts it.
 
 Codex family (code-verifier only): `codex exec` inside the same kind of read fence, built as a macOS
 sandbox-exec profile (Codex's own sandbox cannot nest inside it, so it runs with -s danger-full-access and
@@ -564,8 +582,8 @@ def parse_args(argv):
     i = 0
     while i < len(argv):
         k = argv[i]
-        if k == "--dry-run":
-            opts["dry_run"] = True
+        if k in ("--dry-run", "--no-shadow"):
+            opts[k[2:].replace("-", "_")] = True
             i += 1
         elif k == "--render":
             end = argv.index("--", i + 1) if "--" in argv[i + 1:] else len(argv)
@@ -575,7 +593,7 @@ def parse_args(argv):
             opts[k[2:].replace("-", "_")].append(argv[i + 1])
             i += 2
         elif k in ("--dir", "--pack", "--out", "--family", "--effort", "--resume", "--agent-file", "--timeout",
-                   "--project", "--mode", "--route", "--model") and i + 1 < len(argv):
+                   "--project", "--mode", "--route", "--model", "--shadow", "--shadow-dir") and i + 1 < len(argv):
             opts[k[2:].replace("-", "_")] = argv[i + 1]
             opts["_given"].add(k[2:])
             i += 2
@@ -868,6 +886,100 @@ def sweep_stale(hours=6):
             continue
 
 
+def over_budget(opts):
+    """Why the project's active phase may not spend more (spend.py), or None."""
+    if not opts.get("project") or not (Path(opts["project"]) / ".evidence/spend/active.json").is_file():
+        return None
+    import spend  # noqa: E402
+    state, lines = spend.status(Path(opts["project"]).resolve())
+    if state and state["over_cap"]:
+        return f"budget: {lines[0]}; the owner raises the cap with spend.py raise, in their own words"
+    return None
+
+
+SHADOW_SAME_DIR = ("gate-judge", "cold-reader", "claim-verifier", "change-reviewer", "probe")  # they only read
+
+
+def shadow_plan(role, opts):
+    """The shadow beside this run ({route, model, effort, source}), why none runs ({..., skipped}), or None when
+    none is set. What only the main run's end decides (its family and status) is checked by run_shadow."""
+    import models  # noqa: E402
+    route = route_name(role, opts)[0]
+    if opts.get("_route_error") and not opts.get("shadow"):
+        return None  # the routing problem is on record already; whether a shadow was set cannot be read
+    try:
+        chosen = models.shadow_choice(route, opts.get("shadow"))
+    except models.ModelsError as exc:
+        chosen = {"route": route, "skipped": f"the shadow setting is not valid: {exc}"}
+    if chosen is None:
+        return None
+    why = ("turned off by --no-shadow" if opts.get("no_shadow") else chosen.get("skipped") or
+           ("a resumed pass is never shadowed (it continues another run's session)" if opts.get("resume") else
+            "the loyal-evaluator is never shadowed: its later passes resume pass 1's session"
+            if role == "loyal-evaluator" else
+            "no separate copy (--shadow-dir)" if role not in SHADOW_SAME_DIR and not opts.get("shadow_dir") else None))
+    return {**chosen, "skipped": why} if why else chosen
+
+
+def run_shadow(role, opts, plan, main, workdir, stem, raw_pack, pack):
+    """The same role with the same pack on the shadow setting, into <out>/shadow/, after a main run that ended OK;
+    then the comparison and the log line. The main run is never touched: the record returned goes into its summary."""
+    rec = {k: plan[k] for k in ("route", "model", "effort", "source") if plan.get(k)}
+    dry, sdir, why = main.get("status") == "DRY_RUN", workdir, plan.get("skipped")
+    if not why and main.get("family") == "codex":
+        why = "the Codex family served the main run; it keeps its own model and effort, so no Claude setting is compared"
+    elif not why and not opts.get("_routing"):
+        why = f"the main run has no model routing ({opts.get('_route_error')})"
+    elif not why and main.get("status") not in ("OK", "DRY_RUN"):
+        why = f"the main run ended {main.get('status')}"
+    if not why and role not in SHADOW_SAME_DIR:
+        sdir = Path(opts["shadow_dir"]).resolve()
+        why = f"the --shadow-dir {sdir} is not a folder" if not sdir.is_dir() else \
+            "the --shadow-dir is the main run's own copy" if sdir == workdir else None
+    why = why or (None if dry else over_budget(opts))
+    if why:
+        print(f"run_isolated: shadow skipped: {why}", file=sys.stderr)
+        return {**rec, "skipped": why}
+    out = stem.parent / "shadow"
+    out.mkdir(exist_ok=True)
+    sstem = out / stem.name
+    if sdir != workdir:  # the copy the pack names is the shadow's own
+        pack = raw_pack.replace(str(workdir), str(sdir)) + (tools_section(sdir) if "Bash" in ROLES[role] else "")
+    Path(str(sstem) + ".pack.md").write_text(pack, encoding="utf-8")
+    srt = {**opts["_routing"], "model": plan["model"], "effort": plan["effort"], "model_source": plan["source"],
+           "effort_source": plan["source"]}
+    sopts = {**opts, "_routing": srt, "resume": None, "family": "claude"}
+    ran = run_once(role, "claude", sopts, sdir, sstem, pack)
+    if dry:
+        return {**rec, "status": ran.get("status"), "cmd": ran.get("cmd"), "workdir": str(sdir),
+                **({"reason": ran["reason"]} if ran.get("reason") else {})}
+    summary = {**ran, "role": role, "mode": opts.get("mode") or "review", "workdir": str(sdir),
+               "pack_sha256": hashlib.sha256(pack.encode()).hexdigest(), "shadow_of": str(stem) + ".summary.json"}
+    summary.update(route_record(summary, srt, sopts))
+    spath = Path(str(sstem) + ".summary.json")
+    spath.write_text(json.dumps(summary, indent=2))
+    if opts.get("mode") == "demo" and (sdir / ".demo-captures").is_dir():
+        shutil.copytree(sdir / ".demo-captures", out / "captures", dirs_exist_ok=True)
+    import shadow_diff  # noqa: E402
+    diff, _ = shadow_diff.compare_files(Path(str(stem) + ".result.md"), Path(str(sstem) + ".result.md"), role)
+    dpath = Path(str(sstem) + ".shadow-diff.json")
+    dpath.write_text(json.dumps(diff, indent=2))
+    counts = diff.get("counts") or {}
+    rec.update({"status": summary["status"], "summary": str(spath), "diff": str(dpath),
+                "misses": counts.get("misses"), "extras": counts.get("extras"),
+                **({"diff_error": diff["error"]} if diff.get("error") else {})})
+    log = shadow_diff.record({
+        "project": str(Path(opts["project"]).resolve()) if opts.get("project") else None,
+        "evidence": str(stem.parent.resolve()), "route": plan["route"], "role": role, "stem": stem.name,
+        "primary": {"model": main.get("requested_model"), "effort": main.get("requested_effort"),
+                    "served": main.get("served_model")},
+        "shadow": {"model": plan["model"], "effort": plan["effort"], "served": summary.get("served_model"),
+                   "status": summary["status"]},
+        "misses": rec["misses"], "extras": rec["extras"], "round": shadow_diff.round_of(stem.parent.resolve()),
+        "diff": str(dpath)})
+    return {**rec, "log": str(log)}
+
+
 def main(argv):
     if not argv or argv[0] not in ROLES:
         print(__doc__.strip(), file=sys.stderr)
@@ -903,17 +1015,14 @@ def main(argv):
     suffix = ("-demo" if opts.get("mode") == "demo" else "") + \
         ((f"-pass{pass_no}" if pass_no and pass_no != "1" else "-pass2") if opts.get("resume") else "")
     stem = out / f"{role}{suffix}"
-    if opts.get("project") and (Path(opts["project"]) / ".evidence/spend/active.json").is_file():
-        import spend
-        state, lines = spend.status(Path(opts["project"]).resolve())
-        if state and state["over_cap"]:
-            if auto_dir:
-                shutil.rmtree(workdir, ignore_errors=True)
-            summary = {"status": "BLOCKED", "role": role, "reason": f"budget: {lines[0]}; the owner raises the cap "
-                                                                    "with spend.py raise, in their own words"}
-            Path(str(stem) + ".summary.json").write_text(json.dumps(summary, indent=2))
-            print(json.dumps(summary, indent=2))
-            return 1
+    budget = over_budget(opts)
+    if budget:
+        if auto_dir:
+            shutil.rmtree(workdir, ignore_errors=True)
+        summary = {"status": "BLOCKED", "role": role, "reason": budget}
+        Path(str(stem) + ".summary.json").write_text(json.dumps(summary, indent=2))
+        print(json.dumps(summary, indent=2))
+        return 1
     import models  # noqa: E402
     try:
         opts["_routing"] = rt = routing(role, opts)
@@ -929,6 +1038,7 @@ def main(argv):
             return 1
         rt = None  # the Codex family keeps its own model and effort; the routing problem is still on record
         opts["_route_error"] = str(exc)
+    plan = shadow_plan(role, opts)
     pack_path = Path(str(stem) + ".pack.md")
     if "render" in opts:
         render = list(opts["render"])
@@ -943,7 +1053,7 @@ def main(argv):
             return 1
     else:
         shutil.copyfile(opts["pack"], pack_path)
-    pack = pack_path.read_text(encoding="utf-8")
+    pack = raw_pack = pack_path.read_text(encoding="utf-8")
     if "Bash" in ROLES[role]:
         pack += tools_section(workdir)
         pack_path.write_text(pack, encoding="utf-8")
@@ -964,9 +1074,17 @@ def main(argv):
         if opts.get("_route_error"):
             summary.update({"route": route_name(role, opts)[0], "route_applies": False,
                             "route_error": opts["_route_error"]})
+        path = Path(str(stem) + ".summary.json")
+        path.write_text(json.dumps(summary, indent=2))  # the main run's final status, before any shadow
+        if plan:
+            try:
+                summary["shadow"] = run_shadow(role, opts, plan, summary, workdir, stem, raw_pack, pack)
+            except Exception as exc:  # a broken shadow never touches the main run
+                summary["shadow"] = {"route": plan.get("route"), "status": "ERROR",
+                                     "reason": f"the shadow could not run: {exc.__class__.__name__}: {exc}"}
+            path.write_text(json.dumps(summary, indent=2))
         if auto_dir:
             shutil.rmtree(workdir, ignore_errors=True)
-        Path(str(stem) + ".summary.json").write_text(json.dumps(summary, indent=2))
         print(json.dumps(summary, indent=2))
         return 0 if summary["status"] in ("OK", "DRY_RUN") else 1
 
