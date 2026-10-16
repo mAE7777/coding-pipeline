@@ -1,6 +1,8 @@
 """Tests for the PreCompact snapshot and the post-compaction reload gate."""
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -11,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SNAP = ROOT / "hooks/snapshot-state.py"
 GATE = ROOT / "hooks/reload-gate.py"
+DIGEST = ROOT / "skills/_shared/scripts/reentry_digest.py"
 STATE = "# State\n## Milestone\nM2 · phase: building\n## Open\n- [ ] add export\n## Blockers\nnone\n## Next step\nadd export\n"
 
 
@@ -333,6 +336,54 @@ class ReloadGateTest(Base):
         self.assertEqual(self.decision(self.call(GATE, "guard", tool_name="apply_patch", tool_input={"command": patch})), "deny")
         self.assertEqual(self.decision(self.call(GATE, "guard", tool_name="apply_patch", tool_input={"command": "garbled"})),
                          "deny", "a patch with no readable target fails closed while armed")
+
+    def test_the_arm_directive_offers_the_digest_and_its_command_prints_the_record(self):
+        out = self.call(GATE, "arm", source="compact")
+        ctx = json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("counts as reading all three", ctx)
+        command = re.search(r"`(python3 \S*reentry_digest\.py \S+)`", ctx).group(1)
+        printed = subprocess.run(shlex.split(command), capture_output=True, text=True)
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        self.assertIn("## docs/project/state.md · Open\n- [ ] add export", printed.stdout)
+        self.assertIn("## docs/project/state.md · Next step\nadd export", printed.stdout)
+        self.assertIn("Full files: ", printed.stdout)
+        refusal = json.loads(self.call(GATE, "guard", tool_input={"file_path": str(self.proj / "app.py")}).stdout)
+        self.assertIn(command, refusal["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_running_the_digest_counts_as_reading_all_three(self):
+        self.call(GATE, "arm")
+        write = {"tool_input": {"file_path": str(self.proj / "app.py")}}
+        run = f"python3 {DIGEST} {self.proj}"
+        self.assertEqual(self.decision(self.call(GATE, "guard", tool_name="Bash", tool_input={"command": run})),
+                         "allow", "the digest only prints")
+        self.call(GATE, "track", tool_name="Bash", tool_input={"command": run})
+        self.assertEqual(self.decision(self.call(GATE, "guard", **write)), "allow")
+
+    def test_the_digest_from_a_subfolder_with_a_relative_path_counts(self):
+        sub = self.proj / "src"
+        sub.mkdir()
+        self.call(GATE, "arm")
+        self.call(GATE, "track", cwd=str(sub), tool_name="Bash", tool_input={"command": f"{sys.executable} {DIGEST} ."})
+        self.assertEqual(self.decision(self.call(GATE, "guard", tool_input={"file_path": str(self.proj / "app.py")})),
+                         "allow")
+
+    def test_a_digest_that_is_not_shown_not_this_project_or_not_the_pipelines_does_not_count(self):
+        other = Path(self.tmp.name) / "other"
+        (other / "docs/project").mkdir(parents=True)
+        (other / "docs/project/state.md").write_text(STATE)
+        copy = Path(self.tmp.name) / "copy"
+        copy.mkdir()
+        (copy / "reentry_digest.py").write_bytes(DIGEST.read_bytes())
+        self.call(GATE, "arm")
+        write = {"tool_input": {"file_path": str(self.proj / "app.py")}}
+        for cmd in (f"python3 {DIGEST} {self.proj} >/dev/null", f"python3 {DIGEST} {self.proj} | wc -l",
+                    f"python3 {DIGEST} {other}", f"python3 {copy / 'reentry_digest.py'} {self.proj}",
+                    f"python3 {DIGEST} {self.proj} extra", f"python3 {DIGEST} --all"):
+            self.call(GATE, "track", tool_name="Bash", tool_input={"command": cmd})
+            self.assertEqual(self.decision(self.call(GATE, "guard", **write)), "deny", cmd)
+        for cmd in (f"python3 {copy / 'reentry_digest.py'} {self.proj}", f"python3 {DIGEST} {self.proj} extra"):
+            self.assertEqual(self.decision(self.call(GATE, "guard", tool_name="Bash", tool_input={"command": cmd})),
+                             "deny", f"not the pipeline's printing form: {cmd}")
 
     def test_project_without_state_is_silent(self):
         (self.docs / "state.md").unlink()

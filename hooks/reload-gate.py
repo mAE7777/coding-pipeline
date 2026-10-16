@@ -5,14 +5,17 @@ Three modes, one per hook event:
   reload-gate.py arm    SessionStart, matcher "compact": inject the re-read directive and arm the gate
   reload-gate.py track  PostToolUse, matcher "Read|Bash": record which required files were read (the Read
                         tool, or a read-only shell command that prints the file: cat, head, tail, less, more,
-                        bat, nl, or sed -n; ls, grep, or wc naming it does not show its content)
+                        bat, nl, or sed -n; ls, grep, or wc naming it does not show its content). Running the
+                        pipeline's own `reentry_digest.py <project>` on this project, with its output shown,
+                        counts as reading all three: it prints the parts of each that a re-entry needs
   reload-gate.py guard  PreToolUse, matcher "Write|Edit|MultiEdit|NotebookEdit|Bash" (Codex: "apply_patch|Bash",
                         the patch's file headers give the targets): while any required
                         file is unread, deny file edits inside the project and every shell command that is
                         not read-only (a redirection, sed -i, tee, mv, rm, a script run, a command
                         substitution, and the like). A command is split at its unquoted separators only, so a
                         quoted grep alternation is one read; git may take -C <dir> or --no-pager; the
-                        pipeline's own `continuity.py recover` only prints and counts as a read
+                        pipeline's own `continuity.py recover` and `reentry_digest.py` only print and count as
+                        reads
 
 The project is $CLAUDE_PROJECT_DIR, else the nearest folder above the hook's cwd holding
 docs/project/state.md, so a cd does not disarm the gate. Only such projects are affected. The required files
@@ -253,19 +256,58 @@ def segments(command):
         return []
 
 
-def pipeline_read(words):
-    """`python3 <the pipeline's own continuity.py> recover <dir>`: the recovery step prints and writes nothing. The
+# The pipeline's own scripts that only print, with the arguments that keep them so.
+PRINTING_SCRIPTS = {"continuity.py": lambda args: len(args) == 2 and args[0] == "recover",
+                    "reentry_digest.py": lambda args: len(args) == 1 and not args[0].startswith("-")}
+
+
+def pipeline_script(words):
+    """(script name, its arguments) when the words run one of the pipeline's own printing scripts
+    (`continuity.py recover <dir>`, `reentry_digest.py <dir>`), which print and write nothing; else None. The
     interpreter is named plainly (a bare name, a system bin path, or this very interpreter), never ./python3."""
     interpreter = words[0] if words and words[0] == sys.executable else program_name(words[0]) if words else None
     if interpreter and re.fullmatch(r"python(?:3(?:\.\d+)?)?", os.path.basename(interpreter)):
         words = words[1:]
-    if len(words) != 3 or words[1] != "recover":
-        return False
+    if not words:
+        return None
+    name = os.path.basename(words[0])
+    allowed = PRINTING_SCRIPTS.get(name)
+    if not allowed or not allowed(words[1:]):
+        return None
     try:
         # This very file, not a copy: a copy elsewhere would import whatever modules sit beside it.
-        return Path(words[0]).expanduser().resolve() == (SCRIPTS / "continuity.py").resolve()
+        same = Path(words[0]).expanduser().resolve() == (SCRIPTS / name).resolve()
     except (OSError, RuntimeError, ValueError):  # ~user names no one, a NUL in a path: never a read
+        return None
+    return (name, words[1:]) if same else None
+
+
+def pipeline_read(words):
+    return pipeline_script(words) is not None
+
+
+def digest_command(root):
+    return f"python3 {shlex.quote(str(SCRIPTS / 'reentry_digest.py'))} {shlex.quote(str(root))}"
+
+
+def digest_reads(seg, root, cwd):
+    """True when a shell piece runs the pipeline's own reentry_digest.py on this project: it prints what a re-entry
+    needs from state.md, intent.md, and milestones.md, so it counts as reading all three."""
+    try:
+        hit = pipeline_script(shlex.split(seg))
+    except ValueError:
         return False
+    if not hit or hit[0] != "reentry_digest.py":
+        return False
+    try:
+        target = Path(hit[1][0]).expanduser()
+        target = (target if target.is_absolute() else Path(cwd or root) / target).resolve()
+        top = Path(root).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    # the digest takes the nearest folder at or above its argument that holds the record, so the check does too
+    holder = next((c for c in (target, *target.parents) if (c / "docs/project/state.md").is_file()), None)
+    return holder == top
 
 
 # Options of otherwise read-only programs that run a command or write a file.
@@ -570,7 +612,12 @@ def arm(data):
     listed = ", then ".join(str(Path(p).relative_to(root)) for p in needs)
     text = ("The conversation was just compacted, and the summary above is lossy. Before any further edit, "
             f"re-read {listed}, plus docs/project/brief.md and the tail of docs/project/decisions.md{snap}. "
-            "Writes to this project are blocked until those three files have been read. Compare git status "
+            "Writes to this project are blocked until those three files have been read. The quick way to re-read "
+            f"them: run `{digest_command(root)}`. It prints, from the files, state.md's "
+            "milestone, understanding, open items, failures, blockers, next step, and eliminated approaches; the "
+            "current milestone's section; the goal, must-not-lose items, done examples, and mechanism cards it "
+            "carries; and the last decisions. It counts as reading all three; open a full file when a detail is not "
+            "in it. Compare git status "
             "with state.md and say what differs. Anything with an ID (constraints C-, must-not-lose L-, "
             "decisions D-, findings) comes from the files, never from the summary. If a decision made before "
             "compaction is missing from decisions.md, write it once the files are read.")
@@ -599,6 +646,9 @@ def track(data):
         command = tool_input.get("command", "")
         if read_only(command, root=root, cwd=data.get("cwd")):
             for seg in [s for line in pipelines(command) for k, s in enumerate(line) if shown(line, k)]:
+                if digest_reads(seg, root, data.get("cwd")):
+                    targets += record["needs"]
+                    continue
                 if not prints(seg):
                     continue
                 for need in record["needs"]:
@@ -662,7 +712,8 @@ def guard(data):
             return 0
         what = "edits in this project"
     reason = (f"Blocked: {what} wait until the build record is re-read after compaction (the summary is "
-              "lossy). Read these first (the Read tool, or cat): " + ", ".join(remaining) + "." + why)
+              "lossy). Read these first (the Read tool, or cat): " + ", ".join(remaining) + ". Or run "
+              f"`{digest_command(root)}`, which counts as reading all three." + why)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                              "permissionDecisionReason": reason}}))
     return 0
