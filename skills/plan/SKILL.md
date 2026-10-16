@@ -1,19 +1,10 @@
 ---
 name: plan
-description: "Turn an idea, a capture dossier, documents, or an existing codebase into the project's build record, run the cold read, and lock the intent with the owner. /plan (new work), /plan adopt (an existing project without a complete record), /plan amend (an owner-ruled intent change), /plan convert (an earlier pipeline's files); each takes notes, files, or paths. Use before any code; /dev and /gate refuse to run without a locked plan."
+description: "Turn an idea, a capture dossier, documents, or an existing codebase into the project's build record, run the cold read, and lock the intent with the owner. /plan (new work), /plan adopt (an existing project without a complete record), /plan amend (an owner-ruled intent change), /plan convert (an earlier pipeline's files); each takes notes, files, or paths. Use before any code; /gate fails a round whose intent is not locked."
 argument-hint: "[adopt | amend | convert] [notes, files, or paths]"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /plan
 
@@ -27,21 +18,20 @@ Load-bearing rules (they hold through the whole run):
 - Always ask the stand-in question: which parts might need a placeholder, mock, sample, or canned output
   on the product path. The answer goes in the placeholder manifest; nothing like that is written later
   without the owner's consent, recorded in their own words.
-- Write each file as soon as its content is known. The files are the truth; the conversation is a cache.
+- Write each file as soon as its content is known (the charter's law 6: disk is truth).
 
 Scripts live in `~/.claude/skills/_shared/scripts/`, templates in `~/.claude/skills/_shared/templates/`.
+Decision entries go through `decisions.py add`, which numbers them and proves an owner quote in the same call.
 
 ## First: where this project stands
 
-Run `record_check.py <project>` and route on its kind:
-- `empty` or no project yet: new work (below). If `docs/project/sources/dossier.md` exists, the capture
-  dossier is the primary input (see "From a capture dossier").
-- `none`, `foreign-docs`, `legacy-v2`, `partial`: `/plan adopt`, unless the owner has said to skip it (record
-  that as a decision in their words). `legacy-v2` also needs the convert steps inside adoption.
-- `complete`: the plan exists. A change of intent is `/plan amend`; new milestones extend `milestones.md`.
+Run `record_check.py <project>` and take the route it prints: `/plan adopt` for every kind but `complete` and
+`empty`, unless the owner has said to skip it (a decision entry in their words); `legacy-v2` also needs the
+convert steps inside adoption. `empty`: new work (below), from the capture dossier when
+`docs/project/sources/dossier.md` exists. `complete`: a change of intent is `/plan amend`; new milestones
+extend `milestones.md`.
 
-When the project has a `truth/` folder, read `~/.claude/skills/_shared/references/venture-mode.md` first.
-If that file is missing, stop with BLOCKED: this is a venture project and its rules are not installed.
+Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/venture-mode.md` first; if it is missing, stop BLOCKED.
 
 ## New work
 
@@ -49,23 +39,22 @@ If that file is missing, stop with BLOCKED: this is a venture project and its ru
    Match the stack pack index (`~/.claude/skills/_shared/references/stacks/README.md`, when installed). Detect reference
    or steal material (`~/.claude/skills/_shared/references/steal-protocol.md`). Note which files state
    intent; they go under "Intent-bearing paths" in `docs/project/gate.md`.
-2. **Situation first**: who, what they do today, what hurts, what done looks like. Then the gap scan and
-   the question craft in `references/intake.md`.
+2. **Situation first**: who, what they do today, what hurts, what done looks like. Then the expert framing,
+   the gap scan, the fork test, and the question craft in `references/intake.md`.
 3. **Write the record** from the templates: `docs/project/{intent, brief, milestones, interfaces,
    decisions, state, gate}.md` and `AGENTS.md` (labeled `## Commands`: install, build, test, run, demo;
    `CLAUDE.md` holds `@AGENTS.md`). Keep the local-only files out of commits with
-   `python3 ~/.claude/skills/_shared/scripts/local_only.py <project>` (brief, state, gate settings, handoffs,
-   reviews, research, sources, `.evidence/`, and `AGENTS.md` and `CLAUDE.md`, since committed output carries no
-   tooling files; the owner may choose to commit `AGENTS.md`). It writes git's local exclude file, never
-   `.gitignore`, and is the only way in: Claude Code does not let its file tools edit inside `.git`. Copy the
-   owner's standing requirements into the brief and intent (languages, appearance, and the rest) from
+   `python3 ~/.claude/skills/_shared/scripts/local_only.py <project>`, the only way in, since file tools cannot
+   edit inside `.git` (the owner may choose to commit `AGENTS.md`). Copy the owner's standing requirements
+   into the brief and intent (languages, appearance, and the rest) from
    `~/.claude/skills/_shared/references/owner-standing.md` when it exists; otherwise ask.
-4. **Milestones**: the cut rules, checkpoints, and wiring table in `references/milestones.md`. Every
-   milestone has a demo a person can watch, carries named done examples, names the mechanism cards it
-   exercises, and has a wiring table. Show the recommended cut and the strongest alternative, with what,
-   how, and why for each.
+4. **Milestones**: the cut rules, checkpoints, and wiring table in `references/milestones.md`;
+   `milestone_lint.py` states each field rule when it fails. Show the recommended cut and the strongest
+   alternative, with what, how, and why for each.
 5. **Mechanism cards** for every load-bearing mechanism (purpose, observable guarantee, rejected
-   imitation, discriminating probe), and the **placeholder manifest** in the brief.
+   imitation, discriminating probe), and the **placeholder manifest** in the brief. A card marked
+   `Reversibility: one-way`, or one the owner asks about, goes through the architect arena before the lock;
+   the other cards get the red-flag screen and the rationale template when built (`references/milestones.md`).
 6. **Cold read, until it comes back clear.** Run the documents cold reader in the background and wait for its
    summary: `python3 run_isolated.py cold-reader --dir auto --out .evidence/plan --project <project> --render
    --with-record --docs docs/project/intent.md --docs docs/project/brief.md --docs docs/project/milestones.md
@@ -80,10 +69,9 @@ If that file is missing, stop with BLOCKED: this is a venture project and its ru
 8. **The lock.** Play back, standalone and in plain words, exceptions first: the promise, the done
    examples, the mechanism cards with their rejected imitations, the must-not-lose items, the assumptions,
    the placeholder manifest, and the milestone map with demo endings. The owner confirms or corrects.
-   On confirmation: add `D-<nnn> · <date> · Lock intent` with `Lock intent · hash <intent_lock.py hash>` and
-   `Source: [owner <date>] "<their exact words>"` (a whole sentence or their whole message, never a cut), run `rulings.py record <project> --id D-<nnn> --quote
-   "<their words>"`, then `intent_lock.py stamp docs/project/intent.md --ruling D-<nnn>` and
-   `intent_lock.py verify`. The builder never writes "[owner ...]" on its own judgment.
+   On confirmation: `decisions.py add <project> --title "Lock intent" --body "<the decisions template's Lock
+   form, with intent_lock.py hash>" --source-owner "<their whole sentence or whole message>"`, then
+   `intent_lock.py stamp docs/project/intent.md --ruling <the ID it printed>` and `intent_lock.py verify`.
 
 ## From a capture dossier
 
@@ -96,23 +84,19 @@ before the lock, and the lock playback names every unit that became a non-goal o
 
 ## /plan adopt
 
-A project that exists without a complete record. The procedure, the ledger rules, and the checks are in
-`references/adopt.md`; in short: `adopt.py inventory`, read with a coverage ledger (documents fully
-documents, code, tests, configuration, commit history, and issues alike through `/capture`'s rounds until
-nothing is missed, every point landing in the record),
-reconstruct the record with evidence labels, the product as found becomes M0 with a demo verified by
-running it, `adopt.py commands`, `adopt.py check`, the cold reads, a characterization gate on M0 (`/gate
-M0`), then the lock with discrepancies first. The owner's acceptance of M0 is the baseline every later
-milestone builds on.
+A project that exists without a complete record: the procedure is `references/adopt.md`, and `adopt.py
+check` lists what it refuses before the lock (every file accounted for, the dossier checked, M0 with a demo
+you ran, a current characterization, discrepancies in the brief). The lock puts discrepancies first. The
+owner's acceptance of M0 is the baseline every later milestone builds on.
 
 ## /plan amend
 
 The owner changes what must be true (directly, or by ruling on an inbox item; the decision entry then
-carries `Resolves: IN-<nnn>` and `/inbox` clears the item). Record the ruling (decision entry, their words, `rulings.py
-record`), append a re-freeze entry to `intent.md` (grammar in the file's Re-freeze log comment; the text
-above it is never edited), update the stamp's re-freeze count, run `intent_lock.py verify`, and list the
-milestones and evidence the change makes STALE. An accepted milestone whose contract changes gets a
-`Superseded: D-<nnn>` line.
+carries `Resolves: IN-<nnn>` and `/inbox` clears the item). Record the ruling with `decisions.py add <project>
+--title ... --body ... --source-owner "<their words>"`, append a re-freeze entry to `intent.md` (grammar in the
+file's Re-freeze log comment; the text above it is never edited), update the stamp's re-freeze count, run
+`intent_lock.py verify`, and list the milestones and evidence the change makes STALE. An accepted milestone
+whose contract changes gets a `Superseded: D-<nnn>` line.
 
 ## /plan convert
 
@@ -125,4 +109,4 @@ Report in plain words: what is locked, the milestone map, open unknowns and how 
 next step (`/dev M1`). Leave `state.md` with phase idle and the next step written.
 
 ## End
-Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill plan --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill plan --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).

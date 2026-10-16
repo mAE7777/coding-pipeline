@@ -10,6 +10,10 @@ is the gap detector. 3. Turn each gap into a question, never a guess. 4. Confirm
 example and the statement, not a paraphrase. Few questions, because examples and project-type filtering
 do the work; the right ones, because the lists below surface what matters.
 
+Expert framing, before the first question: how would a top expert approach this (their raw sources, their
+real methods, an outside check that the result is right), and what is the owner really after? Loosen a
+constraint that does not serve the goal as readily as you add one that does, and leave the owner's choices open.
+
 ## A. Ask about their life, not your idea
 | Avoid (fishes for a yes) | Ask instead |
 |---|---|
@@ -85,7 +89,9 @@ Default and record as an assumption (A-nn) when safe, obvious, and low impact: m
 levels, conventional layout, a library choice with no trade-off. Always ask about: states, concurrency,
 integration failure, data lifecycle, scope boundaries, the authorization model, money or irreversible
 actions, data about people, and anything two careful readers would build differently. When unsure
-whether it is material, it is.
+whether it is material, it is. The fork test: a fork a run can settle (which approach is fast enough, whether
+a library handles a case) is a `/scout spike` (`~/.claude/skills/craft/methods/prototype.md`), not a question;
+only product and preference calls go to the owner.
 
 ## G. Writing done examples
 One testable statement plus one concrete example with real data:
