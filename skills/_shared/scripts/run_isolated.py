@@ -945,8 +945,10 @@ def run_shadow(role, opts, plan, main, workdir, stem, raw_pack, pack):
     out = stem.parent / "shadow"
     out.mkdir(exist_ok=True)
     sstem = out / stem.name
-    if sdir != workdir:  # the copy the pack names is the shadow's own
-        pack = raw_pack.replace(str(workdir), str(sdir)) + (tools_section(sdir) if "Bash" in ROLES[role] else "")
+    if sdir != workdir:  # the copy the pack names (as resolved or as given) is the shadow's own
+        named = sorted({str(workdir), str(Path(opts["dir"]).absolute())}, key=len, reverse=True)
+        pack = re.sub("|".join(map(re.escape, named)), lambda m: str(sdir), raw_pack) + \
+            (tools_section(sdir) if "Bash" in ROLES[role] else "")
     Path(str(sstem) + ".pack.md").write_text(pack, encoding="utf-8")
     srt = {**opts["_routing"], "model": plan["model"], "effort": plan["effort"], "model_source": plan["source"],
            "effort_source": plan["source"]}

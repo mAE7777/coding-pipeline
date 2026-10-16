@@ -927,6 +927,7 @@ class ShadowRunTest(unittest.TestCase):
         copy = self.d / "shadow-copy"
         (copy / ".demo-captures").mkdir(parents=True)
         (copy / ".demo-captures/M1-1.txt").write_text("seen")
+        (self.d / "pack.md").write_text(f"Inventory of {self.work}/src: a.py\n")
         proc, s, ev = self.run_ri("code-verifier", "--mode", "demo", "--shadow", "claude-sonnet-5-5:high",
                                   "--shadow-dir", str(copy), env={"FAKE_SHADOW_MODEL": "claude-sonnet-5-5"})
         self.assertEqual(s["shadow"]["status"], "OK", proc.stderr[-400:])
@@ -936,6 +937,8 @@ class ShadowRunTest(unittest.TestCase):
         self.assertNotIn(str(self.work.resolve()), cfg["sandbox"]["filesystem"]["allowWrite"])
         spack = (ev / "shadow/code-verifier-demo.pack.md").read_text()
         self.assertIn(f"Working copy: {copy.resolve()}", spack)
+        self.assertIn(f"Inventory of {copy.resolve()}/src: a.py", spack)
+        self.assertIn(f"Inventory of {self.work}/src", (ev / "code-verifier-demo.pack.md").read_text())
         self.assertNotIn(str(self.work.resolve()), spack, "the shadow's pack names its own copy")
         self.assertEqual((ev / "shadow/captures/M1-1.txt").read_text(), "seen", "its captures are kept")
         proc, s, _ = self.run_ri("code-verifier", "--shadow", "claude-sonnet-5-5:high", "--shadow-dir",
