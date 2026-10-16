@@ -17,14 +17,21 @@ then the owner locks); then the first milestone not accepted or dropped (build i
 findings, rerun an inconclusive round, the owner accepts a gate-passed candidate, the owner decides what a
 BLOCKED round names); the inbox is weighed between milestones, before the next one starts; with every milestone
 accepted, a release is the owner's call. Open inbox items mid-milestone are listed after the next step.
+Loop breaker (for /next auto): when the last 3 journal entries name the same skill and argument and carry the
+same record fingerprint, and the record still has that fingerprint, the first next step is the owner's: "The
+last 3 steps repeated /<skill> <arg> without changing the record. Stop and tell the owner what is looping and
+what you tried." Journal lines written before the fingerprint was added never count.
 
 The second form is how every skill ends: it appends a line to docs/project/journal.md (local-only: which skill
-ran, on what, when, in which session, with what outcome, and what the record says comes next) and rewrites the
-Last step section of state.md.
+ran, on what, when, in which session, with what outcome, what the record says comes next, and the record
+fingerprint, "record <8 hex>") and rewrites the Last step section of state.md. The record fingerprint is
+fingerprint.py --scope all without what recording a step rewrites by itself (journal.md, state.md's Last step,
+handoffs/, gate canaries, .evidence/), so a step that changed nothing leaves it as it was.
 
 Exit 0, or 2 on bad usage.
 """
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -35,6 +42,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 STAGE = re.compile(r"^## (M\d+) ·\s*(.*?)$(.*?)(?=^## M\d+ ·|\Z)", re.M | re.S)
+JOURNAL_LINE = re.compile(r"^- \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC · (.+?) · (?:(?:claude|codex) session \S*|unknown session) · ")
+RECORD_MARK = re.compile(r" · record ([0-9a-f]{8,})\s*$")
+LOOP_RUN = 3
+# Written by the recording itself or by the machinery around a step, never by the step's own work.
+SELF_WRITTEN = ("docs/project/journal.md", "docs/project/handoffs/", "docs/project/.gate-canary-", ".evidence/")
+LAST_STEP = re.compile(r"(^## Last step[ \t]*\n)(.*?)(?=^## |\Z)", re.M | re.S)
 
 
 def section(text, heading):
@@ -91,7 +104,60 @@ def milestones(root):
     return out
 
 
-def status(root):
+def record_fingerprint(root):
+    """The record fingerprint: fingerprint.py --scope all without what recording a step rewrites by itself; 8 hex."""
+    from fingerprint import fingerprint, combine  # noqa: E402
+    _, rows = fingerprint(root, "all")
+    kept = []
+    for rel, h in rows:
+        if rel.startswith(SELF_WRITTEN):
+            continue
+        if rel == "docs/project/state.md":
+            try:
+                text = LAST_STEP.sub("", (Path(root) / rel).read_text(encoding="utf-8")).rstrip()
+                h = hashlib.sha256(text.encode("utf-8")).hexdigest()  # recording adds or rewrites the Last step
+            except (OSError, UnicodeError):
+                pass
+        kept.append((rel, h))
+    return combine("all", kept).split(":", 1)[1][:8]
+
+
+def journal_entries(root):
+    """[(skill and argument, record fingerprint or None)] for every step line of docs/project/journal.md."""
+    path = Path(root) / "docs/project/journal.md"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    out = []
+    for line in lines:
+        m = JOURNAL_LINE.match(line)
+        if m:
+            fp = RECORD_MARK.search(line)
+            out.append((m.group(1), fp.group(1) if fp else None))
+    return out
+
+
+def loop_step(root, pending=None):
+    """The owner step that stops a loop, or None: the last 3 steps (pending is the one being recorded now) name the
+    same skill and argument and carry the same record fingerprint, and the record has not moved since."""
+    last = (journal_entries(root) + ([pending] if pending else []))[-LOOP_RUN:]
+    if len(last) < LOOP_RUN or any(fp is None for _, fp in last) or len(set(last)) != 1:
+        return None
+    what, fp = last[-1]
+    if pending is None:
+        try:
+            if record_fingerprint(root) != fp:
+                return None  # someone changed the record after the loop was seen: it may move now
+        except Exception:
+            pass  # the journal alone still shows the loop
+    return step("owner", f"The last {LOOP_RUN} steps repeated /{what} without changing the record. Stop and tell "
+                         "the owner what is looping and what you tried.",
+                f"docs/project/journal.md: the last {LOOP_RUN} entries are /{what} with record fingerprint {fp}")
+
+
+def status(root, pending=None):
+    """pending: (skill and argument, record fingerprint) of a step being recorded now, counted as the last entry."""
     root = Path(root).resolve()
     from project_policy import read as policy  # noqa: E402
     choice = policy(root)
@@ -127,6 +193,9 @@ def status(root):
          "milestones": ms, "inbox": inbox, "last_step": section(state_text, "Last step") or "none recorded",
          "recovery": bool(recovered)}
     s["next"] = with_inbox(next_steps(s, root), inbox)
+    loop = loop_step(root, pending)
+    if loop:
+        s["next"].insert(0, loop)
     return s
 
 
@@ -243,16 +312,23 @@ def record(root, skill, arg, outcome):
     from session_env import current  # noqa: E402
     tool, sid = current()
     who = f"{tool} session {sid}" if tool in ("claude", "codex") else "unknown session"
-    s = status(root)
+    what = f"{skill}{' ' + arg if arg else ''}"
+    try:
+        fp = record_fingerprint(root)
+    except Exception as exc:  # the step is still recorded; say why it cannot count toward the loop check
+        fp = None
+        print(f"note: the record fingerprint could not be computed ({exc.__class__.__name__}: {exc}), so this step "
+              "does not count toward the repeated-step check")
+    s = status(root, pending=(what, fp) if fp else None)
     nxt = s["next"][0] if s["next"] else None
     nxt_text = f"{nxt['action']} ({nxt['who']})" if nxt else "nothing"
-    last = f"{skill}{' ' + arg if arg else ''} · {stamp} · {who} · {outcome}"
+    last = f"{what} · {stamp} · {who} · {outcome}"
     journal = rec / "journal.md"
     if not journal.is_file():
-        journal.write_text("# Journal\n\nOne line per step: when, which step, in which session, the outcome, and what the "
-                           "record said came next. Local-only.\n\n", encoding="utf-8")
+        journal.write_text("# Journal\n\nOne line per step: when, which step, in which session, the outcome, what the "
+                           "record said came next, and the record fingerprint. Local-only.\n\n", encoding="utf-8")
     with open(journal, "a", encoding="utf-8") as f:
-        f.write(f"- {stamp} · {skill}{' ' + arg if arg else ''} · {who} · {outcome} · next: {nxt_text}\n")
+        f.write(f"- {stamp} · {what} · {who} · {outcome} · next: {nxt_text}" + (f" · record {fp}" if fp else "") + "\n")
     state = rec / "state.md"
     if state.is_file():
         text = state.read_text(encoding="utf-8")

@@ -174,6 +174,64 @@ class ProjectStatusTest(unittest.TestCase):
         self.assertIn("## Last step\ndev M1 · ", state)
         self.assertEqual(self.status()["last_step"].split(" · ")[0], "dev M1")
 
+    def step(self, skill, arg=None, outcome="no progress"):
+        cmd = [sys.executable, str(PS), "record", str(self.root), "--skill", skill, "--outcome", outcome]
+        out = subprocess.run(cmd + (["--arg", arg] if arg else []), capture_output=True, text=True, env=self.env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    def journal_prints(self):
+        lines = (self.root / "docs/project/journal.md").read_text().splitlines()
+        return [l.rsplit(" · record ", 1)[1] if " · record " in l else None for l in lines if l.startswith("- ")]
+
+    def test_each_journal_line_carries_the_record_fingerprint_which_recording_alone_does_not_move(self):
+        self.record(s1="building", phase="building")
+        self.step("dev", "M1")
+        self.step("fix", "M1-F01")
+        prints = self.journal_prints()
+        self.assertEqual(len(prints), 2)
+        self.assertRegex(prints[0], r"^[0-9a-f]{8}$")
+        self.assertEqual(prints[0], prints[1], "the journal and state.md's Last step are not the record moving")
+        (self.root / "app.py").write_text("x = 2\n")
+        self.step("dev", "M1")
+        self.assertNotEqual(self.journal_prints()[-1], prints[1])
+
+    def test_three_steps_that_repeat_without_moving_the_record_stop_for_the_owner(self):
+        self.record(s1="building", phase="building")
+        loop = "The last 3 steps repeated /dev M1 without changing the record. Stop and tell the owner what is " \
+               "looping and what you tried."
+        self.step("dev", "M1")
+        self.assertNotIn("repeated", self.step("dev", "M1"))
+        third = self.step("dev", "M1")
+        self.assertIn(f"Next (owner): {loop}", third, "the step that closes the loop already says to stop")
+        first = self.status()["next"][0]
+        self.assertEqual((first["who"], first["action"]), ("owner", loop))
+        self.assertEqual(self.status()["next"][1]["action"], "/dev resume", "what the record says next stays in view")
+        (self.root / "app.py").write_text("x = 2\n")
+        self.assertEqual(self.first(), ("builder", "/dev resume"), "a record that moved since the loop clears it")
+
+    def test_a_moving_record_or_a_different_step_is_not_a_loop(self):
+        self.record(s1="building", phase="building")
+        self.step("dev", "M1")
+        (self.root / "app.py").write_text("x = 2\n")
+        self.step("dev", "M1")
+        self.step("dev", "M1")
+        self.assertNotIn("repeated", self.first()[1], "the first of the three moved the record")
+        self.step("gate", "M1")
+        self.step("dev", "M1")
+        self.assertNotIn("repeated", self.first()[1])
+        self.step("dev")
+        self.assertNotIn("repeated", self.first()[1], "/dev and /dev M1 are different steps")
+
+    def test_journal_lines_without_a_fingerprint_never_count(self):
+        self.record(s1="building", phase="building")
+        old = "- 2026-10-01 10:0{} UTC · dev M1 · unknown session · started · next: /dev resume (builder)\n"
+        (self.root / "docs/project/journal.md").write_text("# Journal\n\n" + "".join(old.format(i) for i in range(3)))
+        self.assertEqual(self.first(), ("builder", "/dev resume"))
+        self.assertNotIn("repeated", self.step("dev", "M1"))
+        self.assertNotIn("repeated", self.step("dev", "M1"), "two old lines and one new are not three repeats")
+        self.assertIn("repeated /dev M1", self.step("dev", "M1"))
+
 
 if __name__ == "__main__":
     unittest.main()
