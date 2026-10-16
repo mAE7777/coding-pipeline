@@ -30,7 +30,8 @@ The verdict is computed, never taken on trust, from the judge's JSON and from th
      for this milestone                                                            -> INCONCLUSIVE
   (Statuses, classes, and severities are compared without regard to case.)
   7. otherwise                                                                     -> ACCEPT-READY
-Deterministic checks that were skipped or not run are listed as exceptions.
+Deterministic checks that were skipped or not run are listed as exceptions, as is a checker served by another
+model than it asked for (model_mismatch) or retried on the escalate model.
 When the judge's own verdict is stricter than the computed one it is recorded as an exception and the
 result is INCONCLUSIVE (its verdict does not follow from its findings); when it is looser, the computed
 verdict stands and the disagreement is listed.
@@ -319,6 +320,11 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
         if s.get("family_switch"):
             exceptions.append(f"{c}: ran on {s['family']} because {s['family_switch']['from']} was unavailable "
                               f"({s['family_switch']['reason']})")
+        if s.get("model_mismatch"):
+            exceptions.append(f"{c}: asked for {s.get('requested_model')}, served by {s.get('served_model')}")
+        if s.get("escalated"):
+            exceptions.append(f"{c}: its retry ran on {s.get('requested_model')} at {s.get('requested_effort')} "
+                              f"({str(s.get('escalation_reason', ''))[:160]})")
     for c, s in summaries.items():
         if s and s.get("status") == "BLOCKED":
             return "BLOCKED", [f"{c}: {s.get('reason')}"], exceptions, None, summaries

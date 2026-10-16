@@ -375,6 +375,17 @@ class GateReportTest(unittest.TestCase):
         self.assertIn("- loyal-evaluator: route ?, asked ? at ?, served not named, not escalated", block)
         self.assertIn("Scope: full (no scope record)", block)
 
+    def test_a_model_mismatch_and_an_escalated_retry_are_exceptions(self):
+        extra = {"code-verifier": {"requested_model": "claude-opus-5-5", "requested_effort": "xhigh",
+                                   "escalated": True, "escalation_reason": "attempt 1 ended ERROR"},
+                 "gate-judge": {"requested_model": "claude-opus-5-5", "requested_effort": "high",
+                                "served_model": "claude-sonnet-5-5", "model_mismatch": True}}
+        r = self.report(1, self.evidence(1, CLEAN, extra=extra))
+        self.assertEqual(r["verdict"], "ACCEPT-READY", "an exception is reported, never a verdict change")
+        self.assertIn("gate-judge: asked for claude-opus-5-5, served by claude-sonnet-5-5", r["exceptions"])
+        self.assertTrue(any(e.startswith("code-verifier: its retry ran on claude-opus-5-5 at xhigh") for e in
+                            r["exceptions"]), r["exceptions"])
+
     def test_accept_ready_records_the_files_the_milestone_changed(self):
         baseline = ROOT / "skills/_shared/scripts/baseline.py"
         subprocess.run([sys.executable, str(baseline), "record", str(self.root), "M1"], check=True,
