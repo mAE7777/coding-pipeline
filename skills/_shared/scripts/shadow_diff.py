@@ -31,7 +31,7 @@ Exit 0 when both parse (whatever they say), 1 when one does not (named), 2 on ba
 summary reads the shadow log (default ~/.claude/.pipeline-shadow.jsonl, one line per shadow run, appended by
 run_isolated.py) and prints, per route and shadow setting: runs, distinct rounds compared (distinct evidence
 folders), total misses and extras, and failed shadow runs (the shadow did not end OK, or its result could not be
-compared). It says "ready to promote" only with at least 3 distinct rounds compared, zero misses, and no failed
+compared). Runs under .evidence/fixtures/ (agent_fixtures.py) are not real work and are left out. It says "ready to promote" only with at least 3 distinct rounds compared, zero misses, and no failed
 shadow run (plan 7.3 step 4: no case where the candidate missed what today's setting caught); otherwise "not
 ready" with the reason. Whether today's setting was itself right about a miss is the owner's call, from that
 round's <stem>.shadow-diff.json. Promotion stays manual: a /evolve change to skills/_shared/models.json.
@@ -49,6 +49,7 @@ if str(HERE) not in sys.path:
 from gate_report import last_json  # noqa: E402
 
 READY_ROUNDS = 3
+FIXTURE_RUN = re.compile(r"/\.evidence/fixtures/")  # agent_fixtures.py's runs: logged, never counted as real work
 # Rows: (group, key fields, clean statuses). Any other status reports a defect.
 ROWS = {
     "code-verifier": (("done_examples", ("id",), {"HOLDS"}), ("must_not_lose", ("id",), {"HOLDS"}),
@@ -307,7 +308,11 @@ def summarize(entries):
     for e in entries:
         sh = e.get("shadow") if isinstance(e.get("shadow"), dict) else {}
         g = groups.setdefault((str(e.get("route")), str(sh.get("model")), str(sh.get("effort"))),
-                              {"runs": 0, "rounds": set(), "misses": 0, "extras": 0, "failed": 0, "against": set()})
+                              {"runs": 0, "rounds": set(), "misses": 0, "extras": 0, "failed": 0, "against": set(),
+                               "fixture_runs": 0})
+        if FIXTURE_RUN.search(str(e.get("evidence"))):
+            g["fixture_runs"] += 1  # a fixture is not real work: the pooled comparison (7.3 step 2) measures those
+            continue
         g["runs"] += 1
         pr = e.get("primary") if isinstance(e.get("primary"), dict) else {}
         g["against"].add(f"{pr.get('model')} {pr.get('effort')}")
@@ -330,7 +335,8 @@ def summarize(entries):
             why.append(f"{len(g['rounds'])} of {READY_ROUNDS} distinct rounds compared")
         rows.append({"route": route, "shadow": {"model": model, "effort": effort}, "runs": g["runs"],
                      "rounds": len(g["rounds"]), "misses": g["misses"], "extras": g["extras"], "failed": g["failed"],
-                     "against": sorted(g["against"]), "ready": not why, "why_not": why})
+                     "fixture_runs_ignored": g["fixture_runs"], "against": sorted(g["against"]), "ready": not why,
+                     "why_not": why})
     return rows
 
 

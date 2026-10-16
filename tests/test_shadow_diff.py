@@ -186,6 +186,12 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual((r["runs"], r["rounds"], r["failed"]), (4, 3, 1))
         self.assertFalse(r["ready"])
 
+    def test_fixture_runs_are_not_real_rounds(self):
+        entries = [entry(evidence=f"/repo/.evidence/fixtures/judge-drift/run-{n}") for n in (1, 2, 3)]
+        r = self.rows(entries + [entry()])[("gate-judge", "claude-opus-5-5", "high")]
+        self.assertEqual((r["runs"], r["rounds"], r["fixture_runs_ignored"]), (1, 1, 3))
+        self.assertFalse(r["ready"])
+
     def test_each_route_and_setting_is_its_own_row(self):
         rows = self.rows([entry(), entry(effort="medium"), entry(route="code-verifier.demo",
                                                                  model="claude-sonnet-5-5")])
