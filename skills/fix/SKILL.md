@@ -4,16 +4,7 @@ description: "Make a targeted change outside a milestone's build run: a bug, a b
 argument-hint: "<the problem, or a gate finding ID such as M2-F03>"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /fix
 
@@ -21,38 +12,48 @@ Load-bearing rules:
 - Reproduce before changing anything: a real failing trace (command and output), or for a gate finding its
   quoted evidence reproduced in this tree. No reproduction, no fix: say what you tried.
 - The smallest change that fixes it. Every changed line traces to this fix; no adjacent refactor, no new
-  scope. The same standing rules as `/dev` apply: loud failure at boundaries, no invented defaults, no
-  stand-in on the product path without the owner's consent in their words, tests never weakened.
+  scope. `/dev`'s load-bearing rules apply (no unconsented stand-in, loud failure, tests never weakened).
 - The reproduction becomes a regression test that fails before the change and passes after.
-- Three failed attempts: stop and report what was tried and what you learned, as a Blockers row.
+- Two failed fixes that share one premise: write the premise down and test it before a third (`heavy.py`
+  prints when a failure has survived 2 fixes). Three failed attempts: stop and report what was tried and what
+  you learned, as a Blockers row.
 - A fix that turns into a new capability, a contract change, or many files is not a fix: stop and route it
   to `/plan amend` (intent changes) or into a milestone.
-- Venture projects: when the project has a `truth/` folder, read
-  `~/.claude/skills/_shared/references/venture-mode.md` before changing anything; if it is missing, stop with BLOCKED (this is a
-  venture project and its rules are not installed).
+
+Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/venture-mode.md` first; if it is missing, stop BLOCKED.
 
 When `record_check.py` does not report `complete`, a fix still goes ahead when the owner asked for it; the
 fix log is created, and the missing record is named in your report (adoption is `/plan adopt`).
 
 ## Steps
+The method is `~/.claude/skills/craft/methods/bug-fix.md`, read after `~/.claude/skills/craft/index.md`,
+whose overrides win. A fix in shared code also gets `~/.claude/skills/craft/review/blast-radius.md`.
 1. **Classify** the origin: code, plan (the contract was wrong), interface, environment, or test. A plan or
-   interface origin means the fix also needs a decision entry, and possibly the owner.
+   interface origin means the fix also needs a decision entry (`decisions.py add`), and possibly the owner.
 2. **Reproduce.** When the cause is not obvious after reproducing, match the symptom in
    `references/root-cause-catalogs.md`.
-3. **Change** the smallest thing; heavy commands go through the machine lock.
-4. **Prove it**: the regression test red then green; every checkpoint the change touches re-run (their checks
-   are in `milestones.md`); for a diff of a few files, the bundled `/code-review` gives a cheap fresh look.
+3. **Change** the smallest thing. Heavy commands run as
+   `python3 ~/.claude/skills/_shared/scripts/heavy.py run --owner <session> --tail 60 -- <cmd>` (`<session>`
+   is this session's ID; the full log stays in `.evidence/logs/`).
+4. **Prove it**: the regression test (rule 3); every checkpoint the change touches re-run (their
+   checks are in `milestones.md`); the blast-radius proof for shared code; for a diff of a few files, the
+   bundled `/code-review` gives a cheap fresh look.
 5. **Log** in `docs/project/fix-log.md` (template in `~/.claude/skills/_shared/templates/fix-log.md`):
-   symptom, origin, reproduction and its test, change, checks re-run with evidence paths, attempts.
-6. **Hand back.** For a gate finding: say which finding is fixed and what shows it (its `fixed_when`); the
-   milestone is frozen again and the next gate round runs (`/dev freeze`, then `/gate`). For a production
-   hotfix: `/deploy` next, and the fix joins the next milestone's regression demo.
+   symptom, origin, reproduction and its test, the change, checks re-run with evidence paths, attempts. The
+   Change line names every file the fix touched: `regate_scope.py` reads it to allow a focused re-gate.
+6. **Hand back.** For a gate finding: say which finding is fixed and what shows it (its `fixed_when`), freeze
+   again (`/dev freeze`), and run `/gate`. `regate_scope.py` decides the next round: focused when the change
+   stays inside the findings' files, is under about 150 lines, and touches nothing intent-bearing; otherwise
+   full. For a hotfix after acceptance: freeze, `/gate M<k>` again (a focused round when every changed file is
+   on the fix-log entry's Change line), the owner's `/gate accept M<k>` of the new candidate, then `/deploy`;
+   the fix joins the next milestone's regression demo.
 
 ## Flaky tests
 Never skip a flaky test silently or raise its timeout to hide it. Find the cause (shared state, timing,
-order, network). If it cannot be fixed now, quarantine it explicitly: in the fix log, `Quarantined: <test> ·
-owner <who> · reason <why> · expires <date>`, and mark it in the test itself so the runner reports it as
-QUARANTINED, not passing.
+order, network). If it cannot be fixed now, quarantine it explicitly: the fix log's Quarantined line (owner,
+reason, expiry), and a marker in the test itself so the runner reports it as QUARANTINED, not passing. That
+marker is a skip, so the gate's `test-tamper` check fails it unless the owner ruled `[test-change: <path>]`
+in decisions.md.
 
 ## End
-Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill fix --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill fix --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).
