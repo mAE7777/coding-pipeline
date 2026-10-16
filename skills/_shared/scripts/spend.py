@@ -36,7 +36,8 @@ unpriced_model, with its ids named. Codex usage is never priced.
 
 report sums every isolated run summary under the project's .evidence (gate and loyal rounds, the dev
 understanding check, plan cold reads, capture, scout, and any other folder), grouped by milestone, round, and
-role (the summary's file name: code-verifier, code-verifier-demo, loyal-evaluator-pass2, ...), with units,
+role (the summary's file name: code-verifier, code-verifier-demo, loyal-evaluator-pass2, ...; a shadow run,
+whose summary sits in a folder named shadow, is "<role> (shadow)", so its cost shows apart), with units,
 dollars, tokens by type, the served models, and the cache-read share (cache reads over all input tokens:
 input, cache writes, and cache reads). It adds the Claude Code conversations in the project over the same
 window, and Codex apart. The window starts at --since, or, with --milestone M<k>, when that milestone's
@@ -281,7 +282,8 @@ def run_summaries(project, since=None):
         if not model and u and stream.is_file():
             model = stream_model(stream)
         codex = d.get("family") == "codex" or (isinstance(u, dict) and u.get("family") == "codex")
-        yield {"path": s.relative_to(ev).as_posix(), "written": mtime, "role": s.name[:-len(".summary.json")],
+        role = s.name[:-len(".summary.json")] + (" (shadow)" if s.parent.name == "shadow" else "")
+        yield {"path": s.relative_to(ev).as_posix(), "written": mtime, "role": role,
                "status": d.get("status"), "codex": codex, "model": model, "usage": u or None}
 
 
@@ -578,11 +580,11 @@ def print_report(rep, since_from):
           f" · since {rep['since']} ({since_from}) · dollars at list prices")
     head = ("milestone", "area", "round", "role", "runs", "units", "dollars", "input", "c.write", "c.read", "output",
             "c.read%", "models")
-    fmt = "{:<9} {:<8} {:<5} {:<24} {:>4} {:>8} {:>10} {:>8} {:>8} {:>8} {:>8} {:>7}  {}"
+    fmt = "{:<9} {:<8} {:<5} {:<28} {:>4} {:>8} {:>10} {:>8} {:>8} {:>8} {:>8} {:>7}  {}"
     print(fmt.format(*head))
     for r in rep["groups"]:
         t = r["tokens"]
-        print(fmt.format(r["milestone"], r["area"], r["round"], r["role"][:24], r["runs"], amount(r["units"]),
+        print(fmt.format(r["milestone"], r["area"], r["round"], r["role"][:28], r["runs"], amount(r["units"]),
                          usd(r["dollars"]), amount(t["input"]), amount(t["cache_write"]), amount(t["cache_read"]),
                          amount(t["output"]), share(r["cache_read_share"]), ", ".join(r["models"])))
     if not rep["groups"]:

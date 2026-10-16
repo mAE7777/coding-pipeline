@@ -247,6 +247,24 @@ class SpendTest(unittest.TestCase):
         self.assertIn("pass --since", r.stderr)
         self.assertEqual(self.spend("report", str(self.project), "--milestone", "seven").returncode, 2)
 
+    def test_a_shadow_runs_cost_shows_apart(self):
+        ev = self.project / ".evidence/gate/M1/r3"
+        u = {"input": 10, "cache_write": 0, "cache_read": 0, "output": 100}
+        summary(ev, "gate-judge", model=OPUS, usage=u)
+        summary(ev / "shadow", "gate-judge", served_model=SONNET, usage=u)
+        summary(ev / "shadow", "code-verifier-demo", served_model=SONNET, usage=u)
+        roles = {r["path"]: r["role"] for r in spend.run_summaries(self.project)}
+        self.assertEqual(roles, {"gate/M1/r3/gate-judge.summary.json": "gate-judge",
+                                 "gate/M1/r3/shadow/gate-judge.summary.json": "gate-judge (shadow)",
+                                 "gate/M1/r3/shadow/code-verifier-demo.summary.json": "code-verifier-demo (shadow)"})
+        r = self.spend("report", str(self.project), "--since", "1970-01-01T00:00:00Z", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = {(g["round"], g["role"]): (g["runs"], g["models"]) for g in json.loads(r.stdout)["groups"]}
+        self.assertEqual(got[("r3", "gate-judge")], (1, [OPUS]))
+        self.assertEqual(got[("r3", "gate-judge (shadow)")], (1, [SONNET]), "the shadow is its own row")
+        r = self.spend("report", str(self.project), "--since", "1970-01-01T00:00:00Z")
+        self.assertRegex(r.stdout, r"M1\s+gate\s+r3\s+code-verifier-demo \(shadow\)\s+1\s")
+
     def test_estimate_and_calibrate(self):
         src = self.project / "docs/project/sources/SRC-1-notes"
         src.mkdir(parents=True)
