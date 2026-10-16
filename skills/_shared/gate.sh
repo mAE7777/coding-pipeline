@@ -364,6 +364,28 @@ else
   report PASS todos "none"
 fi
 
+# ---- since the milestone baseline: test tampering, file growth; outbound prose ---------------------------
+# scripts/gate_checks.py holds the logic and prints lines in this report's format. A check it could not run is
+# still named here: FAIL for test-tamper (the tests may have been weakened), WARN for the other two.
+GC_OUT=$(python3 "$HERE/scripts/gate_checks.py" all . 2>&1)
+GC_RC=$?
+GC_WHY=$(printf '%s\n' "$GC_OUT" | grep -vE '^(PASS|FAIL|WARN|SKIP) ' | grep . | tail -1)
+for GC in test-tamper:FAIL file-growth:WARN prose-lint:WARN; do
+  GC_NAME=${GC%%:*}
+  GC_SEEN=""
+  while read -r GC_ST GC_CHECK GC_DETAIL; do
+    [ "$GC_CHECK" = "$GC_NAME" ] || continue
+    case "$GC_ST" in
+      PASS|FAIL|WARN|SKIP) report "$GC_ST" "$GC_CHECK" "$GC_DETAIL"; GC_SEEN=1 ;;
+    esac
+  done <<EOF_GC
+$GC_OUT
+EOF_GC
+  if [ -z "$GC_SEEN" ]; then
+    report "${GC#*:}" "$GC_NAME" "$GC_NAME could not run: ${GC_WHY:-gate_checks.py exited $GC_RC and printed nothing}"
+  fi
+done
+
 # ---- placeholder lint (placeholder consent) -----------------------------------
 # Product-path stand-ins need an explicit consent token; without one they FAIL.
 # Precision rules (the noisy-detector lesson): FAIL only on comment/phrase-anchored
@@ -438,7 +460,7 @@ elif [ -e .git ]; then
     PT=$(printf '%s\n' "$TRACKED" | tr '\n' '\0' | xargs -0 grep -lE \
       -e '(^|[^A-Za-z0-9])/(plan|dev|gate|loyal|scout|handoff|capture|fix|deploy|explain|polish|inbox|next|evolve) (M[0-9]+|adopt|amend|convert|freeze|resume|accept|check|status|vigilance|write|receive|ask|map|spike|offload|ingest|add|review|list|auto|run)([^A-Za-z]|$)' \
       -e 'code-verifier|loyal-evaluator|gate-judge|cold-reader|claim-verifier|change-reviewer|evolve\.py|heavy\.py|milestone_lint|render_pack|run_isolated|gate_run\.py|gate_report|record_check|helm_stamp' \
-      -e 'rulings\.py|intent_lock|inbox\.py|project_status|continuity\.py|local_only\.py|gate_copies|handoff_check|milestone-continue|heavy-guard|reload-gate|typecheck-once' \
+      -e 'rulings\.py|intent_lock|inbox\.py|project_status|continuity\.py|local_only\.py|gate_copies|gate_checks|handoff_check|milestone-continue|heavy-guard|reload-gate|typecheck-once' \
       2>/dev/null | head -5 | tr '\n' ' ')
   fi
   if [ -n "${PT// /}" ]; then
