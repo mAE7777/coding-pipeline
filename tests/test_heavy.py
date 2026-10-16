@@ -202,6 +202,139 @@ class HeavyLeaseTest(HeavyTestBase):
         self.assertEqual(self.heavy("lease", "browser", owner="B").returncode, 0)
 
 
+# A test run's output: 300 lines, one failing line early, a traceback at the end; the error text comes from
+# ERR so a test can vary it, and the exit code from CODE.
+NOISY = ("import os, sys\n"
+         "for i in range(300):\n"
+         "    print(f'progress {i} ok')\n"
+         "    if i == 10:\n"
+         "        print('FAIL src/early.test.ts')\n"
+         "print('Traceback (most recent call last):', file=sys.stderr)\n"
+         "print(os.environ.get('ERR', 'ValueError: bad total'), file=sys.stderr)\n"
+         "sys.exit(int(os.environ.get('CODE', '1')))\n")
+
+
+class HeavyTailTest(HeavyTestBase):
+    def setUp(self):
+        super().setUp()
+        self.proj = Path(self.tmp.name) / "proj"
+        (self.proj / "docs/project").mkdir(parents=True)
+        (self.proj / "app.py").write_text("x = 1\n")
+        (self.proj / "noisy.py").write_text(NOISY)
+
+    def run_tail(self, tail="5", cwd=None, err=None, code="1"):
+        env = {**self.env, "CODE": code}
+        if err:
+            env["ERR"] = err
+        cmd = [PY, str(HEAVY), "run", "--owner", "A", "--tail", tail, "--", PY, "noisy.py"]
+        return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd or self.proj)
+
+    def failures(self):
+        path = self.proj / ".evidence/failures.jsonl"
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.is_file() else []
+
+    def test_tail_prints_the_exit_code_failing_lines_and_tail_and_keeps_the_whole_log(self):
+        out = self.run_tail()
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("heavy.py: exit 1", out.stdout)
+        self.assertIn("12: FAIL src/early.test.ts", out.stdout, "a failing line before the tail, with its line number")
+        self.assertIn("progress 299 ok", out.stdout)
+        self.assertIn("ValueError: bad total", out.stdout, "standard error is part of the tail")
+        self.assertNotIn("progress 100 ok", out.stdout, "the middle stays in the log")
+        self.assertLess(len(out.stdout.splitlines()), 15)
+        logs = list((self.proj / ".evidence/logs").glob("*-noisy-py.log"))
+        self.assertEqual(len(logs), 1, list((self.proj / ".evidence/logs").iterdir()))
+        self.assertIn(str(logs[0]), out.stdout)
+        whole = logs[0].read_text()
+        self.assertIn("progress 100 ok", whole)
+        self.assertIn("Traceback (most recent call last):", whole)
+        self.assertEqual(len(whole.splitlines()), 303)
+
+    def test_a_failing_line_the_tail_shows_is_not_repeated(self):
+        out = self.run_tail(tail="400")
+        self.assertEqual(out.stdout.count("FAIL src/early.test.ts"), 1)
+        self.assertNotIn("Failing lines before the tail", out.stdout)
+
+    def test_from_a_subfolder_the_log_goes_to_the_project_and_outside_one_to_the_working_folder(self):
+        sub = self.proj / "src"
+        sub.mkdir()
+        (sub / "noisy.py").write_text(NOISY)
+        self.run_tail(cwd=sub)
+        self.assertEqual(len(list((self.proj / ".evidence/logs").glob("*.log"))), 1)
+        loose = Path(self.tmp.name) / "loose"
+        loose.mkdir()
+        (loose / "noisy.py").write_text(NOISY)
+        out = self.run_tail(cwd=loose)
+        self.assertEqual(len(list((loose / ".evidence/logs").glob("*.log"))), 1, out.stdout)
+        self.assertFalse((loose / ".evidence/failures.jsonl").exists(), "no project, no signature history")
+        self.assertNotIn("survived", out.stdout)
+
+    def test_without_tail_output_passes_through_and_nothing_is_written(self):
+        out = self.heavy("run", "--", PY, "noisy.py", owner="A", cwd=self.proj)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("progress 100 ok", out.stdout)
+        self.assertIn("ValueError: bad total", out.stderr, "standard error stays standard error")
+        self.assertNotIn("heavy.py: exit", out.stdout)
+        self.assertFalse((self.proj / ".evidence").exists())
+
+    def test_a_bad_tail_value_is_bad_usage(self):
+        for value in ("many", "-3"):
+            out = self.heavy("run", "--tail", value, "--", "echo", "x", owner="A", cwd=self.proj)
+            self.assertEqual(out.returncode, 2, value)
+            self.assertNotIn("Traceback", out.stderr)
+
+    def test_a_failing_run_records_its_signature_and_a_passing_one_does_not(self):
+        self.run_tail()
+        rows = self.failures()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        for key in ("time", "signature", "command", "error", "fingerprint"):
+            self.assertIn(key, row)
+        self.assertEqual(row["error"], "FAIL src/early.test.ts", "the first line that names a failure")
+        self.assertTrue(row["fingerprint"].startswith("product:"))
+        self.assertIn("noisy.py", row["command"])
+        self.run_tail(code="0")
+        self.assertEqual(len(self.failures()), 1)
+
+    def test_numbers_paths_hex_ids_and_times_do_not_change_the_signature(self):
+        (self.proj / "noisy.py").write_text("import os, sys\nprint(os.environ['ERR'])\nsys.exit(1)\n")
+        self.run_tail(err="Error: /tmp/run-1/a.py:12 at 2026-10-16T10:00:01Z id 3f9a2c1d")
+        self.run_tail(err="Error: /var/x/run-2/a.py:40 at 2026-10-17T11:22:33Z id 0b7e44aa")
+        self.run_tail(err="Error: the cache is cold")
+        sigs = [r["signature"] for r in self.failures()]
+        self.assertEqual(sigs[0], sigs[1])
+        self.assertNotEqual(sigs[0], sigs[2])
+
+    def test_the_same_failure_on_three_fingerprints_says_it_survived_two_fixes(self):
+        first = self.run_tail()
+        self.assertNotIn("survived", first.stdout)
+        again = self.run_tail()
+        self.assertNotIn("survived", again.stdout, "a rerun without a change is not a fix")
+        (self.proj / "app.py").write_text("x = 2\n")
+        self.assertNotIn("survived", self.run_tail().stdout)
+        self.run_tail(code="0")  # a pass in between clears nothing
+        (self.proj / "app.py").write_text("x = 3\n")
+        third = self.run_tail()
+        sig = self.failures()[-1]["signature"][:8]
+        self.assertIn(f"This failure has survived 2 fixes (signature {sig}): write down the premise both fixes "
+                      "assumed and test it before another fix.", third.stdout)
+        other = self.run_tail(err="KeyError: 'total'")
+        self.assertIn("survived", other.stdout, "the first line naming a failure is the same early FAIL line")
+        (self.proj / "noisy.py").write_text(NOISY.replace("FAIL src/early.test.ts", "all fine"))
+        self.assertNotIn("survived", self.run_tail(err="KeyError: 'total'").stdout, "a different failure starts over")
+
+    def test_the_history_keeps_the_last_500_records(self):
+        path = self.proj / ".evidence/failures.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text("".join(json.dumps({"signature": f"old{i}", "fingerprint": "product:x"}) + "\n"
+                                for i in range(600)))
+        self.run_tail()
+        rows = self.failures()
+        self.assertEqual(len(rows), 500)
+        self.assertEqual(rows[0]["signature"], "old101")
+        self.assertIn("noisy.py", rows[-1]["command"])
+
+
 def guard(payload, env=None, cwd=None):
     payload = dict(payload)
     if not payload.get("cwd"):
@@ -267,9 +400,16 @@ class HeavyGuardTest(unittest.TestCase):
 
     def test_compound_command_gets_the_heavy_part_only(self):
         _, reason = bash("cd app && pnpm test", payload={"session_id": "S9"})
-        self.assertIn("run --owner S9 -- pnpm test", reason)
+        self.assertIn("run --owner S9 --tail 60 -- pnpm test", reason)
         self.assertIn("own call", reason)
         self.assertNotIn("bash -c", reason)
+
+    def test_a_bounded_suggestion_bounds_its_output_and_a_server_suggestion_does_not(self):
+        _, reason = bash("pytest -q", payload={"session_id": "S9"})
+        self.assertIn("heavy.py run --owner S9 --tail 60 -- pytest -q", reason, "the first try is already bounded")
+        _, reason = bash("pnpm dev", payload={"session_id": "S9"})
+        self.assertIn("heavy.py serve --owner S9 -- pnpm dev", reason)
+        self.assertNotIn("--tail", reason)
 
     def test_mentioning_the_wrapper_is_not_wrapping(self):
         self.assertEqual(bash("echo heavy.py; pnpm test")[0], "deny")

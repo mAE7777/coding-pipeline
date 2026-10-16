@@ -7,8 +7,9 @@ Register it for Bash and for the browser-automation tools:
 
 Bash: a bounded heavy command (test suite, build, typecheck, simulator run, container build, gate.sh)
 that does not start with the `heavy.py run` wrapper is denied with the exact command to run instead (the
-heavy part alone, owned by this session); a server command (dev, start, serve, preview) is denied the same
-way with `heavy.py serve`. A chained command is never suggested: the heavy part is named and runs as its own
+heavy part alone, owned by this session, with `--tail 60`, so the first try already prints only the exit
+code, the failing lines, and the last 60 lines, and keeps the full log on disk); a server command (dev,
+start, serve, preview) is denied the same way with `heavy.py serve`. A chained command is never suggested: the heavy part is named and runs as its own
 call. The project adds bounded heavy commands under "Heavy commands" in docs/project/gate.md.
 Browser automation: the browser MCP tools and the playwright-cli command take or refresh this session's
 browser lease (playwright-cli close / close-all / kill-all release it); if another session holds a lease or
@@ -154,7 +155,8 @@ def deny(reason):
 
 
 def suggestion(mode, seg, owner, whole):
-    wrapped = f"python3 {HEAVY_PY} {mode} --owner {owner} -- {seg}"
+    bound = " --tail 60" if mode == "run" else ""  # a bounded job's output is summarized; a server's is its own
+    wrapped = f"python3 {HEAVY_PY} {mode} --owner {owner}{bound} -- {seg}"
     if seg.strip() != whole.strip():
         return (f"{wrapped}  (run it as its own call; run the other parts of your command separately, since a "
                 "chained command cannot be approved automatically)")
@@ -196,7 +198,8 @@ def check_bash(data):
         if any(rx.search(seg) for rx in bounded):
             return deny(f"'{seg[:60]}' is a heavy local job. Only one runs at a time on this machine, so it "
                         f"goes through the lock. Run instead: {suggestion('run', seg, owner, command)}  (it waits if "
-                        "another heavy job is running and reports BUSY if the wait runs out).")
+                        "another heavy job is running and reports BUSY if the wait runs out; it prints the exit "
+                        "code, the failing lines, the last 60 lines, and where the full log is).")
     return 0
 
 
