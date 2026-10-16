@@ -5,7 +5,8 @@ Usage:
   run_isolated.py <role> --dir <workdir> --out <evidence-dir> (--pack <file> | --render <render_pack args...> --)
                   [--project <real project>] [--mode demo] [--resume <session-id>] [--family claude|codex|auto]
                   [--agent-file <path>] [--canary <text> ...] [--deny <path> ...] [--allow-read <path> ...]
-                  [--network <host> ...] [--effort xhigh] [--timeout <seconds>] [--dry-run]
+                  [--network <host> ...] [--route <route>] [--model <id>] [--effort <level>]
+                  [--require-read <glob> ...] [--timeout <seconds>] [--dry-run]
 
 Roles: code-verifier, loyal-evaluator, gate-judge, cold-reader, claim-verifier, change-reviewer (a proposed
 change to the pipeline itself, run by evolve.py review), and probe (a fixture that measures how a model
@@ -40,9 +41,31 @@ Claude family: `claude -p --agents <file> --agent <role>` with cwd=<workdir>, th
                                called as `python3 <browse.py> --root <workdir> ...` (it enforces its own
                                boundary); the heavy-lock guard as a PreToolUse hook
   CLAUDE_CODE_TMPDIR           a private temp folder under ~/.gate-copies, removed after the run
-  --output-format stream-json --verbose --effort <e>
+  --output-format stream-json --verbose --effort <e> [--model <id>]
 Before launch, a server listening on a TCP port from inside the real project is BLOCKED (a checker could
 read the project through it); stop it first.
+
+Model and effort (Claude family). The run's route is --route, or derived from the role and the mode (this
+script's --mode, or the --mode, --previous, and --inputs understanding given to render_pack; models.py
+route_for). models.py resolves the route from skills/_shared/models.json and the personal override file;
+--model and --effort given here override it. The command passes --model only for a named model ("default"
+leaves the Claude Code default) and always passes --effort; the agent definition never carries either. A
+route that cannot be resolved, or a builder-side route (model session), ends the run ERROR with the reason.
+The summary records route, requested_model, requested_effort, model_source and effort_source (repo, override,
+or flag), served_model (from the stream), and model_mismatch (true when a named model was asked for and the
+served model's ID does not start with it; null when the stream named none). The Codex family keeps its own
+model and effort: its summary records the route with route_applies false.
+
+Mode sections. An agent body may hold blocks between `<!-- mode: NAME -->` and `<!-- end mode -->` lines (NAME
+may list several names, separated by commas). The Claude prompt keeps the common text and only the blocks
+named for this run: the route's mode (after the dot), that mode's earlier name (models.py section_names:
+documents for reread, fidelity for refidelity, review for reverify, extraction for extract), and the --mode
+given. A body without markers is passed unchanged; an unclosed or nested block ends the run ERROR. The summary
+records prompt_sha256 (the prompt as passed) beside agent_sha256 (the file).
+
+--require-read <glob> (repeatable; relative to --dir): a Claude run that otherwise ended OK must have opened
+every existing file the globs match with its Read tool; otherwise it is INCONCLUSIVE with the reason
+"did not open: <files>".
 
 Codex family (code-verifier only): `codex exec` inside the same kind of read fence, built as a macOS
 sandbox-exec profile (Codex's own sandbox cannot nest inside it, so it runs with -s danger-full-access and
@@ -51,7 +74,8 @@ HEAVY_OWNER set to the child. A quota, sign-in, or version refusal is status UNA
 Codex and runs Claude when Codex is UNAVAILABLE, recording the switch and its reason in the summary.
 
 Writes <role>[-demo][-pass2].{pack.md,agents.json,jsonl,result.md,summary.json,settings.json|sb} to
-<evidence-dir>. Status: OK, INCONCLUSIVE (a role that must execute ran no tool), LEAK (a --canary string
+<evidence-dir>. Status: OK, INCONCLUSIVE (a role that must execute ran no tool, or a --require-read file was
+never opened), LEAK (a --canary string
 appeared, or the pass-1 pack carried intent), BLOCKED (a server from the real project is running),
 UNAVAILABLE (Codex could not serve the run), ERROR (non-zero exit, timeout, or no result), or BLOCKED
 with a budget reason (the project's active phase is over its spend cap, spend.py). The summary records
@@ -74,6 +98,8 @@ import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))  # its own modules (models, project_policy, spend), however it is loaded
 HOME = Path.home()
 ROLES = {
     "code-verifier": ["Read", "Grep", "Glob", "Bash", "Edit", "Write"],
@@ -233,7 +259,42 @@ def settings(role, workdir, deny=(), project=None, allow_read=(), network=(), pr
     return cfg
 
 
-def read_agent(role, agent_file):
+class AgentError(ValueError):
+    """An agent body that cannot be cut to its mode (an unclosed, stray, or nested mode marker)."""
+
+
+MODE_OPEN = re.compile(r"[ \t]*<!--\s*mode:\s*([\w ,.-]+?)\s*-->[ \t]*")
+MODE_END = re.compile(r"[ \t]*<!--\s*end mode\s*-->[ \t]*")
+
+
+def mode_sections(body, keep, where="the agent body"):
+    """The body with its common text and only the mode blocks named in keep, and the names kept and dropped.
+    A body without markers comes back unchanged (and None for the names)."""
+    lines = body.split("\n")
+    if not any(MODE_OPEN.fullmatch(x) or MODE_END.fullmatch(x) for x in lines):
+        return body, None
+    out, names, kept, dropped = [], None, set(), set()
+    for n, line in enumerate(lines, 1):
+        opened, ended = MODE_OPEN.fullmatch(line), MODE_END.fullmatch(line)
+        if opened:
+            if names is not None:
+                raise AgentError(f"{where} line {n}: a mode block opens inside another (close it with <!-- end mode -->)")
+            names = {x for x in re.split(r"[\s,]+", opened.group(1)) if x}
+            (kept if names & set(keep) else dropped).update(names)
+        elif ended:
+            if names is None:
+                raise AgentError(f"{where} line {n}: <!-- end mode --> without an open mode block")
+            names = None
+        elif names is None or names & set(keep):
+            out.append(line)
+    if names is not None:
+        raise AgentError(f"{where}: a mode block ({', '.join(sorted(names))}) is never closed with <!-- end mode -->")
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    return text, {"kept": sorted(kept), "dropped": sorted(dropped - kept)}
+
+
+def read_agent(role, agent_file, modes=None):
+    """The agent file, its frontmatter, and its body; with modes, the body cut to those mode sections."""
     path = Path(agent_file) if agent_file else HOME / ".claude/agents" / f"{role}.md"
     text = path.read_text(encoding="utf-8")
     meta, body = {}, text
@@ -244,13 +305,24 @@ def read_agent(role, agent_file):
             if ":" in line and not line.startswith(" "):
                 k, v = line.split(":", 1)
                 meta[k.strip()] = v.strip().strip('"')
-    return path, meta, body.strip()
+    body = body.strip()
+    if modes is not None:
+        body, cut = mode_sections(body, modes, str(path))
+        if cut is not None:
+            meta["_mode_sections"] = cut
+    return path, meta, body
 
 
-def agents_json(role, agent_file, out_path):
-    path, meta, body = read_agent(role, agent_file)
+def agents_json(role, agent_file, out_path, modes=None, record=None):
+    """Write the inline agent definition (description and prompt only: model and effort are CLI flags). With
+    record, put the prompt's sha256 and the mode sections kept and dropped into it."""
+    path, meta, body = read_agent(role, agent_file, modes)
     spec = {role: {"description": meta.get("description") or role, "prompt": body}}
     out_path.write_text(json.dumps(spec, indent=2))
+    if record is not None:
+        record["prompt_sha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if meta.get("_mode_sections"):
+            record["mode_sections"] = meta["_mode_sections"]
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -266,7 +338,7 @@ def parse_claude_stream(lines):
     counted, so a reworded notice shows instead of silently cutting the answer."""
     info = {"session_id": None, "model": None, "tool_uses": 0, "denials": [], "turns": 0,
             "result": None, "is_error": None, "tools_seen": None, "answers": 0, "earlier_answers": [],
-            "output_limit_cuts": 0, "unrecognized_synthetic": 0, "result_last_event": None}
+            "output_limit_cuts": 0, "unrecognized_synthetic": 0, "result_last_event": None, "read_paths": []}
     texts, cut, answers = [], [], []  # the assistant's text since the last tool result; what came before a cut
     usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "cost_usd": None, "duration_ms": None}
     seen_result = False
@@ -285,6 +357,9 @@ def parse_claude_stream(lines):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     info["tool_uses"] += 1
                     texts, cut = [], []
+                    path = (block.get("input") or {}).get("file_path") if block.get("name") == "Read" else None
+                    if isinstance(path, str) and path:
+                        info["read_paths"].append(path)  # what --require-read checks
                 elif isinstance(block, dict) and block.get("type") == "text":
                     texts.append(block.get("text") or "")
         elif t == "user":
@@ -482,8 +557,10 @@ def tools_section(workdir):
 
 
 def parse_args(argv):
-    opts = {"deny": [], "canary": [], "allow_read": [], "network": [], "family": "claude", "effort": "xhigh",
-            "timeout": "3000"}
+    # "effort" stays xhigh unless given: the Codex family reads it as before; the Claude family takes the route's
+    # effort unless --effort was given (opts["_given"]).
+    opts = {"deny": [], "canary": [], "allow_read": [], "network": [], "require_read": [], "family": "claude",
+            "effort": "xhigh", "timeout": "3000", "_given": set()}
     i = 0
     while i < len(argv):
         k = argv[i]
@@ -494,18 +571,86 @@ def parse_args(argv):
             end = argv.index("--", i + 1) if "--" in argv[i + 1:] else len(argv)
             opts["render"] = argv[i + 1:end]
             i = end + 1
-        elif k in ("--deny", "--canary", "--allow-read", "--network") and i + 1 < len(argv):
+        elif k in ("--deny", "--canary", "--allow-read", "--network", "--require-read") and i + 1 < len(argv):
             opts[k[2:].replace("-", "_")].append(argv[i + 1])
             i += 2
         elif k in ("--dir", "--pack", "--out", "--family", "--effort", "--resume", "--agent-file", "--timeout",
-                   "--project", "--mode") and i + 1 < len(argv):
+                   "--project", "--mode", "--route", "--model") and i + 1 < len(argv):
             opts[k[2:].replace("-", "_")] = argv[i + 1]
+            opts["_given"].add(k[2:])
             i += 2
         else:
             raise SystemExit(f"run_isolated: unknown or incomplete option {k}")
     if opts["family"] not in ("claude", "codex", "auto"):
         raise SystemExit("run_isolated: --family is claude, codex, or auto")
+    for g in opts["require_read"]:
+        if not g or Path(g).is_absolute() or ".." in Path(g).parts:
+            raise SystemExit(f"run_isolated: --require-read {g!r} must be a glob inside --dir (relative, without ..)")
     return opts
+
+
+def route_name(role, opts):
+    """This run's route (--route, or derived from the role and the mode the pack is rendered in) and its mode."""
+    import models  # noqa: E402
+    render = opts.get("render") or []
+
+    def given(flag):
+        return [render[i + 1] for i, a in enumerate(render[:-1]) if a == flag]
+    mode = opts.get("mode") or next(iter(given("--mode")), None)
+    return opts.get("route") or models.route_for(role, mode, "--previous" in render, given("--inputs")), mode
+
+
+def routing(role, opts):
+    """The route, model, and effort of this run (--route, --model, --effort over the derived route and the
+    table); models.ModelsError when the route or a value is not allowed."""
+    import models  # noqa: E402
+    route, mode = route_name(role, opts)
+    chosen = models.choose(route, opts.get("model"), opts["effort"] if "effort" in opts["_given"] else None)
+    chosen["route_from"] = "--route" if opts.get("route") else "derived from the role and mode"
+    chosen["sections"] = sorted(models.section_names(route) | ({mode} if mode else set()))
+    return chosen
+
+
+def route_record(summary, rt, opts):
+    """The routing fields of a summary: what was asked for, from where, what served, and whether they differ."""
+    if not rt:
+        return {}
+    rec = {"route": rt["route"], "route_from": rt["route_from"]}
+    if summary.get("family") == "codex":
+        rec.update({"route_applies": False, "route_note": "the Codex family keeps its own model and effort "
+                                                          f"(effort {opts['effort']}); the route and --model apply "
+                                                          "to the Claude family only"})
+        return rec
+    rec.update({"route_applies": True, "requested_model": rt["model"], "requested_effort": rt["effort"],
+                "model_source": rt["model_source"], "effort_source": rt["effort_source"]})
+    if summary.get("status") != "DRY_RUN" and "model" in summary:
+        served = summary.get("model")
+        rec["served_model"] = served
+        rec["model_mismatch"] = None if served is None else \
+            (rt["model"] != "default" and not str(served).startswith(rt["model"]))
+        if rec["model_mismatch"]:
+            print(f"run_isolated: asked for {rt['model']}, served by {served}", file=sys.stderr)
+    return rec
+
+
+def unread(workdir, globs, read_paths):
+    """The files the globs match inside workdir that no Read call opened, relative to workdir."""
+    wd = Path(workdir).resolve()
+    opened = set()
+    for p in read_paths:
+        try:
+            opened.add((Path(p) if os.path.isabs(p) else wd / p).resolve())
+        except (OSError, RuntimeError):
+            continue
+    want = sorted({f.resolve() for g in globs for f in wd.glob(g) if f.is_file()})
+    out = []
+    for f in want:
+        if f not in opened:
+            try:
+                out.append(str(f.relative_to(wd)))
+            except ValueError:
+                out.append(str(f))
+    return out, len(want)
 
 
 def claude_cmd(role, opts, workdir, stem, sid):
@@ -514,11 +659,17 @@ def claude_cmd(role, opts, workdir, stem, sid):
     cfg_path.write_text(json.dumps(settings(role, workdir, opts["deny"], opts.get("project"), opts["allow_read"],
                                             opts["network"], private_tmp), indent=2))
     agents_file = Path(str(stem) + ".agents.json")
-    agent_path, agent_sha = agents_json(role, opts.get("agent_file"), agents_file)
+    rt = opts.get("_routing")
+    record = {}
+    agent_path, agent_sha = agents_json(role, opts.get("agent_file"), agents_file,
+                                        rt["sections"] if rt else None, record)
+    model, effort = (rt["model"], rt["effort"]) if rt else (opts.get("model") or "default", opts["effort"])
     cmd = ["claude", "-p", "--agents", str(agents_file), "--agent", role, "--restricted",
            "--tools", ",".join(ROLES[role]), "--disable-slash-commands", "--strict-mcp-config",
            "--permission-mode", "dontAsk", "--settings", str(cfg_path),
-           "--output-format", "stream-json", "--verbose", "--effort", opts["effort"]]
+           "--output-format", "stream-json", "--verbose", "--effort", effort]
+    if model != "default":
+        cmd += ["--model", model]  # "default" leaves the Claude Code default, as before routing
     stacks, protocols = stacks_dir(), protocols_dir()
     if role == "code-verifier":
         cmd += [x for d in (stacks, protocols) if d for x in ("--add-dir", str(d))]
@@ -531,7 +682,8 @@ def claude_cmd(role, opts, workdir, stem, sid):
     # root moves to this run's own folder.
     env["PYTEST_DEBUG_TEMPROOT"] = str(private_tmp)
     env["CHECKER_TMP"] = str(private_tmp)
-    return cmd, env, {"agent_file": str(agent_path), "agent_sha256": agent_sha, "private_tmp": str(private_tmp)}
+    return cmd, env, {"agent_file": str(agent_path), "agent_sha256": agent_sha, "private_tmp": str(private_tmp),
+                      **record}
 
 
 def codex_cmd(role, opts, workdir, stem, sid):
@@ -578,7 +730,11 @@ def run_once(role, family, opts, workdir, stem, pack):
                 return {"status": "UNAVAILABLE", "reason": extra["unavailable"], "family": "codex"}
             stdin = extra.pop("prefix") + pack
         else:
-            cmd, env, extra = claude_cmd(role, opts, workdir, stem, sid)
+            try:
+                cmd, env, extra = claude_cmd(role, opts, workdir, stem, sid)
+            except AgentError as exc:
+                return {"status": "ERROR", "reason": f"the agent definition cannot be cut to this run's mode: {exc}",
+                        "family": family}
             stdin = pack
         if opts.get("dry_run"):
             extra.pop("last_message", None)
@@ -662,13 +818,25 @@ def launch(role, family, opts, workdir, stem, cmd, env, extra, stdin, sid, resul
         status = "INCONCLUSIVE"
     else:
         status = "OK"
+    why, required = None, None
+    if opts.get("require_read"):
+        required = {"globs": opts["require_read"], "checked": family == "claude"}
+        if family != "claude":
+            required["why_not"] = "the Codex stream has no Read tool calls to check"
+        else:
+            unopened, required["files"] = unread(workdir, opts["require_read"], info.get("read_paths") or [])
+            required["unopened"] = unopened
+            if status == "OK" and unopened:
+                status, why = "INCONCLUSIVE", "did not open: " + ", ".join(unopened)
     return {"status": status, "family": family, "exit_code": code, "session_id": info["session_id"] or sid,
+            **({"reason": why} if why else {}), **({"require_read": required} if required else {}),
             "model": info["model"], "tool_uses": info["tool_uses"], "turns": info["turns"], "usage": info.get("usage"),
             "answers": info.get("answers"), "output_limit_cuts": info.get("output_limit_cuts"),
             "unrecognized_synthetic": info.get("unrecognized_synthetic"),
             "denials": info["denials"], "tools_seen": info.get("tools_seen"), "canary_hits": canary_hits,
             "unavailable_reason": reason, "errors": info.get("errors"), "stderr_tail": (err or "")[-400:],
             "agent_file": extra.get("agent_file"), "agent_sha256": extra.get("agent_sha256"),
+            **{k: extra[k] for k in ("prompt_sha256", "mode_sections") if k in extra},
             "confinement": "sandbox-exec profile (reads fenced to the copy and toolchains)" if family == "codex"
             else "claude --restricted + OS sandbox"}
 
@@ -746,6 +914,21 @@ def main(argv):
             Path(str(stem) + ".summary.json").write_text(json.dumps(summary, indent=2))
             print(json.dumps(summary, indent=2))
             return 1
+    import models  # noqa: E402
+    try:
+        opts["_routing"] = rt = routing(role, opts)
+    except models.ModelsError as exc:
+        if opts["family"] != "codex":
+            if auto_dir:
+                shutil.rmtree(workdir, ignore_errors=True)
+            summary = {"status": "ERROR", "role": role, "reason": f"model routing: {exc}",
+                       "route": route_name(role, opts)[0]}
+            print(f"run_isolated: model routing: {exc}", file=sys.stderr)
+            Path(str(stem) + ".summary.json").write_text(json.dumps(summary, indent=2))
+            print(json.dumps(summary, indent=2))
+            return 1
+        rt = None  # the Codex family keeps its own model and effort; the routing problem is still on record
+        opts["_route_error"] = str(exc)
     pack_path = Path(str(stem) + ".pack.md")
     if "render" in opts:
         render = list(opts["render"])
@@ -777,6 +960,10 @@ def main(argv):
             return 3
         summary.update({"role": role, "mode": opts.get("mode") or "review", "pack_sha256": pack_sha,
                         "workdir": str(workdir), "pack_missing": missing})
+        summary.update(route_record(summary, rt, opts))
+        if opts.get("_route_error"):
+            summary.update({"route": route_name(role, opts)[0], "route_applies": False,
+                            "route_error": opts["_route_error"]})
         if auto_dir:
             shutil.rmtree(workdir, ignore_errors=True)
         Path(str(stem) + ".summary.json").write_text(json.dumps(summary, indent=2))

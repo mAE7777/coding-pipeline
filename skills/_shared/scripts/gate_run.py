@@ -22,8 +22,15 @@ Order:
   5. the demo: code-verifier in demo mode on the untouched demo copy
   6. gate-judge on a verdict folder holding copies of every result and capture
   7. gate_report.py computes the verdict; the copies are deleted (their manifest stays in the evidence)
-A checker that ends ERROR or INCONCLUSIVE is re-run once. Every step runs in its own process group, stopped
-whole when it overruns or the round is stopped. A heavy step counts as NOT_RUN (the round INCONCLUSIVE) only
+Each checker step passes its models.json route to run_isolated.py (code-verifier.review, loyal-evaluator,
+code-verifier.demo, gate-judge), which picks the model and effort. The judge gets --require-read 'captures/*'
+when the verdict folder holds captures, so a judge that never opens one is INCONCLUSIVE.
+A checker that ends ERROR or INCONCLUSIVE is re-run once, never more. When its route asked for another model
+than models.json's escalate model, or a lower effort, the re-run moves to the escalate model and effort, and the
+step's summary records escalated: true with the reason (a retry that is not escalated records why not). The
+evaluator's later passes resume pass 1's session, so they run on the model and effort pass 1 actually ran with
+(read from its summary; recorded as follows_pass1) and are never escalated.
+Every step runs in its own process group, stopped whole when it overruns or the round is stopped. A heavy step counts as NOT_RUN (the round INCONCLUSIVE) only
 when heavy.py says BUSY, BLOCKED, or TIMEOUT, or this runner stopped it; any other exit is the step's own result.
 A round that breaks writes verdict ERROR with the cause. Exit 0 when a verdict was written, 1 when the
 round could not start (not frozen, another gate running) or broke, 2 on bad usage.
@@ -51,6 +58,7 @@ sys.path.insert(0, str(HERE))
 from fingerprint import fingerprint  # noqa: E402
 from gate_keys import commands, read_keys  # noqa: E402
 import local_only  # noqa: E402
+import models  # noqa: E402
 from project_policy import read as policy, valid, require, OFF_TEXT  # noqa: E402
 
 PY = sys.executable
@@ -208,7 +216,44 @@ def layer1(r, review, keys):
     return status
 
 
-def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, attempts=2):
+def ran_with(summary):
+    """The --model and --effort flags that repeat the model and effort a run asked for (a resumed pass keeps
+    them), and the record of them; empty when the summary does not say."""
+    model, effort = summary.get("requested_model"), summary.get("requested_effort")
+    if not model or not effort:
+        return [], None
+    return (["--model", model] if model != "default" else []) + ["--effort", effort], {"model": model, "effort": effort}
+
+
+def escalation(first, route, resumed):
+    """The flags for the retry after attempt 1 ended ERROR or INCONCLUSIVE, and the record of why. A routed role
+    moves to models.json's escalate model and effort unless it already ran there; a resumed pass stays put."""
+    said = f"attempt 1 ended {first.get('status')}" + (f" ({str(first.get('reason'))[:200]})" if first.get("reason") else "")
+    if resumed:
+        return [], {"escalated": False, "escalation_reason": f"{said}; a resumed pass stays on pass 1's model and effort"}
+    if first.get("route_applies") is False:
+        return [], {"escalated": False, "escalation_reason": f"{said}; the Codex family keeps its own model and effort"}
+    try:
+        esc = models.resolve(route)["escalate"]
+        model, effort = first.get("requested_model"), first.get("requested_effort")
+        if not model or not effort:  # attempt 1 left no routing record: what its route resolves to
+            chosen = models.choose(route)
+            model, effort = chosen["model"], chosen["effort"]
+    except models.ModelsError as exc:
+        return [], {"escalated": False, "escalation_reason": f"{said}; no escalation, model routing failed: {exc}"}
+    why = models.escalation(model, effort, esc)
+    if not why:
+        return [], {"escalated": False, "escalation_reason": f"{said}; retried as routed ({model}, {effort}), "
+                                                              "nothing to escalate"}
+    return ["--model", esc["model"], "--effort", esc["effort"]], {
+        "escalated": True, "escalation_reason": f"{said}; {why}, so the retry runs on {esc['model']} at {esc['effort']}",
+        "first_attempt": {k: first.get(k) for k in ("status", "reason", "requested_model", "requested_effort",
+                                                      "served_model")}}
+
+
+def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, attempts=2, route=None, pin=None):
+    """One checker step through run_isolated.py, re-run once when it ends ERROR or INCONCLUSIVE (never more).
+    route names its models.json route; pin (a resumed pass) repeats pass 1's model and effort."""
     keys = read_keys(r.project)
     fence = [x for host in keys.get("Gate network") or [] for x in ("--network", host)] + \
         [x for path in keys.get("Gate read allow") or [] for x in ("--allow-read", path)]
@@ -220,19 +265,32 @@ def isolated(r, role, workdir, render_args, extra=(), mode=None, resume=None, at
         cmd += ["--resume", resume]
     if r.agents_dir:
         cmd += ["--agent-file", str(Path(r.agents_dir) / f"{role}.md")]
+    route = route or models.route_for(role, mode)
+    cmd += ["--route", route]
+    pin_flags, pinned = ran_with(pin) if pin else ([], None)
+    cmd += pin_flags
     pass_no = render_args[render_args.index("--pass") + 1] if "--pass" in render_args[:-1] else None
     stem = f"{role}{'-demo' if mode == 'demo' else ''}" + \
         ((f"-pass{pass_no}" if pass_no and pass_no != "1" else "-pass2") if resume else "")
-    summary = {}
+    summary, bump, record = {}, [], {}
     for attempt in range(1, attempts + 1):
-        run(cmd, timeout=4000)
+        run(cmd + bump, timeout=4000)
         try:
             summary = json.loads((r.ev / f"{stem}.summary.json").read_text())
         except (OSError, ValueError):
             summary = {"status": "ERROR", "reason": "no summary written"}
-        r.say(f"  {stem}: {summary.get('status')} (attempt {attempt}, tools {summary.get('tool_uses')})")
+        r.say(f"  {stem}: {summary.get('status')} (attempt {attempt}, tools {summary.get('tool_uses')}, "
+              f"{summary.get('requested_model', '?')} {summary.get('requested_effort', '?')})")
         if summary.get("status") not in ("ERROR", "INCONCLUSIVE"):
             break
+        if attempt < attempts:
+            bump, record = escalation(summary, route, bool(resume))
+            r.say(f"  {stem}: retry: {record['escalation_reason']}")
+    record.update({"follows_pass1": pinned} if pinned else {})
+    if record:
+        summary.update(record)
+        if (r.ev / f"{stem}.summary.json").is_file():
+            (r.ev / f"{stem}.summary.json").write_text(json.dumps(summary, indent=2))
     return summary
 
 
@@ -323,24 +381,26 @@ def main(argv):
             if not intent_only:
                 r.say("code-verifier:")
                 isolated(r, "code-verifier", review, ["--project", str(project), "--milestone", mid, "--copy",
-                                                      str(review)], extra=["--family", r.family, "--canary", token])
+                                                      str(review)], extra=["--family", r.family, "--canary", token],
+                         route="code-verifier.review")
             r.say("loyal-evaluator:")
             blind = Path(copies["blind"]["path"])
             p1 = isolated(r, "loyal-evaluator", blind, ["--project", str(project), "--pass", "1"],
-                          extra=["--canary", token])
+                          extra=["--canary", token], route="loyal-evaluator")
             if p1.get("status") == "OK" and p1.get("session_id"):
+                # The later passes resume pass 1's session: same model and effort as pass 1 actually ran with.
                 p2 = isolated(r, "loyal-evaluator", blind, ["--project", str(project), "--pass", "2"],
-                              extra=["--canary", token], resume=p1["session_id"])
+                              extra=["--canary", token], resume=p1["session_id"], route="loyal-evaluator", pin=p1)
                 if intent_only and p2.get("status") == "OK":
                     # No reviewer runs in an intent check, so after the blind passes the same evaluator confirms
                     # every named item directly: completeness never depends on what a blind run happened to try.
                     isolated(r, "loyal-evaluator", blind, ["--project", str(project), "--pass", "3", "--milestone", mid],
-                             extra=["--canary", token], resume=p1["session_id"])
+                             extra=["--canary", token], resume=p1["session_id"], route="loyal-evaluator", pin=p1)
             demo = Path(copies["demo"]["path"])
             if not intent_only:
                 r.say("demo:")
                 isolated(r, "code-verifier", demo, ["--project", str(project), "--milestone", mid, "--mode", "demo"],
-                         extra=["--canary", token], mode="demo")
+                         extra=["--canary", token], mode="demo", route="code-verifier.demo")
             verdict_dir = Path(base) / "verdict"
             verdict_dir.mkdir()
             inputs = []
@@ -354,10 +414,14 @@ def main(argv):
             if captures.is_dir():
                 shutil.copytree(captures, verdict_dir / "captures")
                 shutil.copytree(captures, r.ev / "captures", dirs_exist_ok=True)
+            # The judge must open every capture it is handed (its own minimum tool count is 0).
+            has_captures = (verdict_dir / "captures").is_dir() and \
+                any(p.is_file() for p in (verdict_dir / "captures").iterdir())
             r.say("gate-judge:")
             isolated(r, "gate-judge", verdict_dir, ["--project", str(project), "--milestone", mid, "--round", str(r.n),
                                                      *inputs] + (["--intent-only"] if intent_only else []),
-                     extra=["--canary", token])
+                     extra=["--canary", token] + (["--require-read", "captures/*"] if has_captures else []),
+                     route="gate-judge")
         r.say("report:")
         code, out = run([PY, str(HERE / "gate_report.py"), str(project), "--milestone", mid, "--round", str(r.n),
                          "--evidence", str(r.ev), "--fingerprint", fp] + (["--intent-only"] if intent_only else []))

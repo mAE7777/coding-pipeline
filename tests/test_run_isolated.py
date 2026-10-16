@@ -528,6 +528,231 @@ class StopAndSandboxTest(unittest.TestCase):
             self.assertEqual(list((Path(d) / ".gate-copies").glob("tmp-*")), [], "stopping the run removes it")
 
 
+FAKE_CLAUDE_ROUTED = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+sys.stdin.read()
+served = os.environ.get("FAKE_SERVED") or (args[args.index("--model") + 1] if "--model" in args else "claude-default-x")
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "S9", "model": served, "tools": ["Read"]}))
+for f in [x for x in os.environ.get("FAKE_READS", "").split(",") if x]:
+    path = f[4:] if f.startswith("rel:") else os.path.join(os.getcwd(), f)  # rel: passes the path as written
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Read", "input": {"file_path": path}}]}}))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Grep",
+                                                              "input": {"pattern": "x"}}]}}))
+error = os.environ.get("FAKE_ERROR") == "1"
+print(json.dumps({"type": "result", "result": None if error else "verdict", "num_turns": 2, "is_error": error,
+                  "permission_denials": []}))
+'''
+
+AGENT_WITH_MODES = """---
+name: code-verifier
+description: test agent with mode sections
+---
+Common opening.
+
+<!-- mode: review -->
+REVIEW TEXT
+<!-- end mode -->
+
+<!-- mode: demo -->
+DEMO TEXT
+<!-- end mode -->
+
+<!-- mode: reverify, refix -->
+REVERIFY TEXT
+<!-- end mode -->
+
+Common closing.
+"""
+
+
+class RoutingTest(unittest.TestCase):
+    """Model and effort routing, mode sections, and --require-read (no model calls; a stand-in claude)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.home = self.d / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.bin = self.d / "bin"
+        self.bin.mkdir()
+        (self.bin / "claude").write_text(FAKE_CLAUDE_ROUTED)
+        os.chmod(self.bin / "claude", 0o755)
+        self.work = self.d / "work"
+        self.work.mkdir()
+        (self.d / "pack.md").write_text("pack")
+        self.env = {k: v for k, v in os.environ.items() if k != "PIPELINE_MODELS_IGNORE_OVERRIDE"}
+        self.env.update({"HOME": str(self.home), "PATH": f"{self.bin}:{os.environ['PATH']}",
+                         "HEAVY_LOCK_DIR": str(self.d / "lock")})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_ri(self, role, *extra, env=None, agent_file=None):
+        ev = self.d / "ev"
+        out = subprocess.run([sys.executable, str(RI), role, "--dir", str(self.work), "--pack", str(self.d / "pack.md"),
+                              "--out", str(ev), "--agent-file", str(agent_file or AGENTS / f"{role}.md"), *extra],
+                             capture_output=True, text=True, env={**self.env, **(env or {})}, timeout=120)
+        stems = sorted(ev.glob("*.summary.json"), key=lambda p: p.stat().st_mtime) if ev.is_dir() else []
+        summary = json.loads(stems[-1].read_text()) if stems else {"err": out.stderr}
+        return out, summary
+
+    def override(self, routes):
+        (self.home / ".claude/.pipeline-models.json").write_text(json.dumps({"routes": routes}))
+
+    def test_model_flag_only_when_a_model_is_named(self):
+        out, s = self.run_ri("loyal-evaluator", "--dry-run")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("--model", s["cmd"], "the default route leaves the Claude Code default")
+        self.assertEqual(s["cmd"][s["cmd"].index("--effort") + 1], "xhigh")
+        self.assertEqual((s["route"], s["requested_model"], s["requested_effort"], s["model_source"]),
+                         ("loyal-evaluator", "default", "xhigh", "repo"))
+        out, s = self.run_ri("loyal-evaluator", "--dry-run", "--model", "claude-sonnet-5-5", "--effort", "low")
+        self.assertEqual(s["cmd"][s["cmd"].index("--model") + 1], "claude-sonnet-5-5")
+        self.assertEqual(s["cmd"][s["cmd"].index("--effort") + 1], "low")
+        self.assertEqual((s["model_source"], s["effort_source"]), ("flag", "flag"))
+        agents = json.loads((self.d / "ev/loyal-evaluator.agents.json").read_text())
+        self.assertEqual(set(agents["loyal-evaluator"]), {"description", "prompt"}, "model and effort are CLI flags")
+
+    def test_the_route_and_the_override_pick_the_model(self):
+        self.override({"code-verifier.demo": {"model": "claude-sonnet-5-5", "effort": "high"}})
+        out, s = self.run_ri("code-verifier", "--dry-run", "--mode", "demo")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        cmd = s["cmd"]
+        self.assertEqual((cmd[cmd.index("--model") + 1], cmd[cmd.index("--effort") + 1]), ("claude-sonnet-5-5", "high"))
+        self.assertEqual((s["route"], s["model_source"], s["route_from"]),
+                         ("code-verifier.demo", "override", "derived from the role and mode"))
+        out, s = self.run_ri("code-verifier", "--dry-run", "--mode", "demo",
+                             env={"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"})
+        self.assertNotIn("--model", s["cmd"], "the benchmarks measure the repository table")
+        out, s = self.run_ri("code-verifier", "--dry-run", "--route", "code-verifier.review")
+        self.assertEqual((s["route"], s["route_from"]), ("code-verifier.review", "--route"))
+
+    def test_route_derivation_follows_the_pack(self):
+        def name(role, **opts):
+            return ri.route_name(role, opts)[0]
+        self.assertEqual(name("cold-reader", render=["--with-record", "--docs", "a.md", "--"]), "cold-reader.documents")
+        self.assertEqual(name("cold-reader", render=["--docs", "a.md", "--previous", "r.md"]), "cold-reader.reread")
+        self.assertEqual(name("cold-reader", render=["--milestone", "M1", "--inputs", "understanding"]),
+                         "cold-reader.understanding")
+        self.assertEqual(name("cold-reader", render=["--mode", "extract", "--docs", "t.md"]), "cold-reader.extract")
+        self.assertEqual(name("cold-reader", render=["--mode", "fidelity", "--docs", "t.md"]), "cold-reader.fidelity")
+        self.assertEqual(name("cold-reader", render=["--mode", "fidelity", "--docs", "t.md", "--previous", "r.md"]),
+                         "cold-reader.refidelity")
+        self.assertEqual(name("code-verifier", mode="demo", render=["--mode", "demo"]), "code-verifier.demo")
+        self.assertEqual(name("code-verifier", render=["--milestone", "M1", "--copy", "/c"]), "code-verifier.review")
+        self.assertEqual(name("loyal-evaluator", render=["--pass", "2"]), "loyal-evaluator")
+        self.assertEqual(name("claim-verifier", render=["--inputs", "claims.md"]), "claim-verifier")
+        self.assertEqual(name("cold-reader", route="cold-reader.reread"), "cold-reader.reread")
+
+    def test_a_route_that_cannot_resolve_is_an_error_with_its_reason(self):
+        for extra, words in ((["--route", "nope"], "unknown route 'nope'"),
+                             (["--model", "claude-fable-5"], "Fable or Mythos"),
+                             (["--model", "claude-opus-4-1"], "not allowed"),
+                             (["--route", "explorer"], "builder-side")):
+            out, s = self.run_ri("gate-judge", "--dry-run", *extra)
+            self.assertEqual(out.returncode, 1, extra)
+            self.assertEqual(s["status"], "ERROR", extra)
+            self.assertIn(words, s["reason"], extra)
+            self.assertIn("model routing", out.stderr)
+        self.override({"gate-judge": {"model": "claude-mythos-1"}})
+        out, s = self.run_ri("gate-judge", "--dry-run")
+        self.assertEqual((s["status"], s["route"]), ("ERROR", "gate-judge"))
+        self.assertIn("route gate-judge", s["reason"])
+
+    def test_the_codex_family_records_the_route_without_applying_it(self):
+        (self.bin / "codex").write_text(FAKE_CODEX_OK)
+        os.chmod(self.bin / "codex", 0o755)
+        out, s = self.run_ri("code-verifier", "--dry-run", "--family", "codex", "--model", "claude-sonnet-5-5")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual((s["family"], s["route"], s["route_applies"]), ("codex", "code-verifier.review", False))
+        self.assertNotIn("requested_model", s)
+        self.assertNotIn("claude-sonnet-5-5", s["cmd"])
+        self.assertIn('model_reasoning_effort="xhigh"', s["cmd"], "the Codex command is as before")
+        out, s = self.run_ri("code-verifier", "--dry-run", "--family", "codex", "--model", "claude-fable-5")
+        self.assertEqual(s["status"], "DRY_RUN", "a Claude routing problem does not stop a Codex run")
+        self.assertEqual((s["route"], s["route_applies"]), ("code-verifier.review", False))
+        self.assertIn("Fable or Mythos", s["route_error"], "but it stays on record")
+
+    def test_the_summary_records_what_was_asked_and_what_served(self):
+        out, s = self.run_ri("loyal-evaluator", "--model", "claude-sonnet-5-5")
+        self.assertEqual(s["status"], "OK", out.stderr[-500:])
+        self.assertEqual((s["requested_model"], s["served_model"], s["model_mismatch"]),
+                         ("claude-sonnet-5-5", "claude-sonnet-5-5", False))
+        out, s = self.run_ri("loyal-evaluator", "--model", "claude-sonnet-5-5", env={"FAKE_SERVED": "claude-opus-5-5"})
+        self.assertTrue(s["model_mismatch"])
+        self.assertIn("asked for claude-sonnet-5-5, served by claude-opus-5-5", out.stderr)
+        out, s = self.run_ri("loyal-evaluator", env={"FAKE_SERVED": "claude-opus-5-5-20261001"})
+        self.assertEqual((s["requested_model"], s["served_model"], s["model_mismatch"]),
+                         ("default", "claude-opus-5-5-20261001", False))
+        prompt = json.loads((self.d / "ev/loyal-evaluator.agents.json").read_text())["loyal-evaluator"]["prompt"]
+        self.assertEqual(s["prompt_sha256"], ri.hashlib.sha256(prompt.encode()).hexdigest())
+        self.assertEqual(len(s["agent_sha256"]), 64)
+
+    def test_mode_sections_keep_the_common_text_and_this_runs_mode(self):
+        agent = self.d / "code-verifier.md"
+        agent.write_text(AGENT_WITH_MODES)
+        out, s = self.run_ri("code-verifier", "--dry-run", "--mode", "demo", agent_file=agent)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        prompt = json.loads((self.d / "ev/code-verifier-demo.agents.json").read_text())["code-verifier"]["prompt"]
+        self.assertEqual(prompt, "Common opening.\n\nDEMO TEXT\n\nCommon closing.")
+        self.assertEqual(s["mode_sections"], {"kept": ["demo"], "dropped": ["refix", "reverify", "review"]})
+        self.assertEqual(s["prompt_sha256"], ri.hashlib.sha256(prompt.encode()).hexdigest())
+        out, s = self.run_ri("code-verifier", "--dry-run", "--route", "code-verifier.reverify", agent_file=agent)
+        prompt = json.loads((self.d / "ev/code-verifier.agents.json").read_text())["code-verifier"]["prompt"]
+        self.assertIn("REVERIFY TEXT", prompt)
+        self.assertIn("REVIEW TEXT", prompt, "a re-verify keeps the review sections (its earlier name)")
+        self.assertNotIn("DEMO TEXT", prompt)
+        self.assertNotIn("<!--", prompt)
+
+    def test_a_body_without_markers_is_unchanged(self):
+        for role in ("cold-reader", "code-verifier", "gate-judge"):
+            path, meta, body = ri.read_agent(role, str(AGENTS / f"{role}.md"))
+            self.assertEqual(ri.mode_sections(body, {"documents", "demo"}), (body, None))
+            self.assertEqual(ri.read_agent(role, str(AGENTS / f"{role}.md"), {"x"})[2], body)
+
+    def test_broken_mode_markers_are_named(self):
+        for body, words in (("a\n<!-- mode: demo -->\nb", "never closed"),
+                            ("a\n<!-- end mode -->", "without an open"),
+                            ("<!-- mode: a -->\n<!-- mode: b -->\n<!-- end mode -->", "inside another")):
+            with self.assertRaises(ri.AgentError) as cm:
+                ri.mode_sections(body, {"a"})
+            self.assertIn(words, str(cm.exception))
+        agent = self.d / "code-verifier.md"
+        agent.write_text("---\nname: code-verifier\ndescription: x\n---\nA\n<!-- mode: demo -->\nB\n")
+        out, s = self.run_ri("code-verifier", "--mode", "demo", agent_file=agent)
+        self.assertEqual(s["status"], "ERROR")
+        self.assertIn("never closed", s["reason"])
+
+    def test_require_read_needs_every_matching_file_opened(self):
+        (self.work / "captures").mkdir()
+        for name in ("M1-1.png", "M1-2.txt"):
+            (self.work / "captures" / name).write_text("x")
+        out, s = self.run_ri("gate-judge", "--require-read", "captures/*", env={"FAKE_READS": "captures/M1-1.png"})
+        self.assertEqual(s["status"], "INCONCLUSIVE", out.stderr[-300:])
+        self.assertEqual(s["reason"], "did not open: captures/M1-2.txt")
+        self.assertEqual(out.returncode, 1)
+        out, s = self.run_ri("gate-judge", "--require-read", "captures/*",
+                             env={"FAKE_READS": f"captures/M1-1.png,rel:captures/M1-2.txt"})
+        self.assertEqual(s["status"], "OK", s)
+        self.assertEqual(s["require_read"]["files"], 2)
+        out, s = self.run_ri("gate-judge", "--require-read", "captures/*", env={"FAKE_ERROR": "1"})
+        self.assertEqual(s["status"], "ERROR", "a run that did not end OK keeps its own status")
+        out, s = self.run_ri("gate-judge", "--require-read", "none/*")
+        self.assertEqual(s["status"], "OK", "a glob that matches nothing asks for nothing")
+        for bad in ("/etc/*", "../x/*"):
+            out, _ = self.run_ri("gate-judge", "--require-read", bad)
+            self.assertEqual(out.returncode, 2, bad)
+
+    def test_read_paths_come_from_read_tool_calls(self):
+        lines = [json.dumps({"type": "assistant", "message": {"content": [
+                     {"type": "tool_use", "name": "Read", "input": {"file_path": "/w/a.png"}},
+                     {"type": "tool_use", "name": "Grep", "input": {"path": "/w/b.txt"}}]}}),
+                 json.dumps({"type": "result", "result": "ok", "num_turns": 1, "is_error": False})]
+        self.assertEqual(ri.parse_claude_stream(lines)["read_paths"], ["/w/a.png"])
+
+
 class ProjectServerTest(unittest.TestCase):
     def test_server_from_the_real_project_blocks(self):
         with tempfile.TemporaryDirectory() as d:
