@@ -9,8 +9,11 @@ copies it to a fresh work folder under ~/.gate-copies/fixtures/, prepares the ch
 the gate does (gate_copies.py review or blind copy, a verdict folder, or a documents folder), renders the
 pack with render_pack.py, runs the checker with run_isolated.py (the agent file from this repository unless
 --installed; --model <id> passed on as run_isolated.py --model <id>, for both passes of a two-pass checker),
-and checks the checker's final JSON block against the fixture's expectations. Canary strings planted in the
-project's intent and in files outside the checker's copy must never appear in its output.
+and checks the checker's final JSON block against the fixture's expectations (which also see the checker's
+folder, so a demo step's capture can be checked to exist). Canary strings planted in the project's intent and
+in files outside the checker's copy must never appear in its output. A judge whose folder holds captures runs
+with --require-read 'captures/*', as gate_run.py runs it. A fixture marked "browser" needs Playwright for
+python3 (browse.py drives the page); without it the run is recorded as missed and no model is called.
 Results go to <repo>/.evidence/fixtures/<name>/run-<n>/ and a table is printed. A fixture passes only if
 every run passes. Exit 0 if all pass, 1 otherwise.
 
@@ -83,6 +86,33 @@ def prepare(spec, project, work):
     return target, {}
 
 
+def render_args(spec, project, workdir):
+    """The render_pack.py arguments (after the role) of a fixture without a pack of its own."""
+    render = ["--project", str(project), *spec.get("render", [])]
+    return [a.replace("{copy}", str(workdir)).replace("{project}", str(project)) for a in render]
+
+
+def embedded_pack(spec, project):
+    """The text of a fixture's own pack, with {project} and every {repo:<path>} (a file of this repository) filled."""
+    text = (project / spec["pack"]).read_text().replace("{project}", str(project))
+    return re.sub(r"\{repo:([^}]+)\}", lambda m: (REPO / m.group(1)).read_text(), text)
+
+
+def judge_captures(spec, workdir):
+    """--require-read for a judge whose folder holds captures, as gate_run.py passes it: a judge that never opens
+    one is INCONCLUSIVE."""
+    caps = Path(workdir) / "captures"
+    has = spec["role"] == "gate-judge" and caps.is_dir() and any(p.is_file() for p in caps.iterdir())
+    return ["--require-read", "captures/*"] if has else []
+
+
+def browser_missing():
+    """Why browse.py cannot start a browser on this machine (no Playwright for python3), or None."""
+    r = run(["python3", "-c", "import playwright.sync_api"])
+    return None if r.returncode == 0 else "this machine has no Playwright for python3, so browse.py cannot start a " \
+                                          "browser (pip install playwright; python3 -m playwright install chromium)"
+
+
 def run_usage(ev):
     """(raw usage by served model, served models, escalated) over every summary of one run (both passes): each
     summary's usage under its served model (served_model, else model, else "unknown"; a Codex run's under
@@ -149,6 +179,10 @@ def run_one(name, spec, n, installed, effort, model=None):
     if ev.exists():
         shutil.rmtree(ev)
     ev.mkdir(parents=True)
+    no_browser = spec.get("browser") and browser_missing()
+    if no_browser:  # a run that cannot drive the page is a miss, never a paid run
+        shutil.rmtree(work, ignore_errors=True)
+        return record(name, spec, n, ev, [no_browser], False, None)
     if spec["role"] == "code-verifier" and spec.get("mode") != "demo":
         run([sys.executable, str(SCRIPTS / "baseline.py"), "record", str(project), spec.get("milestone", "M1")])
     try:
@@ -159,16 +193,14 @@ def run_one(name, spec, n, installed, effort, model=None):
            "--project", str(project), "--effort", effort]
     if spec.get("pack"):
         packed = ev / "fixture-pack.md"
-        text = (project / spec["pack"]).read_text().replace("{project}", str(project))
-        packed.write_text(re.sub(r"\{repo:([^}]+)\}", lambda m: (REPO / m.group(1)).read_text(), text))
+        packed.write_text(embedded_pack(spec, project))
         (project / spec["pack"]).unlink()
         cmd += ["--pack", str(packed)]
     else:
-        render = ["--project", str(project), *spec.get("render", [])]
-        render = [a.replace("{copy}", str(workdir)).replace("{project}", str(project)) for a in render]
-        cmd += ["--render", *render, "--"]
+        cmd += ["--render", *render_args(spec, project, workdir), "--"]
     for c in spec.get("canaries", []):
         cmd += ["--canary", c]
+    cmd += judge_captures(spec, workdir)
     if spec.get("mode"):
         cmd += ["--mode", spec["mode"]]
     if spec.get("agent"):
@@ -206,7 +238,7 @@ def run_one(name, spec, n, installed, effort, model=None):
             problems.append(f"pass 2 runner status {s2.get('status')}")
         v2 = last_json((ev / f"{stem}-pass2.result.md").read_text(), 2) if (ev / f"{stem}-pass2.result.md").exists() else None
         verdict = {"pass1": verdict, "pass2": v2}
-    ctx = {"summary": summary, "result": result_text}
+    ctx = {"summary": summary, "result": result_text, "dir": str(workdir)}  # dir: the checker's folder (its captures)
     judged = True
     if spec.get("no_json"):
         problems += spec["expect"](verdict or {}, ctx)
