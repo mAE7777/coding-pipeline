@@ -4,10 +4,15 @@
 Replaces a full-project `tsc --noEmit` after every single edit (steady heat and latency on large repos).
 At the end of a turn, if any .ts/.tsx file changed since this hook last ran in this session (git's view of
 the working tree, or file times outside git), it runs `npx --no-install tsc --noEmit` once, through the
-heavy-job lock owned by this session and with the lock's own timeout (so tsc never outlives the lock),
-and reports the errors that fall in the changed files as a system message. It never blocks the stop.
-When it cannot run (TypeScript not installed, the lock busy, a timeout), it says so as NOT_RUN instead of
-staying silent.
+heavy-job lock owned by this session and with the lock's own timeout (so tsc never outlives the lock).
+Errors that fall in the files changed this turn go to the model as the Stop hook's additionalContext
+({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": ...}}), so it continues the turn and
+fixes them; the owner sees a one-line note that they were sent. When the payload says stop_hook_active (the
+turn already continued once because of a Stop hook), the same errors go to the owner as a system message
+only, so the hook can never keep a turn going in a loop. Errors in other files are summarized for the owner
+as a system message and never sent to the model. When it cannot run (TypeScript not installed, the lock
+busy, a timeout), it says so as NOT_RUN in a system message instead of staying silent. An internal error is
+reported the same way; the stop always goes ahead.
 """
 import json
 import os
@@ -92,12 +97,41 @@ def main():
     output = proc.stdout + proc.stderr
     if proc.returncode != 0 and "error TS" not in output:
         return say(f"Typecheck NOT_RUN: tsc could not run ({output.strip().splitlines()[-1][:120] if output.strip() else 'no output'}).")
-    errors = [l for l in output.splitlines() if "error TS" in l and any(f in l for f in files)]
-    if errors:
-        more = f" (+{len(errors) - 10} more)" if len(errors) > 10 else ""
-        return say("TypeScript errors in files changed this turn:\n" + "\n".join(errors[:10]) + more)
+    found = [l for l in output.splitlines() if "error TS" in l]
+    mine = [l for l in found if any(f in l for f in files)]
+    elsewhere = [l for l in found if l not in mine]
+    return report(mine, elsewhere, bool(data.get("stop_hook_active")))
+
+
+def listing(errors, limit):
+    return "\n".join(errors[:limit]) + (f"\n(+{len(errors) - limit} more)" if len(errors) > limit else "")
+
+
+def report(mine, elsewhere, already_continued):
+    """Errors in files changed this turn go to the model (unless a Stop hook already continued this turn); the
+    owner gets a system message for everything else, and a note of what was sent."""
+    out, notes = {}, []
+    if mine and not already_continued:
+        out["hookSpecificOutput"] = {"hookEventName": "Stop", "additionalContext": (
+            "TypeScript errors in files changed this turn (tsc --noEmit, run once at the end of the turn):\n"
+            + listing(mine, 10) + "\nFix them before ending the turn, or say plainly why one stays.")}
+        notes.append(f"Typecheck: {len(mine)} error(s) in files changed this turn were sent to the model to fix.")
+    elif mine:
+        notes.append("TypeScript errors in files changed this turn (not sent to the model again: this turn already "
+                     "continued once for a Stop hook):\n" + listing(mine, 10))
+    if elsewhere:
+        notes.append(f"Typecheck: {len(elsewhere)} error(s) in files not changed this turn (not sent to the model):\n"
+                     + listing(elsewhere, 3))
+    if notes:
+        out["systemMessage"] = "\n".join(notes)
+    if out:
+        print(json.dumps(out))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as exc:  # the hook must never hold the stop back because of its own bug, nor fail silently
+        say(f"typecheck-once hit an internal error and let the turn end: {exc.__class__.__name__}: {exc}")
+        sys.exit(0)
