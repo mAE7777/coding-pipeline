@@ -2,7 +2,8 @@
 
 Loaded by `/plan` when writing `docs/project/milestones.md`. A milestone is a complete product state a real
 person can use end to end, proven by a demo they can watch, built as one sustained run, verified at its
-gate, accepted by the owner. The format is in the template; `milestone_lint.py` enforces it.
+gate, accepted by the owner. The format is in the template; `milestone_lint.py` enforces it and states each
+rule in the message of the check that fails.
 
 ## Laws
 - **A demo, not a list.** Each milestone ends with a numbered demo: steps a viewer watches, each with an
@@ -18,6 +19,8 @@ gate, accepted by the owner. The format is in the template; `milestone_lint.py` 
 - **Carried examples.** Each milestone names the product-level done examples (I-Dn) it carries and the
   mechanism cards it exercises; together the milestones carry every I-Dn, or an example is a named non-goal
   with a reason. The gate scores a milestone on what it carries plus every must-not-lose item.
+- **Operating objective** (optional, after the Promise): what the milestone favors when two good choices
+  conflict (offline correctness over sync speed, say), so the builder's trade-offs follow it.
 - **One sustained run.** One builder can hold the contract and finish it in one run. A small tool is one
   milestone; a product is usually two to five.
 - **No "later".** Everything is in a milestone, a named non-goal with a reason, or blocked by a named
@@ -47,6 +50,28 @@ milestone can be built but not called ready for real use.
 ## Readiness
 `built · gate-passed · accepted · released · live-verified`, plus the real-world evidence the milestone
 still needs ("real-use needs"). These are different words for different facts: never collapse them.
+
+## Mechanism cards and their shape
+A card may carry `Reversibility: one-way` (undoing it after release means migrating data, breaking its users,
+or rebuilding: a storage format, a sync protocol, a public interface) or `two-way`. A one-way card, or any
+card the owner asks about, goes through the architect arena before the lock: phases A and B of
+`~/.claude/skills/craft/design/architect.md`, two runners on the `architect-runner` route (Opus 5.5 at xhigh,
+Sonnet 5.5 at high). Save the synthesized sketch and its rationale as `docs/project/research/design-<card>.md`
+(outside the product tree: no product code comes before the lock), list it in the brief's Context index, and
+check the card's guarantee and probe against it. Not in `/plan adopt`, which uses no helper agents and
+describes what exists. Every other card's shape is screened by the builder when it is built, with
+`~/.claude/skills/craft/design/design-red-flags.md` and `rationale-template.md`.
+
+## Idea-anchor closure
+When an upstream idea anchor exists, `milestones.md` ends with its closure, every anchor item in one of three
+states; a product with blueprint parts adds `Parts: [P1] [P3]` under each milestone's Mechanisms line.
+
+    ## Idea-anchor closure
+    | Item | What it is | Where it lives |
+    |---|---|---|
+    | K1 | <anchor item> | IN-MILESTONE @M1 |
+    | K2 | <anchor item> | named non-goal (<reason>) |
+    | K3 | <anchor item> | contract-blocked @<decision or contract entry> |
 
 ## The cut, shown to the owner
 The recommended cut and the strongest alternative, each with what the person can do after each milestone,

@@ -98,12 +98,15 @@ class MilestoneLintTest(unittest.TestCase):
         code, out = run(bad)
         self.assertEqual(code, 1, out)
         self.assertIn("not a state", out)
+        self.assertIn("a named non-goal with a reason, or blocked by a named contract", out,
+                      "the message says where it goes")
 
     def test_parked_without_reenable_fails(self):
         bad = GOOD.replace("Parked:\n- none", "Parked:\n- src/share/ · purpose: sharing")
         code, out = run(bad)
         self.assertEqual(code, 1, out)
         self.assertIn("re-enable", out)
+        self.assertIn("'re-enable: <condition>', and 'owner: M<n>'", out, "the message gives the form")
 
     def test_non_goal_without_reason_fails(self):
         bad = GOOD.replace("(reason: no second persona in this product yet)", "")
@@ -114,11 +117,25 @@ class MilestoneLintTest(unittest.TestCase):
     def test_bad_status_fails(self):
         code, out = run(GOOD.replace("Status: building", "Status: almost"))
         self.assertEqual(code, 1, out)
+        for rule in ("the builder sets building and gate", "a gate report sets changes",
+                     "only an owner acceptance in decisions.md allows accepted", "keeps its section with a reason",
+                     "release is tracked in the Readiness line"):
+            self.assertIn(rule, out, "the message states who sets each status")
+
+    def test_missing_readiness_fails(self):
+        code, out = run(GOOD.replace("Readiness: built [ ]", "Ready: built [ ]"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("no 'Readiness:' line (built, gate-passed, accepted, released, live-verified", out)
+
+    def test_foreign_checkpoint_id_fails(self):
+        code, out = run(GOOD.replace("M1.C1", "M2.C1"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("checkpoint ID belongs to M2 (checkpoints are M<n>.C<k> of their own milestone)", out)
 
     def test_duplicate_id_fails(self):
         code, out = run(GOOD + "\n" + GOOD.split("# Milestones\n", 1)[1])
         self.assertEqual(code, 1, out)
-        self.assertIn("more than once", out)
+        self.assertIn("more than once (one '## M<n> \u00b7 <name>' section per milestone)", out)
 
     def test_foreign_done_id_fails(self):
         code, out = run(GOOD.replace("M1.D2", "M2.D2"))
@@ -235,6 +252,16 @@ class MilestoneLintTest(unittest.TestCase):
             out = subprocess.run([sys.executable, str(LINT), str(p)], capture_output=True, text=True)
             self.assertEqual(out.returncode, 1, out.stdout)
             self.assertIn("M1.D2 existed at HEAD", out.stdout)
+
+    def test_history_removed_milestone_names_the_dropped_form(self):
+        two = GOOD + "\n" + GOOD.split("# Milestones\n", 1)[1].replace("M1", "M2")
+        with tempfile.TemporaryDirectory() as d:
+            p = self._git_repo(d, two)
+            p.write_text(GOOD, encoding="utf-8")
+            out = subprocess.run([sys.executable, str(LINT), str(p)], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("M2 existed at HEAD and is gone (IDs are never removed or renumbered: keep its section, "
+                          "marked 'Status: dropped' with a reason)", out.stdout)
 
     def test_history_unchanged_passes(self):
         with tempfile.TemporaryDirectory() as d:
@@ -356,6 +383,7 @@ class MilestoneLintTest(unittest.TestCase):
             out = self._lint(p, env)
             self.assertEqual(out.returncode, 1, out.stdout)
             self.assertIn("contract changed after acceptance", out.stdout)
+            self.assertIn("the contract is the Promise, Carries, Demo ending, and Done examples", out.stdout)
             self._decide(root, env, "D-006", "Supersede M1 promise", "ok, drop the tomorrow part")
             p.write_text(accepted.replace("find it again tomorrow", "find it again").replace(
                 "Carries: I-D1", "Carries: I-D1\nSuperseded: D-006"))

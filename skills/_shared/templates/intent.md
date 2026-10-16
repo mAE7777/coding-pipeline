@@ -31,12 +31,14 @@ only part of this file an evaluator that must guess the purpose may see>
 - I-D2 If <failure>, the user sees <honest state>. Example: <real input> → <real output>
 
 ## Mechanism cards
-<!-- one per load-bearing mechanism; the rejected imitation is what a builder drifts into -->
+<!-- one per load-bearing mechanism; the rejected imitation is what a builder drifts into. Reversibility is
+     optional: one-way when undoing the choice after release means migrating data or breaking its users -->
 ### <mechanism name>
 Purpose: <why it exists for the user>
 Observable guarantee: <what a user or test can see that proves it works>
 Rejected imitation: <the familiar, easier version that looks similar but is NOT acceptable, and why>
 Discriminating probe: <an input pair or scenario whose result differs between the real mechanism and the imitation>
+Reversibility: <one-way | two-way; delete the line to leave it out>
 
 ## Must not lose
 <!-- each item ends with how it is checked, or why it cannot be checked in code -->

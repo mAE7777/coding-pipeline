@@ -3,7 +3,8 @@
 <!--
 The compaction and handoff anchor. Rewritten at every checkpoint and meaningful completion.
 Read by milestone-continue.py (Writer, Milestone, Campaign, Open, In flight, Blockers), handoff_check.py
-(Open), and the reload gate. Local-only: kept out of commits through .git/info/exclude.
+(Open), reentry_digest.py (the sections a session needs after a compaction, Eliminated approaches among them),
+and the reload gate. Local-only: kept out of commits through .git/info/exclude.
 The wiring table lives in milestones.md, not here.
 -->
 
@@ -40,6 +41,10 @@ turn end while this is not "none")
 
 ## Failures
 none
+
+## Eliminated approaches
+none    (an approach tried and refuted: what it was, the evidence that refuted it, the date; kept so no later
+session tries it again)
 
 ## Blockers
 none    (what · who can clear it · what unblocks it; written before every stop)

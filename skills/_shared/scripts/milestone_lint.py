@@ -4,7 +4,8 @@
 Usage: milestone_lint.py [path/to/milestones.md | project folder] [--no-history] [--intent path/to/intent.md]
        milestone_lint.py [path/to/milestones.md] --contract-hash M<k>
 
-Every check prints PASS, FAIL, or WARN with a reason. Exit 0 = no FAIL, 1 = at least one FAIL,
+Every check prints PASS, FAIL, or WARN with a reason; the FAIL messages state the format rules (the
+milestones.md template carries no copy of them). Exit 0 = no FAIL, 1 = at least one FAIL,
 2 = bad invocation. Checks:
   - structure and fields of every milestone (status, promise, Carries, Mechanisms, numbered demo ending,
     done examples, checkpoints, parked items, non-goals, readiness, wiring rows and their statuses);
@@ -37,6 +38,11 @@ CONTRACT_FIELDS = ("Promise:", "Carries:", "Demo ending:", "Done examples:")
 SUPERSEDED = re.compile(r"^Superseded:\s*(D-\d+)", re.M)
 ACCEPT = re.compile(r"Accept (M\d+) · contract ([0-9a-f]{16})")
 WIRING_STATUS = {"built", "validated", "wired", "proven", "parked"}
+# The format rules live in these messages, not in comments copied into every record (plan 6.2).
+STATUS_RULE = ("the builder sets building and gate, a gate report sets changes, only an owner acceptance in "
+               "decisions.md allows accepted, and a dropped milestone keeps its section with a reason; release is "
+               "tracked in the Readiness line")
+NOT_A_STATE_RULE = "put it in a milestone, a named non-goal with a reason, or blocked by a named contract"
 
 results = []
 
@@ -125,9 +131,9 @@ def wiring_rows(lines):
 def check_milestone(mid, lines):
     status = field(lines, "Status:")
     if status is None:
-        report("FAIL", mid, "no 'Status:' line")
+        report("FAIL", mid, f"no 'Status:' line (one of {sorted(STATUSES)}; {STATUS_RULE})")
     elif status.split()[0].lower() not in STATUSES:
-        report("FAIL", mid, f"status '{status}' is not one of {sorted(STATUSES)}")
+        report("FAIL", mid, f"status '{status}' is not one of {sorted(STATUSES)} ({STATUS_RULE})")
     dropped = status is not None and status.split()[0].lower() == "dropped"
 
     promise = field(lines, "Promise:")
@@ -159,13 +165,14 @@ def check_milestone(mid, lines):
     checkpoints = re.findall(r"\b(M\d+)\.C\d+\b", "\n".join(block(lines, "Checkpoints:")))
     for owner in set(checkpoints):
         if owner != mid:
-            report("FAIL", mid, f"checkpoint ID belongs to {owner}")
+            report("FAIL", mid, f"checkpoint ID belongs to {owner} (checkpoints are M<n>.C<k> of their own milestone)")
 
     for item in block(lines, "Parked:"):
         if item.lower() in ("- none", "none"):
             continue
         if item.startswith("- ") and ("re-enable:" not in item or not re.search(r"owner:\s*M\d+", item)):
-            report("FAIL", mid, f"parked item lacks a re-enable condition or owning milestone: {item[:70]}")
+            report("FAIL", mid, "parked item lacks a re-enable condition or owning milestone (a parked item names its "
+                   f"purpose, 're-enable: <condition>', and 'owner: M<n>'): {item[:70]}")
 
     for item in block(lines, "Named non-goals:"):
         if item.startswith("- ") and item.lower() != "- none" and "reason:" not in item:
@@ -174,10 +181,12 @@ def check_milestone(mid, lines):
     for label in ("In scope:", "Named non-goals:", "Parked:"):
         for item in block(lines, label):
             if NOT_A_STATE.search(item):
-                report("FAIL", mid, f"'{NOT_A_STATE.search(item).group(0)}' is not a state: {item[:70]}")
+                report("FAIL", mid, f"'{NOT_A_STATE.search(item).group(0)}' is not a state ({NOT_A_STATE_RULE}): "
+                       f"{item[:70]}")
 
     if not any(l.startswith("Readiness:") for l in lines):
-        report("FAIL", mid, "no 'Readiness:' line")
+        report("FAIL", mid, "no 'Readiness:' line (built, gate-passed, accepted, released, live-verified, each ticked "
+               "apart: five different facts)")
 
     if not dropped and field(lines, "Mechanisms:") is None:
         report("FAIL", mid, "no 'Mechanisms:' line (the intent.md mechanism cards it exercises, or none)")
@@ -284,7 +293,8 @@ def check_acceptance(milestones, root):
                 report("WARN", mid, f"contract changed after acceptance {did}, superseded by {', '.join(sups)}")
             else:
                 report("FAIL", mid, f"contract changed after acceptance {did} (hash {current} != {recorded}) "
-                       "without a 'Superseded: D-<nnn>' line naming a proven owner ruling")
+                       "without a 'Superseded: D-<nnn>' line naming a proven owner ruling (the contract is the "
+                       "Promise, Carries, Demo ending, and Done examples, hashed in the acceptance entry)")
 
 
 def check_contract_tests(milestones, root):
@@ -318,7 +328,8 @@ def check_history(old_text, new_ms):
     old_ms, _, _, _ = split_sections(old_text)
     old_ids = set(old_ms)
     for mid in sorted(old_ids - set(new_ms)):
-        report("FAIL", "history", f"{mid} existed at HEAD and is gone (mark it 'Status: dropped' instead)")
+        report("FAIL", "history", f"{mid} existed at HEAD and is gone (IDs are never removed or renumbered: keep "
+               "its section, marked 'Status: dropped' with a reason)")
     all_old = set(re.findall(r"\bM\d+\.[DC]\d+\b", old_text))
     all_new = set(re.findall(r"\bM\d+\.[DC]\d+\b", "\n".join("\n".join(v) for v in new_ms.values())))
     for sub in sorted(all_old - all_new):
@@ -385,7 +396,7 @@ def main(argv):
     if not milestones:
         report("FAIL", "structure", "no '## M<n> · <name>' sections found")
     for mid in dupes:
-        report("FAIL", "structure", f"{mid} appears more than once")
+        report("FAIL", "structure", f"{mid} appears more than once (one '## M<n> \u00b7 <name>' section per milestone)")
     for mid in order:
         check_milestone(mid, milestones[mid])
     root = project_root(path)
