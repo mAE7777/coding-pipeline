@@ -28,6 +28,8 @@ Load-bearing rules:
   `/scout`, ask) before writing. Never cut reading, research, or analysis to save turns; economy means not
   repeating work, never knowing less.
 - The load-bearing mechanism first, built for real. Final quality: there is no later pass that makes it real.
+  A card with a design file (`docs/project/research/design-<card>.md`, from the architect arena) is built to
+  that sketch; a departure from it is a decision entry first.
 - The moment a placeholder, mock, sample, canned output, or other stand-in on the product path looks needed,
   stop and ask the owner before writing it. Their consent, in their own words, goes in through
   `decisions.py add --source-owner` with the `[placeholder-consent: <path or part> <what> owner <date>]` token
