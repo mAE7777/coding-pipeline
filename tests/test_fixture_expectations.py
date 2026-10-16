@@ -1,0 +1,576 @@
+"""Tests for the Level-3 fixtures added for the model-routing comparisons (plan 7.2 and 7.3), with no model.
+
+For each new expectation: a verdict that catches everything passes, a verdict that misses one planted item
+reports that item alone, and the empty verdict reports every item (so pooled counts are items, not runs).
+For each new fixture: its folder holds what its spec names, its pack renders the way agent_fixtures.py renders
+it with nothing NOT PROVIDED and no canary in it, and its planted defect is really there (the products run).
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "skills/_shared/scripts"))
+import agent_fixtures  # noqa: E402
+import fixture_expectations as fx  # noqa: E402
+from fixture_expectations import FIXTURES  # noqa: E402
+
+FIX = ROOT / "tests/fixtures/agents"
+RENDER = ROOT / "skills/_shared/scripts/render_pack.py"
+NEW = ("code-verifier-demo-web-planted", "code-verifier-demo-web-clean", "code-verifier-demo-silent-step",
+       "gate-judge-story-demo", "gate-judge-story-review",
+       "cold-reader-understanding-shift-narrowed", "cold-reader-understanding-shift-mechanism",
+       "cold-reader-understanding-shift-weakened", "cold-reader-understanding-shift-clean", "cold-reader-reread-partial", "cold-reader-reread-clean",
+       "cold-reader-extract-clean", "claim-verifier-misquote", "claim-verifier-clean",
+       "probe-explorer-recall", "probe-explain-grounding")
+# The role prefix that `agent_fixtures.py --only <prefix>` (and repro:route:fixtures:<prefix>) selects each route by.
+PREFIX = {"code-verifier.demo": "code-verifier-demo", "gate-judge": "gate-judge",
+          "cold-reader.understanding": "cold-reader-understanding", "cold-reader.reread": "cold-reader-reread",
+          "cold-reader.extract": "cold-reader-extract", "claim-verifier": "claim-verifier"}
+
+
+def empty(name):
+    return FIXTURES[name]["expect"]({}, {"summary": {}, "result": ""})
+
+
+class RegistrationTest(unittest.TestCase):
+    def test_every_fixture_names_its_kind_and_the_routes_it_serves(self):
+        routes = json.loads((ROOT / "skills/_shared/models.json").read_text())["routes"]
+        for name, spec in FIXTURES.items():
+            with self.subTest(name):
+                self.assertIn(spec["kind"], ("planted", "clean", "other"))
+                self.assertTrue((FIX / spec["folder"]).is_dir())
+                for route in spec["serves"].split(","):
+                    self.assertIn(route.strip(), routes)
+
+    def test_each_routed_role_has_planted_and_clean_fixtures_under_its_prefix(self):
+        """repro:route needs at least one planted and one clean fixture among those its prefix selects."""
+        for route, prefix in PREFIX.items():
+            with self.subTest(route):
+                mine = [s for n, s in FIXTURES.items() if n.startswith(prefix)]
+                self.assertTrue(all(s["serves"] == route for s in mine), prefix)
+                self.assertEqual({s["kind"] for s in mine}, {"planted", "clean"})
+
+    def test_the_spec_files_exist_and_probes_name_their_agent(self):
+        for name in NEW:
+            spec = FIXTURES[name]
+            with self.subTest(name):
+                for rel in spec.get("files", []):
+                    self.assertTrue((FIX / spec["folder"] / rel.partition("=>")[0]).is_file(), rel)
+                if spec.get("pack"):
+                    self.assertTrue((FIX / spec["folder"] / spec["pack"]).is_file())
+                if spec["role"] == "probe":
+                    self.assertTrue((ROOT / spec["agent"]).is_file())
+
+    def test_evolve_finds_the_probes_whose_text_changed(self):
+        import evolve
+        self.assertIn("probe-explorer-recall", evolve.probe_fixtures(ROOT, ["skills/craft/explore/explorer-prompt.md"]))
+        found = evolve.probe_fixtures(ROOT, ["skills/explain/references/modes.md"])
+        self.assertIn("probe-explain-grounding", found)
+        self.assertNotIn("probe-explorer-recall", found)
+
+    def test_every_planted_fixture_counts_each_item_in_an_empty_verdict(self):
+        counts = {"code-verifier-demo-web-planted": 2, "code-verifier-demo-silent-step": 2,
+                  "gate-judge-story-demo": 3, "gate-judge-story-review": 3,
+                  "cold-reader-understanding-shift-narrowed": 2, "cold-reader-understanding-shift-mechanism": 2,
+                  "cold-reader-understanding-shift-weakened": 2, "cold-reader-reread-partial": 5,
+                  "claim-verifier-misquote": 5, "probe-explorer-recall": 8,
+                  "probe-explain-grounding": 4}
+        for name, n in counts.items():
+            with self.subTest(name):
+                self.assertEqual(len(empty(name)), n, empty(name))
+        for name in NEW:
+            if FIXTURES[name]["kind"] == "clean":
+                self.assertTrue(empty(name), f"{name}: an empty verdict must fail the clean control")
+
+
+class DemoExpectationTest(unittest.TestCase):
+    def steps(self, statuses, capture=".demo-captures/M1-{}.png"):
+        return {"mode": "demo", "steps": [{"milestone": "M1", "step": n, "status": s, "capture": capture.format(n)}
+                                          for n, s in enumerate(statuses, 1)]}
+
+    def test_web_planted_needs_each_wrong_step_failed_with_its_capture(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".demo-captures").mkdir()
+            for n in (3, 4):
+                (Path(d) / f".demo-captures/M1-{n}.png").write_bytes(b"png")
+            ctx = {"dir": d}
+            self.assertEqual(fx.demo_web_planted(self.steps(["HOLDS", "HOLDS", "FAILS", "FAILS"]), ctx), [])
+            missed = fx.demo_web_planted(self.steps(["HOLDS", "HOLDS", "HOLDS", "FAILS"]), ctx)
+            self.assertEqual(len(missed), 1)
+            self.assertIn("step 3", missed[0])
+            (Path(d) / ".demo-captures/M1-4.png").unlink()
+            uncaptured = fx.demo_web_planted(self.steps(["HOLDS", "HOLDS", "FAILS", "FAILS"]), ctx)
+            self.assertEqual(len(uncaptured), 1)
+            self.assertIn("step 4", uncaptured[0])
+            self.assertIn("without a capture", uncaptured[0])
+        unnamed = {"steps": [{"milestone": "M1", "step": "3", "status": "FAILS"}, {"milestone": "M1", "step": 4,
+                                                                                    "status": "FAILS", "capture": "x"}]}
+        self.assertEqual(len(fx.demo_web_planted(unnamed)), 1, "a FAILS step must name its capture")
+
+    def test_web_clean_needs_all_four_steps_holding(self):
+        self.assertEqual(fx.demo_web_clean(self.steps(["HOLDS"] * 4)), [])
+        self.assertTrue(fx.demo_web_clean(self.steps(["HOLDS", "HOLDS", "FAILS", "HOLDS"])))
+        self.assertTrue(fx.demo_web_clean(self.steps(["HOLDS"] * 3)), "a skipped step is not a pass")
+
+    def test_a_silent_step_may_fail_or_be_ungrounded_but_never_hold(self):
+        self.assertEqual(fx.demo_silent(self.steps(["HOLDS", "HOLDS", "UNGROUNDED", "FAILS", "HOLDS"])), [])
+        missed = fx.demo_silent(self.steps(["HOLDS", "HOLDS", "HOLDS", "FAILS", "HOLDS"]))
+        self.assertEqual(len(missed), 1)
+        self.assertIn("export --out", missed[0])
+        missed = fx.demo_silent(self.steps(["HOLDS", "HOLDS", "FAILS", "HOLDS", "HOLDS"]))
+        self.assertEqual(len(missed), 1)
+        self.assertIn("total --json", missed[0])
+
+
+class JudgeExpectationTest(unittest.TestCase):
+    def test_story_demo_counts_each_contradicted_capture(self):
+        rows = [{"id": "M1.D1", "status": "DRIFT", "evidence": "capture M1-2 reads Total food: 52.50"},
+                {"id": "L-01", "status": "MISSING", "evidence": "capture M1-4: the {broken file was overwritten"}]
+        good = {"verdict": "CHANGES", "intent_diff": rows, "blocking": [{"summary": "the demo result is not what ran"}]}
+        self.assertEqual(fx.judge_story_demo(good), [])
+        self.assertIn("step 2", fx.judge_story_demo({**good, "intent_diff": rows[1:]})[0])
+        self.assertIn("step 4", fx.judge_story_demo({**good, "intent_diff": rows[:1]})[0])
+        held = [{**r, "status": "HOLDS"} for r in rows]
+        self.assertEqual(len(fx.judge_story_demo({"verdict": "ACCEPT-READY", "intent_diff": held})), 3)
+
+    def test_story_review_counts_each_contradicted_claim(self):
+        good = {"verdict": "CHANGES", "intent_diff": [],
+                "blocking": [{"summary": "M1.D2: the reviewer's probe_unreadable test FAILED", "evidence": "..."},
+                             {"summary": "M1.D3: export printed a header and two lines for three expenses"}]}
+        self.assertEqual(fx.judge_story_review(good), [])
+        one = fx.judge_story_review({**good, "blocking": good["blocking"][:1]})
+        self.assertEqual(len(one), 1)
+        self.assertIn("export", one[0])
+        other = fx.judge_story_review({**good, "blocking": good["blocking"][1:]})
+        self.assertEqual(len(other), 1)
+        self.assertIn("probe test", other[0])
+
+
+class ColdReaderExpectationTest(unittest.TestCase):
+    def test_each_subtle_shift_is_one_item_beside_the_verdict(self):
+        narrowed = {"verdict": "AMBIGUOUS", "divergences": [{"quote": "import their bank's CSV export",
+                                                             "reading_a": "CSV and OFX", "reading_b": "CSV only",
+                                                             "severity": "material"}]}
+        self.assertEqual(fx.understanding_narrowed(narrowed), [])
+        self.assertEqual(len(fx.understanding_narrowed({**narrowed, "divergences": []})), 1)
+        mechanism = {"verdict": "AMBIGUOUS", "missing": ["M1.D4: cached and written in the background, not saved first"]}
+        self.assertEqual(fx.understanding_mechanism(mechanism), [])
+        self.assertEqual(len(fx.understanding_mechanism({"verdict": "AMBIGUOUS", "missing": ["OFX"]})), 1)
+        self.assertEqual(len(fx.understanding_mechanism({"verdict": "CLEAR"})), 2)
+        weakened = {"verdict": "AMBIGUOUS", "divergences": [{"quote": "a file already imported is skipped (L-02)",
+                                                             "reading_a": "each transaction once",
+                                                             "reading_b": "each file once", "severity": "material"}]}
+        self.assertEqual(fx.understanding_weakened(weakened), [])
+        self.assertEqual(len(fx.understanding_weakened({"verdict": "AMBIGUOUS", "missing": ["OFX"]})), 1)
+
+    def reread(self):
+        return {"verdict": "AMBIGUOUS",
+                "previous": [{"item": "I-D2 When a loan is overdue, the tool warns the user.", "settled": True,
+                              "by": "past its due date (14 days after the loan ...) ... and reminds the borrower"},
+                             {"item": "C-01 local file vs C-03 sync to the borrower's phone", "settled": True,
+                              "by": "Named non-goals: Syncing loans to the borrower's phone"},
+                             {"item": "I-D3 When a book comes back, it is marked returned", "settled": False,
+                              "by": ""}],
+                "divergences": [{"quote": "and reminds the borrower", "reading_a": "prints a reminder",
+                                 "reading_b": "sends an email", "severity": "material"}]}
+
+    def test_reread_partial_counts_the_open_the_new_and_each_fixed_finding(self):
+        good = self.reread()
+        self.assertEqual(fx.reread_partial(good), [])
+        unfixed_closed = json.loads(json.dumps(good))
+        unfixed_closed["previous"][2]["settled"] = True
+        self.assertIn("unfixed", fx.reread_partial(unfixed_closed)[0])
+        self.assertIn("new ambiguity", fx.reread_partial({**good, "divergences": []})[0])
+        reopened = json.loads(json.dumps(good))
+        reopened["previous"][0].update(settled=False, by="still no definition")
+        self.assertEqual(fx.reread_partial(reopened), ["a fixed finding re-reported as open: what makes a loan overdue (I-D2)"])
+        dropped = {**good, "previous": good["previous"][::2]}
+        self.assertEqual(fx.reread_partial(dropped), ["a fixed finding not marked settled: the local file against the "
+                                                      "phone sync (C-01, C-03)"])
+
+    def test_reread_clean_fails_on_a_finding_left_open(self):
+        good = {"verdict": "CLEAR", "previous": [{"item": i, "settled": True} for i in ("a", "b", "c")]}
+        self.assertEqual(fx.reread_clean(good), [])
+        self.assertTrue(fx.reread_clean({**good, "previous": [{"item": "a", "settled": False}]}))
+
+    def faithful(self):
+        rows = [("T001", "for our flat of three: Ana, Ben and me", "three people share the flat"),
+                ("T001", "Every week it assigns the four chores, bins, kitchen, bathroom and hoovering",
+                 "four chores assigned weekly"),
+                ("T001", "nobody gets the same chore two weeks running", "no repeats in consecutive weeks"),
+                ("T003", "A web page on our home server is enough.", "a web page on the home server"),
+                ("T003", "No accounts: whoever opens the page sees the rota.", "no accounts"),
+                ("T004", "When two of us swap chores, the swap stays until the end of that week, even if someone "
+                         "reloads the page.", "an agreed swap is never lost"),
+                ("T006", "Their chores go to the other two, split as evenly as possible.", "away: chores split evenly"),
+                ("T007", "Weeks start on Monday.", "weeks start Monday"),
+                ("T007", "And no email reminders, we decided against them", "no email reminders")]
+        return {"mode": "extraction", "verdict": "CLEAR",
+                "points": [{"refs": [f"SRC-1 {t}"], "quote": q, "point": p, "attribution": "owner",
+                            "status": "rejected" if "email" in p else "current"} for t, q, p in rows]}
+
+    def test_extract_clean_accepts_a_faithful_extraction_and_counts_each_lapse(self):
+        good = self.faithful()
+        self.assertEqual(fx.extract_clean(good), [])
+        for label, words in fx.EXTRACT_CLEAN_POINTS.items():
+            without = {**good, "points": [p for p in good["points"] if not fx.said(p, *words)]}
+            self.assertEqual(fx.extract_clean(without), [f"load-bearing point missing: {label}"])
+        tidied = json.loads(json.dumps(good))
+        tidied["points"][3]["quote"] = "A web page on the home server is enough."
+        self.assertEqual(len(fx.extract_clean(tidied)), 1)
+        self.assertIn("verbatim", fx.extract_clean(tidied)[0])
+        wanted = json.loads(json.dumps(good))
+        wanted["points"][-1].update(point="email reminders each week", status="current")
+        self.assertEqual(fx.extract_clean(wanted), ["the rejected email reminders appear as a current requirement"])
+        invented = json.loads(json.dumps(good))
+        invented["points"][0]["attribution"] = "assistant"
+        self.assertEqual(len(fx.extract_clean(invented)), 1)
+        self.assertEqual(len(fx.extract_clean({})), len(fx.EXTRACT_CLEAN_POINTS) + 1)
+
+    def test_extract_planted_still_reads_its_transcript(self):
+        quote = "The one thing that must never happen: an expense we entered disappears."
+        point = {"refs": ["SRC-1 T001"], "quote": quote, "point": "an expense never disappears", "attribution": "owner",
+                 "status": "current"}
+        self.assertEqual(fx.quote_problems([point], fx.EXTRACT_SOURCE), [])
+        self.assertNotIn("the must-not-lose point", " ".join(fx.extract_planted({"points": [point]})))
+
+
+class ClaimExpectationTest(unittest.TestCase):
+    def good(self):
+        return {"claims": [{"id": "C1", "status": "CONFIRMED", "quote": "Standard | $0.021 per GB-month"},
+                           {"id": "C2", "status": "CORRECTED", "quote": "The first 100 GB of egress each month is free."},
+                           {"id": "C3", "status": "CORRECTED", "quote": "Published 14 May 2026."},
+                           {"id": "C4", "status": "CORRECTED", "correction": "The host, Lee Park, said those words."},
+                           {"id": "C5", "status": "CORRECTED", "quote": "$5.00 per million on Archive"}]}
+
+    def test_each_misquote_is_one_item(self):
+        self.assertEqual(fx.claims_misquote(self.good()), [])
+        for i, cid in ((1, "C2"), (2, "C3"), (3, "C4"), (4, "C5")):
+            confirmed = json.loads(json.dumps(self.good()))
+            confirmed["claims"][i]["status"] = "CONFIRMED"
+            problems = fx.claims_misquote(confirmed)
+            self.assertEqual(len(problems), 1, problems)
+            self.assertTrue(problems[0].startswith(cid))
+        vague = json.loads(json.dumps(self.good()))
+        vague["claims"][2]["quote"] = "a different date"
+        self.assertIn("without the source's own words", fx.claims_misquote(vague)[0])
+
+    def test_the_clean_twin_wants_every_claim_confirmed(self):
+        self.assertEqual(fx.claims_clean({"claims": [{"id": f"C{i}", "status": "CONFIRMED"} for i in range(1, 6)]}), [])
+        self.assertTrue(fx.claims_clean({"claims": [{"id": f"C{i}", "status": "CONFIRMED"} for i in range(1, 5)]}))
+
+    def test_the_saved_sources_hold_the_truth_and_the_misquotes_do_not(self):
+        sources = "\n".join(p.read_text() for p in sorted((FIX / "claims-misquote/sources").glob("*.md")))
+        for truth in ("The first 100 GB of egress each month is free", "Published 14 May 2026",
+                      "**Lee Park:**", "We have no plans to charge for reads this year"):
+            self.assertIn(truth, sources)
+        planted = (FIX / "claims-misquote/claims.md").read_text()
+        for wrong in ("1,000 GB", "14 April 2026", "Dana Reyes, said: \"We will never charge for reads.\"",
+                      "Archive tier, writes cost $0.40"):
+            self.assertIn(wrong, planted)
+        self.assertNotIn("http", planted + (FIX / "claims-clean/claims.md").read_text(), "no live website")
+
+
+class ProbeExpectationTest(unittest.TestCase):
+    def answers(self):
+        out = []
+        for q, (_, places) in fx.RECALL.items():
+            rel, start, end = places[0]
+            out.append({"q": q, "file": rel, "line": fx.recall_span(rel, start, end)[0]})
+        return {"answers": out}
+
+    def test_recall_counts_each_question(self):
+        self.assertEqual(fx.explorer_recall(self.answers()), [])
+        for i in range(len(fx.RECALL)):
+            wrong = self.answers()
+            wrong["answers"][i]["file"] = "shelf/__init__.py"
+            problems = fx.explorer_recall(wrong)
+            self.assertEqual(len(problems), 1)
+            self.assertTrue(problems[0].startswith(f"question {i + 1} "))
+        herring = self.answers()
+        herring["answers"][3] = {"q": 4, "file": "shelf/overdue.py", "line": 5}  # the caller, not the comparison
+        problems = fx.explorer_recall(herring)
+        self.assertEqual(len(problems), 1)
+        self.assertTrue(problems[0].startswith("question 4"))
+        cli = (fx.RECALL_DIR / "shelf/cli.py").read_text().splitlines()
+        help_line = next(i for i, line in enumerate(cli, 1) if "two weeks" in line)
+        stale = self.answers()
+        stale["answers"][0] = {"q": 1, "file": "./shelf/cli.py", "line": str(help_line)}
+        self.assertTrue(fx.explorer_recall(stale)[0].startswith("question 1"))
+        other = self.answers()
+        other["answers"][5] = {"q": 6, "file": "/work/folder/shelf/cli.py", "lines": "64-67"}
+        self.assertEqual(fx.explorer_recall(other), [], "the second place for question 6, given as a range")
+
+    def test_recall_places_are_what_the_questions_ask(self):
+        anchors = {1: "loan_days", 2: "def save", 3: "safe_cell", 4: "is_overdue", 5: "cmd_return", 6: "def load",
+                   7: "normalize_isbn", 8: "reminder_text"}
+        for q, (_, places) in fx.RECALL.items():
+            rel, start, end = places[0]
+            lo, hi = fx.recall_span(rel, start, end)
+            lines = (fx.RECALL_DIR / rel).read_text().splitlines()
+            self.assertIn(anchors[q], lines[lo - 1])
+            self.assertLessEqual(lo, hi)
+        lo, hi = fx.recall_span("shelf/store.py", "def save")
+        body = "\n".join((fx.RECALL_DIR / "shelf/store.py").read_text().splitlines()[lo - 1:hi])
+        self.assertIn("os.replace", body)
+
+    def text(self, body):
+        return {"summary": {}, "result": body + '\n\n```json\n{"register": "user"}\n```\n'}
+
+    def test_explain_must_not_claim_what_no_evidence_proves(self):
+        honest = ("You can now note what you spend and see what one category has cost you: add an expense, "
+                  "then ask for its total.\n\nComing next, not checked yet:\n- Undo the last expense\n"
+                  "- Bring in your bank's CSV file\n")
+        v = {"register": "user", "capabilities_claimed": [{"capability": "record expenses and see a category total",
+                                                            "rests_on": "docs/project/reviews/M1.md"}]}
+        self.assertEqual(fx.explain_grounding(v, self.text(honest)), [])
+        claims_undo = honest + "\nYou can also undo the last expense you added.\n"
+        self.assertEqual(len(fx.explain_grounding(v, self.text(claims_undo))), 1)
+        self.assertIn("undo", fx.explain_grounding(v, self.text(claims_undo))[0])
+        listed = {**v, "capabilities_claimed": v["capabilities_claimed"] + [{"capability": "import a bank export"}]}
+        self.assertEqual(len(fx.explain_grounding(listed, self.text(honest))), 1)
+        self.assertNotIn("import", " ".join(fx.explain_grounding(
+            v, self.text(honest + "\nIt is important that you add each expense.\n"))))
+        jargon = honest + "\nThe schema keeps your data tidy.\n"
+        self.assertIn("schema", fx.explain_grounding(v, self.text(jargon))[0])
+        self.assertIn("what the gate proved", fx.explain_grounding(v, self.text("You can undo nothing yet."))[0])
+
+    def test_the_explain_record_describes_undo_and_import_without_evidence(self):
+        root = FIX / "explain-grounding"
+        for rel in ("app.py", "README.md", "CHANGELOG.md"):
+            text = (root / rel).read_text().lower()
+            self.assertIn("undo", text, rel)
+            self.assertIn("import", text, rel)
+        evidence = (root / "tests/test_app.py").read_text() + (root / "docs/project/reviews/M1.md").read_text() + \
+            "".join(p.read_text() for p in (root / ".evidence").rglob("*.txt"))
+        prose = "\n".join(line for line in evidence.lower().splitlines() if not re.match(r"\s*(import|from) ", line))
+        self.assertNotIn("undo", prose)
+        self.assertNotIn("import", prose)
+
+
+class PackTest(unittest.TestCase):
+    """Each new fixture's pack, built the way agent_fixtures.py builds it, with no model."""
+
+    def pack(self, name):
+        spec = FIXTURES[name]
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            shutil.copytree(FIX / spec["folder"], work / "project")
+            project = work / "project"
+            workdir, _ = agent_fixtures.prepare(spec, project, work)
+            if spec.get("pack"):
+                return agent_fixtures.embedded_pack(spec, project), workdir.name, []
+            out = work / "pack.md"
+            r = subprocess.run([sys.executable, str(RENDER), spec["role"], "--out", str(out),
+                                *agent_fixtures.render_args(spec, project, workdir)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            return out.read_text(), workdir.name, agent_fixtures.judge_captures(spec, workdir)
+
+    def test_every_new_pack_renders_complete_and_without_canaries(self):
+        for name in NEW:
+            with self.subTest(name):
+                text, _, _ = self.pack(name)
+                self.assertNotIn("NOT PROVIDED", text)
+                self.assertNotIn("{repo:", text)
+                for canary in FIXTURES[name].get("canaries", []):
+                    self.assertNotIn(canary, text)
+
+    def test_the_packs_carry_what_each_check_turns_on(self):
+        expect = {"code-verifier-demo-web-planted": ("Total: 5.00", "python3 serve.py"),
+                  "code-verifier-demo-silent-step": ("report.csv", "--json"),
+                  "cold-reader-understanding-shift-narrowed": ("CSV or OFX", "CSV export and see"),
+                  "cold-reader-understanding-shift-mechanism": ("already saved", "in the background"),
+                  "cold-reader-understanding-shift-weakened": ("A transaction already imported is never imported twice",
+                                                               "a file already imported is skipped"),
+                  "cold-reader-reread-partial": ("Previous read", "reminds the borrower"),
+                  "cold-reader-extract-clean": ("Weeks start on Monday",),
+                  "claim-verifier-misquote": ("sources/acme-interview.md",),
+                  "probe-explorer-recall": ("Explorer Prompt Template", "Where is an ISBN"),
+                  "probe-explain-grounding": ("MODE: user", "Every claim rests on evidence"),
+                  "gate-judge-story-review": ("probe_unreadable", "FAILED (failures=1)")}
+        for name, needles in expect.items():
+            with self.subTest(name):
+                text = self.pack(name)[0]
+                for needle in needles:
+                    self.assertIn(needle, text)
+        self.assertNotIn("OFX", self.pack("cold-reader-understanding-shift-narrowed")[0].split("Goal")[0])
+
+    def test_a_judge_with_captures_must_open_them(self):
+        for name in ("gate-judge-story-demo", "gate-judge-story-review", "gate-judge-planted"):
+            self.assertEqual(self.pack(name)[2], ["--require-read", "captures/*"], name)
+        self.assertEqual(self.pack("cold-reader-reread-partial")[2], [])
+
+    def test_the_demo_copy_holds_the_product_and_not_the_intent(self):
+        spec = FIXTURES["code-verifier-demo-web-planted"]
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            shutil.copytree(FIX / spec["folder"], work / "project")
+            workdir, _ = agent_fixtures.prepare(spec, work / "project", work)
+            self.assertTrue((workdir / "public/app.js").is_file())
+            self.assertTrue((workdir / "serve.py").is_file())
+            self.assertFalse((workdir / "docs").exists())
+
+
+class HarnessTest(unittest.TestCase):
+    """run_one end to end with a stand-in runner: no model, no spending."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        for name, value in (("WORK", self.tmp / "work"), ("REPO", self.tmp / "repo")):
+            patcher = mock.patch.object(agent_fixtures, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        (self.tmp / "work").mkdir()
+        agents = self.tmp / "repo/agents"
+        agents.mkdir(parents=True)
+        for f in (ROOT / "agents").glob("*.md"):
+            shutil.copy(f, agents / f.name)
+        self.calls = []
+
+    def stand_in(self, verdict, captures=()):
+        real = agent_fixtures.run
+
+        def fake(cmd, **kw):
+            if not any(str(c).endswith("run_isolated.py") for c in cmd):
+                return real(cmd, **kw)
+            self.calls.append(cmd)
+            out, workdir = Path(cmd[cmd.index("--out") + 1]), Path(cmd[cmd.index("--dir") + 1])
+            stem = cmd[2] + ("-demo" if "--mode" in cmd and cmd[cmd.index("--mode") + 1] == "demo" else "")
+            for rel in captures:
+                (workdir / rel).parent.mkdir(parents=True, exist_ok=True)
+                (workdir / rel).write_text("captured")
+            (out / f"{stem}.summary.json").write_text(json.dumps({"status": "OK", "tool_uses": 3}))
+            (out / f"{stem}.result.md").write_text("Done.\n```json\n" + json.dumps(verdict) + "\n```\n")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return mock.patch.object(agent_fixtures, "run", side_effect=fake)
+
+    def test_a_judge_fixture_with_captures_runs_with_require_read(self):
+        verdict = {"verdict": "CHANGES", "intent_diff": [], "blocking": [
+            {"summary": "capture M1-2 shows Total food: 52.50"}, {"summary": "capture M1-4: the file was overwritten"}]}
+        with self.stand_in(verdict):
+            _, _, problems, _, rec = agent_fixtures.run_one("gate-judge-story-demo", FIXTURES["gate-judge-story-demo"],
+                                                            1, False, "xhigh")
+        self.assertEqual(problems, [])
+        self.assertEqual(rec["problem_count"], 0)
+        cmd = self.calls[0]
+        self.assertEqual(cmd[cmd.index("--require-read") + 1], "captures/*")
+
+    def test_a_demo_step_counts_only_with_its_capture_in_the_checkers_folder(self):
+        spec = FIXTURES["code-verifier-demo-web-planted"]
+        steps = {"mode": "demo", "steps": [{"milestone": "M1", "step": n, "status": "FAILS" if n > 2 else "HOLDS",
+                                            "capture": f".demo-captures/M1-{n}.png"} for n in range(1, 5)]}
+        with mock.patch.object(agent_fixtures, "browser_missing", return_value=None):
+            with self.stand_in(steps, captures=[".demo-captures/M1-3.png", ".demo-captures/M1-4.png"]):
+                problems = agent_fixtures.run_one("code-verifier-demo-web-planted", spec, 1, False, "xhigh")[2]
+            self.assertEqual(problems, [])
+            with self.stand_in(steps, captures=[".demo-captures/M1-3.png"]):
+                rec = agent_fixtures.run_one("code-verifier-demo-web-planted", spec, 2, False, "xhigh")[4]
+        self.assertEqual(rec["problem_count"], 1)
+        self.assertIn("step 4", rec["problems"][0])
+        self.assertNotIn("--require-read", self.calls[0])
+
+    def test_a_browser_fixture_without_a_browser_misses_everything_and_calls_no_model(self):
+        spec = FIXTURES["code-verifier-demo-web-planted"]
+        with mock.patch.object(agent_fixtures, "browser_missing", return_value="no Playwright here"), \
+                self.stand_in({}):
+            rec = agent_fixtures.run_one("code-verifier-demo-web-planted", spec, 1, False, "xhigh")[4]
+        self.assertEqual(self.calls, [])
+        self.assertEqual(rec["problems"], ["no Playwright here"])
+        self.assertEqual(rec["problem_count"], 1 + len(empty("code-verifier-demo-web-planted")))
+        self.assertEqual(list((self.tmp / "work").iterdir()), [], "the work copy is removed")
+
+
+class PlantedProductTest(unittest.TestCase):
+    """The products behave as their fixtures say: the planted defect is real and the clean twin is clean."""
+
+    PAGE = r"""
+const fs = require("fs");
+const els = {};
+function el(id) {
+  return els[id] || (els[id] = {id, value: "", textContent: "", hidden: false, children: [], on: {},
+    addEventListener(t, f) { this.on[t] = f; }, replaceChildren(...c) { this.children = c; }});
+}
+const document = {getElementById: el, createElement: () => ({textContent: ""})};
+el("show").value = "all";  // the first option, as a browser selects it
+new Function("document", fs.readFileSync(process.argv[2], "utf8"))(document);
+const state = () => ({rows: el("list").children.map((c) => c.textContent), total: el("total").textContent,
+                      message: el("message").textContent, empty: !el("empty").hidden});
+function add(category, amount) {
+  el("category").value = category; el("amount").value = amount; el("add").on.submit({preventDefault() {}});
+}
+const out = [state()];
+add("food", "5"); add("travel", "40"); out.push(state());
+el("show").value = "food"; el("show").on.change(); out.push(state());
+el("show").value = "all"; el("show").on.change(); add("travel", "abc"); out.push(state());
+console.log(JSON.stringify(out));
+"""
+
+    def page(self, folder):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "page.js").write_text(self.PAGE)
+            r = subprocess.run(["node", str(Path(d) / "page.js"), str(FIX / folder / "public/app.js")],
+                               capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_the_web_page_fails_steps_3_and_4_only_in_the_planted_copy(self):
+        clean = self.page("web-demo-clean")
+        self.assertEqual((clean[0]["empty"], clean[0]["total"]), (True, "0.00"))
+        self.assertEqual((clean[1]["rows"], clean[1]["total"]), (["food 5.00", "travel 40.00"], "45.00"))
+        self.assertEqual((clean[2]["rows"], clean[2]["total"]), (["food 5.00"], "5.00"))
+        self.assertEqual((len(clean[3]["rows"]), clean[3]["total"], clean[3]["message"]),
+                         (2, "45.00", "Enter an amount like 12.50"))
+        planted = self.page("web-demo-planted")
+        self.assertEqual(planted[:2], clean[:2], "steps 1 and 2 hold in both")
+        self.assertEqual((planted[2]["rows"], planted[2]["total"]), (["food 5.00"], "45.00"))
+        self.assertEqual((planted[3]["rows"][-1], planted[3]["message"]), ("travel 0.00", ""))
+
+    def test_the_labeled_serve_command_serves_the_page_on_a_free_port(self):
+        import urllib.request
+        proc = subprocess.Popen([sys.executable, "-B", str(FIX / "web-demo-planted/serve.py")], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True)
+        try:
+            url = re.search(r"http://127\.0\.0\.1:\d+/", proc.stdout.readline()).group(0)
+            local = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never through a proxy
+            page = local.open(url, timeout=10).read().decode()
+            script = local.open(url + "app.js", timeout=10).read().decode()
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+            proc.stdout.close()
+        self.assertIn('<script src="app.js">', page)
+        self.assertIn("expenses.reduce", script)
+
+    def test_the_silent_steps_exit_0_and_show_nothing(self):
+        app = FIX / "demo-silent-step/app.py"
+        with tempfile.TemporaryDirectory() as d:
+            tally = lambda *a: subprocess.run([sys.executable, "-B", str(app), *a], cwd=d, capture_output=True, text=True)
+            for category, value in (("food", "5"), ("travel", "40"), ("food", "7.5")):
+                tally("add", category, value)
+            self.assertEqual(tally("total", "food").stdout.strip(), "Total food: 12.50")
+            exported = tally("export", "--out", "report.csv")
+            self.assertEqual((exported.returncode, exported.stdout.strip()), (0, "exported 3 expenses to report.csv"))
+            self.assertFalse((Path(d) / "report.csv").exists())
+            as_json = tally("total", "food", "--json")
+            self.assertEqual((as_json.returncode, as_json.stdout), (0, ""))
+            self.assertEqual(len(tally("export").stdout.splitlines()), 4, "plain export still prints every line")
+
+    def test_the_explorer_codebase_runs(self):
+        r = subprocess.run([sys.executable, "-B", str(FIX / "explorer-recall/tests/test_shelf.py")],
+                           capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(r.returncode, 0, r.stderr[-600:])
+
+
+if __name__ == "__main__":
+    unittest.main()
