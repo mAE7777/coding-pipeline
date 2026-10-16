@@ -461,6 +461,7 @@ elif [ -e .git ]; then
       -e '(^|[^A-Za-z0-9])/(plan|dev|gate|loyal|scout|handoff|capture|fix|deploy|explain|polish|inbox|next|evolve) (M[0-9]+|adopt|amend|convert|freeze|resume|accept|check|status|vigilance|write|receive|ask|map|spike|offload|ingest|add|review|list|auto|run)([^A-Za-z]|$)' \
       -e 'code-verifier|loyal-evaluator|gate-judge|cold-reader|claim-verifier|change-reviewer|evolve\.py|heavy\.py|milestone_lint|render_pack|run_isolated|gate_run\.py|gate_report|record_check|helm_stamp' \
       -e 'rulings\.py|intent_lock|inbox\.py|project_status|continuity\.py|local_only\.py|gate_copies|gate_checks|handoff_check|milestone-continue|heavy-guard|reload-gate|typecheck-once' \
+      -e 'decisions\.py|reentry_digest|regate_scope|shadow_diff\.py|pr_watch\.py|craft_sync|\.pipeline-models|\.pipeline-shadow' \
       2>/dev/null | head -5 | tr '\n' ' ')
   fi
   if [ -n "${PT// /}" ]; then

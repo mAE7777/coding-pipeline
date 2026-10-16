@@ -111,9 +111,18 @@ class GateShTest(unittest.TestCase):
             out = gate(d)
             self.assertIn("PASS   pipeline-traces", out.stdout, out.stdout[-600:])
             for trace in ("Weighed with /inbox review.", "Proven with rulings.py record.", "Run /next auto.",
-                          "Recorded by project_status record.", "Flagged by gate_checks.py test-tamper."):
+                          "Recorded by project_status record.", "Flagged by gate_checks.py test-tamper.",
+                          "Numbered by decisions.py add.", "Re-read through reentry_digest after the compaction.",
+                          "Scoped by regate_scope to the changed files.", "Compared by shadow_diff.py.",
+                          "Checked with pr_watch.py land-check.", "Vendored files verified by craft_sync.",
+                          "The judge runs on high in ~/.claude/.pipeline-models.json.",
+                          "Shadow rounds logged in .pipeline-shadow.jsonl."):
                 (docs / "decisions.md").write_text(f"## D-003\n{trace}\n")
                 self.assertIn("FAIL   pipeline-traces", gate(d).stdout, trace)
+            # product words that share a script's stem are not tooling: a Django app has models.py and decisions
+            (docs / "decisions.md").write_text("## D-004\nThe ledger's tables live in models.py and its routing "
+                                               "in models.json; the decisions page lists every decision.\n")
+            self.assertIn("PASS   pipeline-traces", gate(d).stdout, "ordinary product names pass")
 
     def test_a_record_file_git_ignores_is_named(self):
         import tempfile
