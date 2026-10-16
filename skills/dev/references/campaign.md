@@ -2,7 +2,8 @@
 
 Loaded by `/dev` when the owner authorizes a run of several milestones ("build M1 through M3") without
 waiting for acceptance between them. The authorization is a decision entry in the owner's own words
-(proven with `rulings.py record`) and the `## Campaign` line in `state.md` (`M1-M3 · D-<nnn>`).
+(`decisions.py add --source-owner`, which proves them) and the `## Campaign` line in `state.md`
+(`M1-M3 · D-<nnn>`).
 
 What changes:
 - `/dev` and the gate chain: after a milestone's gate comes back ACCEPT-READY, the next milestone starts;
