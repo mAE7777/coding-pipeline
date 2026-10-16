@@ -1016,16 +1016,17 @@ class ChangePatchTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def render(self, *extra, patch=True):
-        """A review run whose pack names the evidence patch the way render_pack.py does (here through --extra)."""
+        """A review run whose pack render_pack.py writes with the change since the M1 baseline, so it names the
+        evidence patch beside the pack (no baseline: no patch)."""
         if patch:
-            self.patch.write_text("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n")
-        note = self.d / "note.md"
-        note.write_text(f"The full change: {self.patch.resolve()}\n")
+            (self.proj / "x.py").write_text("a\n")
+            subprocess.run([sys.executable, str(RI.parent / "baseline.py"), "record", str(self.proj), "M1"],
+                           check=True, capture_output=True, env=self.env)
+            (self.proj / "x.py").write_text("b\n")
         (self.d / "work").mkdir(exist_ok=True)
         proc = subprocess.run([sys.executable, str(RI), "code-verifier", "--dir", str(self.d / "work"), "--out",
                                str(self.out), "--project", str(self.proj), "--agent-file",
-                               str(AGENTS / "code-verifier.md"), "--render", "--milestone", "M1", "--extra",
-                               f"Full change={note}", "--", *extra],
+                               str(AGENTS / "code-verifier.md"), "--render", "--milestone", "M1", "--", *extra],
                               capture_output=True, text=True, env=self.env, timeout=120)
         summary = json.loads((self.out / "code-verifier.summary.json").read_text())
         seen = [json.loads(x) for x in self.seen.read_text().splitlines()] if self.seen.is_file() else []
@@ -1039,7 +1040,7 @@ class ChangePatchTest(unittest.TestCase):
         self.assertEqual(s["change_patch"], evidence)
         self.assertTrue(Path(readable).name == self.patch.name and folder.startswith(str(self.home / ".gate-copies")))
         main, shadow = seen
-        self.assertIn(f"The full change: {readable}", main["stdin"], "the pack fed to the checker names the copy")
+        self.assertIn(f"The full patch: {readable}.", main["stdin"], "the pack fed to the checker names the copy")
         self.assertNotIn(evidence, main["stdin"])
         self.assertEqual(s["pack_sha256"], ri.hashlib.sha256(main["stdin"].encode()).hexdigest(),
                          "the pack's sha256 is of the pack as fed")
