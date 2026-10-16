@@ -5,16 +5,7 @@ argument-hint: "[users | market | investor | expert | all]"
 disable-model-invocation: true
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /polish
 
@@ -37,4 +28,4 @@ scrutiny, not code review: correctness, wiring, and intent fidelity belong to th
    quietly into the plan. Write `docs/project/research/polish-<date>.md`.
 
 ## End
-Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill polish --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill polish --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).

@@ -4,16 +4,7 @@ description: "Standalone intent-fidelity check: did we build what was meant? An 
 argument-hint: "[check [M<k>] | vigilance | status]"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /loyal
 
@@ -21,26 +12,23 @@ The failure this exists for: a product that works but is no longer the thing tha
 that becomes one more approve button.
 
 Load-bearing rules:
-- The evaluator never sees the goal before it has described what the product does; the diff is judged in a
-  separate isolated process. This session only starts the check and renders the result.
-- The report shows only what is not HOLDS. No finding is invented to look thorough: a clean check is one line.
-- The intent is changed only by `/plan amend` with the owner, never to make a check pass.
-- Venture projects: when the project has a `truth/` folder, read
-  `~/.claude/skills/_shared/references/venture-mode.md` before a check; if it is missing, stop with BLOCKED (this is a
-  venture project and its rules are not installed).
+- The evaluator and the judge run isolated, by script (the charter's law 3); this session only starts the
+  check and renders the result.
+- A finding is fixed in the product, or the owner changes the intent through `/plan amend`; never the intent to
+  make a check pass.
+- Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/venture-mode.md` first; if it is missing, stop BLOCKED.
 
 ## check [M<k>]
 1. `intent_lock.py verify docs/project/intent.md` must pass (a missing lock means `/plan` first). M<k> is the
    milestone in progress (from `state.md`) unless named.
 2. In the background: `python3 ~/.claude/skills/_shared/scripts/gate_run.py <project> --milestone M<k>
-   --intent-only`. It copies the live tree (no freeze needed), strips everything that states intent from the
-   blind copy, runs the evaluator (pass 1 without the goal, pass 2 with it, then pass 3 confirming every done
-   example, must-not-lose item, and mechanism card directly) and the judge, and logs the result
-   in `docs/project/reviews/intent-ledger.md`.
+   --intent-only` (its usage says what runs: the blind copy of the live tree, the evaluator's three passes, the
+   judge, and a line in `docs/project/reviews/intent-ledger.md`).
 3. Read `.evidence/loyal/M<k>/r<n>/verdict.json` and the judge's result, and render the report in
    `references/delta-report-format.md`: the load-bearing verdict first, the goal next to the evaluator's purpose
-   guess, then only the items that are not HOLDS, one line each in behavior language. INCONCLUSIVE is reported
-   with its reason (the verdict file names the checker and what it could not ground).
+   guess, then only the items that are not HOLDS, one line each in behavior language; a clean check is one line,
+   with no finding invented to look thorough. INCONCLUSIVE is reported with its reason (the verdict file names
+   the checker and what it could not ground).
 
 ## vigilance (manual only)
 Runs only when the owner invokes it. Before showing a check report, pick one real item and falsify it
@@ -55,4 +43,4 @@ The intent ledger's recent checks, the vigilance record (caught and missed), and
 in `docs/project/reviews/*.findings.json`.
 
 ## End
-Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill loyal --arg M<k> --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill loyal --arg M<k> --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).

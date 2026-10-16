@@ -11,10 +11,8 @@ Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py <on|off|status> 
 The project is the user's named folder, otherwise the current project. Resolve it before writing.
 An explicit request to turn it off or on is sufficient authorization; do it immediately and report the
 mode and exact project. No adoption, owner lock, decision ledger, amendment or confirmation is needed.
-Without an explicit choice use status; never infer ON from a request to continue development.
+Without an explicit on or off, run status. What the choice means for every other skill, OFF and ON:
+`~/.claude/skills/_shared/references/project-control.md`.
 
-OFF persists across sessions, compaction and tools. Follow the current request and existing documents
-directly. Half-finished adoption, old locks, handoffs and unfinished milestones do not block development.
-Skills remain available as independent tools; their formal workflow rules apply only when ON.
-ON uses the existing formal workflow. Turning ON does not itself start adoption or change project intent.
+Turning ON does not itself start adoption or change project intent.
 This control does not run project_status.py record or dispatch a next workflow step.
