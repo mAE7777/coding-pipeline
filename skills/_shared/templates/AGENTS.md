@@ -3,8 +3,8 @@
 <!--
 The project map for any coding agent or new contributor. Short: what is where, how to run things, the
 conventions that are not obvious from the code. CLAUDE.md holds one line: @AGENTS.md
-Committed in private repositories, local-only in public ones. Plain developer language only: tooling
-settings (gate keys, heavy commands) live in docs/project/gate.md, which stays local.
+Local-only by default (local_only.py keeps it out of commits), since the session section names the
+pipeline's tools; gate keys live in docs/project/gate.md. Everything else in plain developer language.
 -->
 
 ## Map

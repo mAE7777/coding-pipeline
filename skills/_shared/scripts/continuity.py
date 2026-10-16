@@ -340,10 +340,10 @@ def recovery(root, tool, session):
     if last:
         out.append(f"Its last message: \"{last[:900]}{' ...' if len(last) > 900 else ''}\"")
     out.append("Before building on it: (1) put every decision or instruction in those owner messages into the record "
-               "(decisions.md with `rulings.py record <project> --id D-<nnn> --quote \"<their words>\" --session "
-               f"{proof}`, open items into state.md); ask the owner only where two readings differ; (2) check the "
-               "files changed since the note for half-finished edits (git diff, then the test command); (3) update "
-               "state.md, then continue. /dev resume does this.")
+               "(`decisions.py add <project> --title \"<title>\" --body \"<the decision>\" --source-owner "
+               f"\"<their words>\" --session {proof}`, open items into state.md); ask the owner only where two "
+               "readings differ; (2) check the files changed since the note for half-finished edits (git diff, then "
+               "the test command); (3) update state.md, then continue. /dev resume does this.")
     return out
 
 
