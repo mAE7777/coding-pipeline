@@ -12,13 +12,16 @@ SCRIPTS = ROOT / "skills/_shared/scripts"
 SID = "33333333-2222-3333-4444-555555555555"
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
-import glob, json, os, sys
+import glob, json, os, re, sys
 args = sys.argv[1:]
 role = args[args.index("--agent") + 1]
 pack = sys.stdin.read()
 mode = os.environ.get("FAKE_MODE", "clean")
+# The re-verify run is told apart by its prompt (only a reverify run keeps that mode block of the agent file).
+prompt = json.load(open(args[args.index("--agents") + 1]))[role]["prompt"]
+reverify = role == "code-verifier" and "Re-verify mode" in prompt
 served = args[args.index("--model") + 1] if "--model" in args else "fake"
-key = role + ("-demo" if pack.startswith("# Demo pack") else "")
+key = role + ("-demo" if pack.startswith("# Demo pack") else "-reverify" if reverify else "")
 log = os.environ.get("FAKE_LOG")
 if log:
     with open(log, "a") as f:
@@ -43,15 +46,29 @@ if role == "code-verifier" and pack.startswith("# Demo pack"):
         f.write("1. milk\n")
     text = "Demo ran.\n```json\n" + json.dumps({"mode": "demo", "steps": steps}) + "\n```"
 elif role == "code-verifier":
-    review = {"mode": "review", "verdict": "PASS", "done_examples": [{"id": "I-D1", "status": "HOLDS"}],
+    review = {"mode": "reverify" if reverify else "review", "verdict": "PASS",
+              "done_examples": [{"id": "I-D1", "status": "HOLDS"}],
               "must_not_lose": [{"id": "L-01", "status": "HOLDS"}], "mechanisms": [], "wiring": [], "findings": [],
               "not_run": []}
+    if reverify:
+        # One row per finding the pack names, whatever its layout.
+        review["reverify"] = [{"id": i, "status": "NOT_FIXED" if mode == "notfixed" else "FIXED",
+                               "evidence": "python3 app.py: 1. milk"}
+                              for i in sorted(set(re.findall(r"\bM1-F\d+\b", pack)))]
+    elif mode == "changes":
+        review.update(verdict="FAIL", findings=[{"id": "F01", "class": "correctness", "severity": "high",
+                                                 "summary": "an empty list prints nothing at all", "where": "app.py:1",
+                                                 "evidence": "python3 app.py: (no output)"}])
     text = "Reviewed.\n```json\n" + json.dumps(review) + "\n```"
 elif role == "gate-judge":
     verdict = {"verdict": "ACCEPT-READY", "intent_diff": [{"id": "I-D1", "status": "HOLDS", "evidence": "q"},
                {"id": "M1.D1", "status": "HOLDS", "evidence": "q"}, {"id": "MECH-Store", "status": "HOLDS", "evidence": "q"},
                {"id": "L-01", "status": "HOLDS", "evidence": "q"}], "blocking": [], "logged": [], "not_run": [],
                "resolved": []}
+    if mode == "changes":
+        verdict.update(verdict="CHANGES", blocking=[{
+            "id": "M1-F01", "summary": "an empty list prints nothing", "evidence": "F01: (no output)",
+            "loop_back": "fix", "fixed_when": "python3 app.py prints an empty-list line", "files": ["app.py"]}])
     text = "Judgment.\n```json\n" + json.dumps(verdict) + "\n```"
     tools = 0
     if mode != "judge-skips-captures":
@@ -148,15 +165,57 @@ Real-use needs: none
 """
 
 
-def make_project(d, test_cmd="python3 -c \"print('tests ok')\""):
+LATER = """
+## M2 \u00b7 Remove an item
+Status: planned
+Promise: A person removes an item.
+Carries: none
+Mechanisms: none
+
+Demo ending:
+1. Run the remove command with milk \u2192 the list is empty
+
+In scope:
+- remove
+
+Named non-goals:
+- undo (reason: one step is enough)
+
+Parked:
+- none
+
+Done examples:
+- M2.D1 When milk is removed, the list is empty. Example: remove milk \u2192 "(empty)"
+
+Checkpoints:
+- none
+
+Interfaces: none
+
+Steal: none
+
+AI evals: none
+
+Readiness: built [ ] \u00b7 gate-passed [ ] \u00b7 accepted [ ] \u00b7 released [ ] \u00b7 live-verified [ ]
+Real-use needs: none
+"""
+CHECKPOINTS = """Checkpoints:
+- M1.C1 store \u00b7 why here: the list lives there \u00b7 check: `python3 -c "print('c1 ok')"`
+- M1.C2 order \u00b7 why here: the list keeps order \u00b7 check: add a then b, see a before b
+- M1.C3 printing \u00b7 why here: the output format \u00b7 check: `python3 -c "import sys; sys.exit(4)"`
+"""
+
+
+def make_project(d, test_cmd="python3 -c \"print('tests ok')\"", milestones=MILESTONES):
     root = Path(d) / "proj"
     docs = root / "docs/project"
     docs.mkdir(parents=True)
     (root / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
     (root / "app.py").write_text("items = []\n")
+    (root / "test_app.py").write_text("import app\n\nassert app.items == []\n")  # the wiring row's test
     (root / "AGENTS.md").write_text(f"# Map\n\n## Commands\ntest: {test_cmd}\nrun: python3 app.py\n")
     (docs / "intent.md").write_text(INTENT)
-    (docs / "milestones.md").write_text(MILESTONES)
+    (docs / "milestones.md").write_text(milestones)
     (docs / "decisions.md").write_text('# Decisions\n\n## D-001 · 2026-09-27 · Lock intent\nLock intent\n'
                                        'Source: [owner 2026-09-27] "yes, lock it, that is the list I want"\n')
     return root
@@ -194,15 +253,19 @@ class GateRunTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
         subprocess.run([sys.executable, str(SCRIPTS / "baseline.py"), "record", str(root), "M1"], env=self.env,
                        check=True, capture_output=True)
+        self.freeze(root)
+        return root
+
+    def freeze(self, root):
         fp = subprocess.run([sys.executable, str(SCRIPTS / "fingerprint.py"), str(root)], capture_output=True,
                             text=True).stdout.split()[0]
         (root / "docs/project/state.md").write_text(f"# State\n\n## Understanding\nAdd and show.\n\n## Candidate\n{fp}\n")
-        return root
+        return fp
 
-    def gate(self, root, mode="clean", family=("--family", "claude"), extra_env=None):
+    def gate(self, root, mode="clean", family=("--family", "claude"), extra_env=None, flags=()):
         env = {**self.env, "FAKE_MODE": mode, **(extra_env or {})}
         out = subprocess.run([sys.executable, str(SCRIPTS / "gate_run.py"), str(root), "--milestone", "M1",
-                              *family, "--agents-dir", str(ROOT / "agents")],
+                              *family, "--agents-dir", str(ROOT / "agents"), *flags],
                              capture_output=True, text=True, env=env, timeout=600)
         ev = sorted((root / ".evidence/gate/M1").glob("r*"))
         verdict = json.loads((ev[-1] / "verdict.json").read_text()) if ev and (ev[-1] / "verdict.json").exists() else None
@@ -362,6 +425,182 @@ class GateRunTest(unittest.TestCase):
         out, verdict, ev = self.gate(root, mode="escape")
         self.assertEqual(verdict["verdict"], "INCONCLUSIVE", out.stdout[-1500:])
         self.assertEqual(json.loads((ev / "loyal-evaluator.summary.json").read_text())["status"], "LEAK")
+
+    # ---- focused re-gates (regate_scope.py) ----------------------------------------------------------------------
+    def changes_round(self):
+        """Round 1 ends CHANGES with M1-F01 blocking on app.py; M2 is planned, so M1 is not the final milestone."""
+        root = self.prepare(milestones=MILESTONES + LATER)
+        self.env["FAKE_LOG"] = str(Path(self.tmp.name) / "calls.jsonl")
+        out, verdict, ev = self.gate(root, mode="changes")
+        self.assertEqual(verdict["verdict"], "CHANGES", out.stdout[-1500:])
+        ledger = json.loads((root / "docs/project/reviews/M1.findings.json").read_text())
+        self.assertEqual((ledger["M1-F01"]["files"], ledger["M1-F01"]["where"]), (["app.py"], "app.py:1"))
+        self.assertTrue((root / ".evidence/gate/M1/full-candidate/app.py").is_file(), "a full round keeps its snapshot")
+        self.assertEqual(json.loads((root / ".evidence/gate/M1/full-candidate.json").read_text())["round"], 1)
+        self.assertTrue((ev / "candidate.txt").read_text().startswith(verdict["fingerprint"]))
+        self.assertTrue(self.has_layer1(ev), "layer 1's results reach the review")
+        return root
+
+    def has_layer1(self, ev):
+        """The code-verifier's pack carries layer1.json: its manifest names the file, or its checks are in it."""
+        pack = (ev / "code-verifier.pack.md").read_text()
+        return str(ev / "layer1.json") in pack or "tree unchanged" in pack
+
+    def test_a_contained_fix_gets_a_focused_round_with_the_evaluator_carried(self):
+        root = self.changes_round()
+        (root / "app.py").write_text("items = []\nprint('\\n'.join(items) or '(empty)')\n")
+        self.freeze(root)
+        before = len(self.calls())
+        out, verdict, ev = self.gate(root)
+        self.assertEqual(verdict["verdict"], "ACCEPT-READY", json.dumps(verdict, indent=1) + out.stdout[-2000:])
+        scope = json.loads((ev / "scope.json").read_text())
+        self.assertEqual((scope["scope"], scope["kind"], scope["since"]["round"]), ("focused", "changes", 1), scope)
+        self.assertEqual([f["id"] for f in scope["findings"]], ["M1-F01"])
+        self.assertEqual([c["path"] for c in scope["changed_files"]], ["app.py"])
+        self.assertIn("+print(", Path(scope["delta_patch"]).read_text())
+        keys = [c["key"] for c in self.calls()[before:]]
+        self.assertNotIn("loyal-evaluator", keys, "no evaluator runs in a focused round")
+        self.assertIn("code-verifier-reverify", keys)
+        self.assertFalse((ev / "loyal-evaluator.summary.json").exists())
+        self.assertTrue((ev / "carried-loyal-evaluator.result.md").is_file())
+        self.assertTrue((ev / "carried-loyal-evaluator-pass2.result.md").is_file())
+        cv = json.loads((ev / "code-verifier.summary.json").read_text())
+        self.assertEqual((cv["route"], cv["mode"]), ("code-verifier.reverify", "reverify"))
+        self.assertTrue(self.has_layer1(ev), "layer 1's results reach the re-verify")
+        self.assertIn("loyal-evaluator CARRIED (r1)", verdict["evidence_line"])
+        self.assertEqual(verdict["carried"]["loyal-evaluator"]["round"], 1)
+        ledger = json.loads((root / "docs/project/reviews/M1.findings.json").read_text())
+        self.assertEqual(ledger["M1-F01"]["status"], "fixed", "FIXED in the re-verify and not blocked again")
+        self.assertEqual(json.loads((root / ".evidence/gate/M1/accepted-candidate.json").read_text())["round"], 2)
+        self.assertIn("scope: focused round", (ev / "progress.log").read_text())
+        review = (root / "docs/project/reviews/M1.md").read_text()
+        self.assertIn("Scope: focused (changes)", review)
+        self.assertIn("- loyal-evaluator (CARRIED from r1", review)
+
+    def test_a_change_outside_the_findings_needs_a_full_round(self):
+        root = self.changes_round()
+        (root / "app.py").write_text("items = []\nprint('\\n'.join(items) or '(empty)')\n")
+        (root / "lib.py").write_text("def helper():\n    return 1\n")
+        self.freeze(root)
+        before = len(self.calls())
+        out, verdict, ev = self.gate(root)
+        scope = json.loads((ev / "scope.json").read_text())
+        self.assertEqual(scope["scope"], "full", scope)
+        self.assertTrue(any("lib.py" in r for r in scope["reasons"]), scope["reasons"])
+        self.assertIn("loyal-evaluator", [c["key"] for c in self.calls()[before:]], "the blind evaluator runs again")
+        self.assertEqual(json.loads((ev / "loyal-evaluator.summary.json").read_text())["status"], "OK")
+        self.assertEqual(json.loads((ev / "code-verifier.summary.json").read_text())["route"], "code-verifier.review")
+        self.assertEqual(json.loads((root / ".evidence/gate/M1/full-candidate.json").read_text())["round"], 2)
+        self.assertEqual(verdict["verdict"], "ACCEPT-READY", out.stdout[-1500:])
+
+    def test_full_flag_forces_a_full_round(self):
+        root = self.changes_round()
+        (root / "app.py").write_text("items = []\nprint('\\n'.join(items) or '(empty)')\n")
+        self.freeze(root)
+        out, verdict, ev = self.gate(root, flags=("--full",))
+        scope = json.loads((ev / "scope.json").read_text())
+        self.assertEqual((scope["scope"], scope["reasons"]), ("full", ["--full was given"]), scope)
+        self.assertTrue((ev / "loyal-evaluator.summary.json").exists())
+
+    # ---- layer 1 ---------------------------------------------------------------------------------------------
+    def test_layer1_runs_checkpoint_checks_and_hands_prose_to_the_reviewer(self):
+        root = self.prepare(milestones=MILESTONES.replace("Checkpoints:\n- none\n", CHECKPOINTS))
+        out, verdict, ev = self.gate(root)
+        layer1 = json.loads((ev / "layer1.json").read_text())
+        checks = {c["name"]: c for c in layer1["checks"]}
+        self.assertEqual(checks["checkpoint M1.C1"]["status"], "PASS")
+        self.assertEqual(checks["checkpoint M1.C2"]["status"], "SKIP")
+        self.assertIn("not a runnable command", checks["checkpoint M1.C2"]["reason"])
+        self.assertEqual((checks["checkpoint M1.C3"]["status"], checks["checkpoint M1.C3"]["exit"]), ("FAIL", 4))
+        self.assertEqual([(i["milestone"], i["id"]) for i in layer1["for_reviewer"]], [("M1", "M1.C2")])
+        self.assertEqual(layer1["for_reviewer"][0]["what"], "add a then b, see a before b")
+        names = [c["name"] for c in layer1["checks"]]
+        self.assertLess(names.index("test suite"), names.index("checkpoint M1.C1"))
+        self.assertEqual(names[-1], "tree unchanged")
+        self.assertEqual(verdict["verdict"], "CHANGES", out.stdout[-1500:])
+        self.assertTrue(any("checkpoint M1.C3" in r for r in verdict["reasons"]), verdict["reasons"])
+        self.assertFalse((ev / "code-verifier.summary.json").exists(), "a FAIL still skips the model reviews")
+
+    def test_a_missing_wiring_test_fails_layer1(self):
+        root = self.prepare(milestones=MILESTONES.replace("| test_app.py | proven |", "| tests/test_add.py | proven |"))
+        out, verdict, ev = self.gate(root)
+        checks = {c["name"]: c for c in json.loads((ev / "layer1.json").read_text())["checks"]}
+        self.assertEqual(checks["wiring test M1 add command"]["status"], "FAIL")
+        self.assertIn("wiring test missing", checks["wiring test M1 add command"]["detail"])
+        self.assertEqual(verdict["verdict"], "CHANGES", out.stdout[-1500:])
+        self.assertTrue(any("wiring test missing: tests/test_add.py" in r for r in verdict["reasons"]), verdict)
+
+    def test_build_labels_run_in_order_and_install_only_when_the_copy_lacks_dependencies(self):
+        root = self.prepare()
+        (root / "AGENTS.md").write_text("# Map\n\n## Commands\ninstall: python3 -c \"print('installed')\"\n"
+                                        "build: python3 -c \"print('built')\"\nlint: python3 -c \"print('linted')\"\n"
+                                        "test: python3 -c \"print('tests ok')\"\nrun: python3 app.py\n")
+        out, verdict, ev = self.gate(root)
+        layer1 = json.loads((ev / "layer1.json").read_text())
+        names = [c["name"] for c in layer1["checks"]]
+        self.assertEqual([n for n in names if n in ("install", "typecheck", "lint", "build", "test suite")],
+                         ["install", "lint", "build", "test suite"], "no typecheck label, nothing run for it")
+        self.assertTrue(layer1["install"]["ran"])
+        (root / "node_modules").mkdir()
+        (root / "node_modules/x.js").write_text("module.exports = 1\n")
+        out, verdict, ev = self.gate(root)
+        layer1 = json.loads((ev / "layer1.json").read_text())
+        self.assertNotIn("install", [c["name"] for c in layer1["checks"]])
+        self.assertFalse(layer1["install"]["ran"])
+        self.assertIn("node_modules", layer1["install"]["reason"])
+
+
+class Layer1PlanTest(unittest.TestCase):
+    """What layer 1 reads from milestones.md, without running a round."""
+
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import gate_run
+        self.g = gate_run
+
+    def test_earlier_accepted_or_gate_passed_milestones_come_first_in_order(self):
+        text = ("# Milestones\n\n## M1 \u00b7 a\nStatus: accepted\nCheckpoints:\n- M1.C1 x \u00b7 check: `python3 -c 1`\n\n"
+                "## M2 \u00b7 b\nStatus: planned\nCheckpoints:\n- M2.C1 y \u00b7 check: `python3 -c 2`\n\n"
+                "## M3 \u00b7 c\nStatus: gate\nCheckpoints:\n- M3.C1 z \u00b7 check: `python3 -c 3`\n"
+                "Readiness: built [x] \u00b7 gate-passed [x] (product:a) \u00b7 accepted [ ]\n\n"
+                "## M4 \u00b7 d\nStatus: gate\nCheckpoints:\n- M4.C1 w \u00b7 check: `python3 -c 4`\n"
+                "Wiring:\n| C | P | Co | V | F | Test | Status |\n|---|---|---|---|---|---|---|\n"
+                "| add | t | s | v | f | `tests/test_add.py::test_one`, n/a | wired |\n\n"
+                "## M5 \u00b7 e\nStatus: accepted\nCheckpoints:\n- M5.C1 v \u00b7 check: `python3 -c 5`\n")
+        self.assertEqual([c[1] for c in self.g.checkpoint_plan(text, "M4")], ["M1.C1", "M3.C1", "M4.C1"])
+        self.assertEqual(self.g.wiring_plan(text, "M4"), [("M4", "add", "wired", ["tests/test_add.py"])])
+        self.assertEqual(self.g.checkpoint_plan(text, "M9"), [])
+
+    def test_commands_run_and_prose_goes_to_the_reviewer(self):
+        cmds = {"run": "python3 app.py", "demo": "npm run demo"}
+        runnable = [
+            '`python3 -m pytest tests/test_store.py -q`',
+            '`npm test -- add.test.ts` passes',
+            '`./scripts/check.sh` exits 0',
+            '`test -f dist/app.js`',
+            '`FOO=1 python3 -c "print(1)"`',
+            'python3 -m pytest tests/test_store.py',
+        ]
+        prose = [
+            'add a then b, see a before b',
+            '`python3 app.py add milk` prints 1. milk',
+            '`test the add command`',
+            'open the app and confirm the list shows',
+            'manual probe',
+            '`curl localhost:3000/api/items`',
+            '`npm run dev`',
+            '`python3 app.py`',
+            '`npm test` then `npm run e2e`',
+            "npm test passes",
+            "don't lose the order",
+            'the export matches the screen.',
+        ]
+        for check in runnable:
+            self.assertIsNotNone(self.g.runnable(check, cmds)[0], check)
+        for check in prose:
+            cmd, why = self.g.runnable(check, cmds)
+            self.assertIsNone(cmd, check)
+            self.assertTrue(why, check)
 
 
 if __name__ == "__main__":
