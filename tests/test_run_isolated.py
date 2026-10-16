@@ -974,47 +974,106 @@ class ShadowRunTest(unittest.TestCase):
         self.assertFalse(self.log.exists())
 
 
+FAKE_CLAUDE_SEES = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+pack = sys.stdin.read()
+dirs = [args[i + 1] for i, a in enumerate(args) if a == "--add-dir"]
+with open(os.environ["FAKE_SEEN"], "a") as f:
+    f.write(json.dumps({"stdin": pack, "add_dirs": dirs, "present": [os.path.isdir(d) for d in dirs],
+                        "model": args[args.index("--model") + 1] if "--model" in args else None}) + "\n")
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "S", "model": "m", "tools": ["Read"]}))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}))
+print(json.dumps({"type": "result", "result": "verdict", "num_turns": 1, "is_error": False, "permission_denials": []}))
+'''
+
+
 class ChangePatchTest(unittest.TestCase):
-    """render_pack.py writes <stem>.change.patch beside a review pack; the run may read it, in both fences."""
+    """render_pack.py writes <stem>.change.patch beside a review pack, in the project the checker may never read:
+    the run gets its own read-only copy, and the pack names that copy."""
 
-    def render(self, d, *extra, patch=True, env=None):
-        proj, out = Path(d) / "proj", Path(d) / "ev"
-        (proj / "docs/project").mkdir(parents=True, exist_ok=True)
-        (proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
-        out.mkdir(exist_ok=True)
-        p = out / "code-verifier.change.patch"
-        p.unlink(missing_ok=True)
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.home, self.bin = self.d / "home", self.d / "bin"
+        self.home.mkdir()
+        self.bin.mkdir()
+        for name, body in (("claude", FAKE_CLAUDE_SEES), ("codex", FAKE_CODEX_OK)):
+            (self.bin / name).write_text(body)
+            os.chmod(self.bin / name, 0o755)
+        self.proj = self.d / "proj"
+        (self.proj / "docs/project").mkdir(parents=True)
+        (self.proj / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
+        self.out = self.proj / ".evidence/gate/M1/r1"
+        self.out.mkdir(parents=True)
+        self.patch = self.out / "code-verifier.change.patch"
+        self.seen = self.d / "seen.jsonl"
+        self.env = {**os.environ, "HOME": str(self.home), "PATH": f"{self.bin}:{os.environ['PATH']}",
+                    "HEAVY_LOCK_DIR": str(self.d / "lock"), "FAKE_SEEN": str(self.seen)}
+        self.env.pop("PIPELINE_MODELS_IGNORE_OVERRIDE", None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def render(self, *extra, patch=True):
+        """A review run whose pack names the evidence patch the way render_pack.py does (here through --extra)."""
         if patch:
-            p.write_text("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n")
-        (Path(d) / "work").mkdir(exist_ok=True)
-        proc = subprocess.run([sys.executable, str(RI), "code-verifier", "--dir", str(Path(d) / "work"), "--out",
-                               str(out), "--project", str(proj), "--agent-file", str(AGENTS / "code-verifier.md"),
-                               "--render", "--milestone", "M1", "--", "--dry-run", *extra],
-                              capture_output=True, text=True, env=env, timeout=120)
-        return proc, p.resolve(), out
+            self.patch.write_text("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n")
+        note = self.d / "note.md"
+        note.write_text(f"The full change: {self.patch.resolve()}\n")
+        (self.d / "work").mkdir(exist_ok=True)
+        proc = subprocess.run([sys.executable, str(RI), "code-verifier", "--dir", str(self.d / "work"), "--out",
+                               str(self.out), "--project", str(self.proj), "--agent-file",
+                               str(AGENTS / "code-verifier.md"), "--render", "--milestone", "M1", "--extra",
+                               f"Full change={note}", "--", *extra],
+                              capture_output=True, text=True, env=self.env, timeout=120)
+        summary = json.loads((self.out / "code-verifier.summary.json").read_text())
+        seen = [json.loads(x) for x in self.seen.read_text().splitlines()] if self.seen.is_file() else []
+        return proc, summary, seen
 
-    def test_the_patch_joins_the_read_allow_list_when_it_exists(self):
-        with tempfile.TemporaryDirectory() as d:
-            proc, patch, out = self.render(d)
-            self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
-            allow = json.loads((out / "code-verifier.settings.json").read_text())["sandbox"]["filesystem"]["allowRead"]
-            self.assertIn(str(patch), allow)
-            self.assertEqual(json.loads(proc.stdout)["change_patch"], str(patch))
-            proc, patch, out = self.render(d, patch=False)
-            allow = json.loads((out / "code-verifier.settings.json").read_text())["sandbox"]["filesystem"]["allowRead"]
-            self.assertFalse([a for a in allow if a.endswith(".change.patch")])
-            self.assertNotIn("change_patch", json.loads(proc.stdout))
+    def test_the_checker_reads_its_own_copy_and_nothing_in_the_project(self):
+        proc, s, seen = self.render("--shadow", "claude-sonnet-5-5:high", "--shadow-dir", str(self.d))
+        self.assertEqual(s["status"], "OK", proc.stderr[-400:])
+        evidence, readable = str(self.patch.resolve()), s["change_patch_readable"]
+        folder = str(Path(readable).parent)
+        self.assertEqual(s["change_patch"], evidence)
+        self.assertTrue(Path(readable).name == self.patch.name and folder.startswith(str(self.home / ".gate-copies")))
+        main, shadow = seen
+        self.assertIn(f"The full change: {readable}", main["stdin"], "the pack fed to the checker names the copy")
+        self.assertNotIn(evidence, main["stdin"])
+        self.assertEqual(s["pack_sha256"], ri.hashlib.sha256(main["stdin"].encode()).hexdigest(),
+                         "the pack's sha256 is of the pack as fed")
+        self.assertIn(readable, (self.out / "code-verifier.pack.md").read_text())
+        self.assertIn(folder, main["add_dirs"], "--restricted lets the Read tool open it")
+        self.assertTrue(main["present"][main["add_dirs"].index(folder)])
+        cfg = json.loads((self.out / "code-verifier.settings.json").read_text())
+        allow = cfg["sandbox"]["filesystem"]["allowRead"]
+        self.assertIn(folder, allow)
+        self.assertEqual([a for a in allow if a.startswith(str(self.proj.resolve()))], [],
+                         "nothing under the project is allowed")
+        self.assertIn(f"Edit(/{folder}/**)", cfg["permissions"]["deny"], "read-only, like the stacks folder")
+        self.assertNotIn(folder, cfg["sandbox"]["filesystem"]["allowWrite"])
+        self.assertEqual(shadow["model"], "claude-sonnet-5-5")
+        self.assertIn(readable, shadow["stdin"], "the shadow reads the same copy")
+        self.assertTrue(shadow["present"][shadow["add_dirs"].index(folder)], "it lasts until the shadow ends")
+        self.assertFalse(Path(folder).exists(), "and is removed when the run ends")
+        self.assertEqual(list((self.home / ".gate-copies").glob("patch-*")), [])
 
-    def test_the_codex_fence_reads_it_too(self):
-        with tempfile.TemporaryDirectory() as d:
-            bindir = Path(d) / "bin"
-            bindir.mkdir()
-            (bindir / "codex").write_text(FAKE_CODEX_OK)
-            os.chmod(bindir / "codex", 0o755)
-            env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
-            proc, patch, out = self.render(d, "--family", "codex", env=env)
-            self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
-            self.assertIn(f'(allow file-read* (subpath "{patch}"))', (out / "code-verifier.sb").read_text())
+    def test_no_patch_no_copy(self):
+        proc, s, seen = self.render(patch=False)
+        self.assertEqual(s["status"], "OK", proc.stderr[-400:])
+        self.assertNotIn("change_patch", s)
+        self.assertFalse([d for d in seen[0]["add_dirs"] if "patch-" in d])
+        self.assertFalse((self.home / ".gate-copies").is_dir() and
+                         list((self.home / ".gate-copies").glob("patch-*")))
+
+    def test_the_codex_fence_reads_the_copy(self):
+        proc, s, _ = self.render("--family", "codex", "--dry-run")
+        self.assertEqual(s["status"], "DRY_RUN", proc.stderr[-400:])
+        profile = (self.out / "code-verifier.sb").read_text()
+        self.assertIn(f'(allow file-read* (subpath "{Path(s["change_patch_readable"]).parent}"))', profile)
+        self.assertNotIn(str(self.patch.resolve()), profile)
+        self.assertFalse(Path(s["change_patch_readable"]).exists())
 
 
 class ProjectServerTest(unittest.TestCase):

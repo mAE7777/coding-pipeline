@@ -20,11 +20,14 @@ A real gate run takes longer than a shell tool call may last: start this in the 
 Inputs. The pack is a file (--pack, used by the fixture harness) or rendered by render_pack.py into the
 evidence folder immediately before launch (--render ... --), so nothing editable sits between rendering and
 running; its sha256 is recorded. When render_pack.py writes <stem>.change.patch beside the pack (the full
-change, for a code-verifier review or re-verify pack), its absolute path joins the read allow list as an
---allow-read path would, in either family's fence; the summary records it as change_patch. For the
-loyal-evaluator's first pass the pack is checked against intent.md first, and a hit stops the run with status
-LEAK. The agent definition comes from --agent-file (staging) or ~/.claude/agents/<role>.md and is passed
-inline, so the checker runs exactly that text.
+change, for a code-verifier review or re-verify pack), that file is in the project, which the checker may never
+read: it is copied into a fresh folder of its own under ~/.gate-copies (patch-*), every mention of the evidence
+path in the pack is pointed at the copy before the pack's sha256 is taken, and the folder is opened read-only
+like the stacks folder (allowRead and --add-dir for Claude, an allow rule in the Codex profile). It is removed
+when the run ends, its shadow included. The summary records change_patch (the evidence file) and
+change_patch_readable (the run's copy). For the loyal-evaluator's first pass the pack is checked against
+intent.md first, and a hit stops the run with status LEAK. The agent definition comes from --agent-file
+(staging) or ~/.claude/agents/<role>.md and is passed inline, so the checker runs exactly that text.
 
 Claude family: `claude -p --agents <file> --agent <role>` with cwd=<workdir>, the pack on standard input, and
   --restricted                 no user, project, or local settings files (no user CLAUDE.md rules, hooks,
@@ -209,6 +212,24 @@ def private_tmp_dir():
     return d
 
 
+RUN_DIRS = []  # folders that last the whole run, shadow included (the patch's readable copy); drop_run_dirs ends them
+
+
+def readable_patch(patch):
+    """A copy of the evidence folder's change patch in a fresh folder outside the project and every copy, which the
+    checker opens read-only (the project, evidence included, is denied to it)."""
+    d = HOME / ".gate-copies" / f"patch-{secrets.token_hex(6)}"
+    d.mkdir(parents=True, mode=0o700)
+    RUN_DIRS.append(d)
+    shutil.copyfile(patch, d / patch.name)
+    return d / patch.name
+
+
+def drop_run_dirs():
+    while RUN_DIRS:
+        shutil.rmtree(RUN_DIRS.pop(), ignore_errors=True)
+
+
 def uid_temp_entries(exclude):
     base = Path(f"/private/tmp/claude-{os.getuid()}")
     if not base.is_dir():
@@ -216,7 +237,9 @@ def uid_temp_entries(exclude):
     return [str(p) for p in base.iterdir() if str(p) != str(exclude)]
 
 
-def settings(role, workdir, deny=(), project=None, allow_read=(), network=(), private_tmp=None):
+def settings(role, workdir, deny=(), project=None, allow_read=(), network=(), private_tmp=None, read_only=()):
+    """The sandbox and permission settings of one Claude run. read_only folders (a readable patch copy) are opened
+    like the stacks folder: readable, never editable (the command adds them with --add-dir for the Read tool)."""
     workdir = Path(workdir)
     explicit = [str(Path(d).resolve()) for d in deny]
     if project:
@@ -235,7 +258,7 @@ def settings(role, workdir, deny=(), project=None, allow_read=(), network=(), pr
     protocols = protocols_dir()
     allow = [str(workdir)] + scripts + ([str(stacks)] if stacks else []) + ([str(protocols)] if protocols else [])
     allow += [str(t) for t in cache_reads()]
-    allow += [str(Path(p).expanduser()) for p in allow_read]
+    allow += [str(Path(p).expanduser()) for p in allow_read] + [str(p) for p in read_only]
     if private_tmp:
         allow.append(str(private_tmp))
     write = [str(workdir), str(LOCK_DIR)] + [str(HOME / w) for w in WRITE_CACHES if (HOME / w).exists()]
@@ -273,8 +296,8 @@ def settings(role, workdir, deny=(), project=None, allow_read=(), network=(), pr
     for t in ("WebFetch", "WebSearch"):
         if t in tools:
             cfg["permissions"]["allow"].append(t)
-    if stacks:
-        cfg["permissions"]["deny"] += [f"Edit({perm(stacks)}/**)", f"Write({perm(stacks)}/**)"]
+    for d in ([stacks] if stacks else []) + list(read_only):
+        cfg["permissions"]["deny"] += [f"Edit({perm(d)}/**)", f"Write({perm(d)}/**)"]
     for d in explicit:
         cfg["permissions"]["deny"] += [f"{t}({perm(d)}/**)" for t in ("Read", "Grep", "Glob", "Edit", "Write")]
     return cfg
@@ -677,8 +700,9 @@ def unread(workdir, globs, read_paths):
 def claude_cmd(role, opts, workdir, stem, sid):
     cfg_path = Path(str(stem) + ".settings.json")
     private_tmp = private_tmp_dir()
+    readable = opts.get("_readable") or []
     cfg_path.write_text(json.dumps(settings(role, workdir, opts["deny"], opts.get("project"), opts["allow_read"],
-                                            opts["network"], private_tmp), indent=2))
+                                            opts["network"], private_tmp, readable), indent=2))
     agents_file = Path(str(stem) + ".agents.json")
     rt = opts.get("_routing")
     record = {}
@@ -694,6 +718,7 @@ def claude_cmd(role, opts, workdir, stem, sid):
     stacks, protocols = stacks_dir(), protocols_dir()
     if role == "code-verifier":
         cmd += [x for d in (stacks, protocols) if d for x in ("--add-dir", str(d))]
+    cmd += [x for d in readable for x in ("--add-dir", str(d))]  # --restricted: the Read tool opens only these
     cmd += ["--resume", opts["resume"]] if opts.get("resume") else ["--session-id", sid]
     env = {k: v for k, v in os.environ.items() if k not in ("HEAVY_LOCK_HELD", "HEAVY_OWNER", "CODEX_THREAD_ID")}
     env["CLAUDE_CODE_TMPDIR"] = str(private_tmp)
@@ -719,7 +744,8 @@ def codex_cmd(role, opts, workdir, stem, sid):
         (home / "auth.json").symlink_to(HOME / ".codex/auth.json")
     private_tmp = private_tmp_dir()
     profile = Path(str(stem) + ".sb")
-    profile.write_text(codex_profile(workdir, home, opts["allow_read"], private_tmp, codex))
+    profile.write_text(codex_profile(workdir, home, list(opts["allow_read"]) + list(opts.get("_readable") or []),
+                                     private_tmp, codex))
     cmd = ["sandbox-exec", "-f", str(profile), codex, "exec", "-C", str(workdir), "-s", "danger-full-access",
            "--skip-git-repo-check", "-m", "gpt-6-astra", "-c", f'model_reasoning_effort="{opts["effort"]}"',
            "-c", 'approval_policy="never"', "--json", "-o", str(private_tmp / "result.md"), "-"]
@@ -881,7 +907,7 @@ def sweep_stale(hours=6):
     """Remove private folders left by runs that were killed outright (a run lasts at most its timeout)."""
     base = HOME / ".gate-copies"
     cutoff = time.time() - hours * 3600
-    for d in list(base.glob("tmp-*")) + list(base.glob("codex-home-*")) if base.is_dir() else []:
+    for d in [p for g in ("tmp-*", "codex-home-*", "patch-*") for p in base.glob(g)] if base.is_dir() else []:
         try:
             if d.is_dir() and d.stat().st_mtime < cutoff:
                 shutil.rmtree(d, ignore_errors=True)
@@ -1057,9 +1083,15 @@ def main(argv):
             print(f"run_isolated: pack not rendered: {r.stderr.strip()[:400]}", file=sys.stderr)
             return 1
         patch = Path(str(stem) + ".change.patch")
-        if patch.is_file():  # the full change render_pack wrote beside the pack: readable as --allow-read
-            opts["_patch"] = str(patch.resolve())
-            opts["allow_read"].append(opts["_patch"])
+        if patch.is_file():
+            # The full change render_pack wrote beside the pack sits in the project, which the checker may never
+            # read: it gets a copy in a folder of its own, and the pack names that copy (before its sha256).
+            readable = readable_patch(patch)
+            opts.update(_patch=str(patch.resolve()), _patch_readable=str(readable), _readable=[str(readable.parent)])
+            named = sorted({str(patch.resolve()), str(patch.absolute())}, key=len, reverse=True)
+            text = pack_path.read_text(encoding="utf-8")
+            pack_path.write_text(re.sub("|".join(map(re.escape, named)), lambda m: str(readable), text),
+                                 encoding="utf-8")
     else:
         shutil.copyfile(opts["pack"], pack_path)
     pack = raw_pack = pack_path.read_text(encoding="utf-8")
@@ -1075,6 +1107,7 @@ def main(argv):
         if opts.get("_workflow_lease") and not valid(opts["_workflow_lease"]):
             if auto_dir:
                 shutil.rmtree(workdir, ignore_errors=True)
+            drop_run_dirs()
             print(OFF_TEXT, file=sys.stderr)
             return 3
         summary.update({"role": role, "mode": opts.get("mode") or "review", "pack_sha256": pack_sha,
@@ -1084,7 +1117,7 @@ def main(argv):
             summary.update({"route": route_name(role, opts)[0], "route_applies": False,
                             "route_error": opts["_route_error"]})
         if opts.get("_patch"):
-            summary["change_patch"] = opts["_patch"]
+            summary.update(change_patch=opts["_patch"], change_patch_readable=opts["_patch_readable"])
         path = Path(str(stem) + ".summary.json")
         path.write_text(json.dumps(summary, indent=2))  # the main run's final status, before any shadow
         if plan:
@@ -1096,6 +1129,7 @@ def main(argv):
             path.write_text(json.dumps(summary, indent=2))
         if auto_dir:
             shutil.rmtree(workdir, ignore_errors=True)
+        drop_run_dirs()  # the readable patch copy outlives the main run only for its shadow
         print(json.dumps(summary, indent=2))
         return 0 if summary["status"] in ("OK", "DRY_RUN") else 1
 
@@ -1129,4 +1163,8 @@ if __name__ == "__main__":
     if "--help" in sys.argv[1:3] or sys.argv[1:] == ["-h"]:
         print(__doc__.strip())  # asked for, so not an error
         sys.exit(0)
-    sys.exit(main(sys.argv[1:]))
+    try:
+        code = main(sys.argv[1:])
+    finally:
+        drop_run_dirs()  # a stopped run too (the stop handler exits through here)
+    sys.exit(code)
