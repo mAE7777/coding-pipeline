@@ -17,3 +17,22 @@ When ON, the skill's formal rules and evidence requirements apply unchanged. At 
 before starting a checker or another step, re-read the choice. If it changed, stop the formal chain and
 continue the user's ordinary task without imposing a new gate. The choice is independent of the build
 record and is never a missing ruling or an intent amendment.
+
+## Venture projects
+
+A project with a `truth/` folder is a venture project. When ON, read
+`~/.claude/skills/_shared/references/venture-mode.md` before the skill's first step (before changing
+anything, starting a round, recording an acceptance, writing or receiving a packet, or deploying). If it is
+missing, stop with BLOCKED: this is a venture project and its rules are not installed.
+
+## End
+
+When ON, every formal step records itself when it ends: each run of a skill, and inside a longer run every
+stop (a /dev freeze, question to the owner, blocker, or finished campaign step; each /gate round report and
+acceptance; each /handoff packet written or received):
+
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill <name> [--arg <what it ran on>] --outcome "<one line>"`
+
+It appends the journal (`docs/project/journal.md`), rewrites the Last step in `state.md`, and prints the
+Next line: what comes next, who takes it, and why. The report closes with that line. Under `/next auto`, a
+builder step is taken right away. When OFF, `record` writes nothing.
