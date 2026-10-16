@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GR = ROOT / "skills/_shared/scripts/gate_report.py"
 CHECKERS = ("code-verifier", "loyal-evaluator", "loyal-evaluator-pass2", "code-verifier-demo", "gate-judge")
+CARRIED = ("loyal-evaluator", "loyal-evaluator-pass2")
 INTENT = """# Intent
 ## Goal
 x
@@ -48,7 +49,7 @@ class GateReportTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def evidence(self, rnd, judge, statuses=None, layer1="PASS", copies="PASS", switch=False, review=None, demo=None,
-                 checks=None):
+                 checks=None, extra=None):
         ev = self.root / f".evidence/gate/M1/r{rnd}"
         ev.mkdir(parents=True, exist_ok=True)
         (ev / "layer1.json").write_text(json.dumps({"status": layer1, "checks": checks or [{"name": "gate.sh", "status": layer1}]}))
@@ -59,6 +60,7 @@ class GateReportTest(unittest.TestCase):
             s = {"status": (statuses or {}).get(c, "OK"), "family": "claude", "session_id": f"sess-{c}"}
             if switch and c == "code-verifier":
                 s["family_switch"] = {"from": "codex", "to": "claude", "reason": "usage limit"}
+            s.update((extra or {}).get(c) or {})
             (ev / f"{c}.summary.json").write_text(json.dumps(s))
         body = judge if isinstance(judge, str) else "Verdict below.\n```json\n" + json.dumps(judge) + "\n```\n"
         (ev / "gate-judge.result.md").write_text(body)
@@ -241,6 +243,157 @@ class GateReportTest(unittest.TestCase):
         r = self.report(1, self.evidence(1, CLEAN, switch=True))
         self.assertEqual(r["verdict"], "ACCEPT-READY")
         self.assertTrue(any("usage limit" in e for e in r["exceptions"]))
+
+    # ---- focused rounds ----------------------------------------------------------------------------------------
+    def focused(self, rnd, judge, review, findings=(("M1-F01", ["app.py"]),), fixes=(), carried_status="OK",
+                carried=True):
+        """A focused round: scope.json names the evaluator results carried from r1, and no evaluator ran in it."""
+        src = self.root / ".evidence/gate/M1/carried-from-r1"
+        src.mkdir(parents=True, exist_ok=True)
+        rows = {}
+        for stem in CARRIED:
+            (src / f"{stem}.summary.json").write_text(json.dumps({
+                "status": carried_status, "route": "loyal-evaluator", "requested_model": "default",
+                "requested_effort": "xhigh", "served_model": "claude-opus-5-5", "session_id": f"old-{stem}"}))
+            (src / f"{stem}.result.md").write_text("I added an item and it showed.\n")
+            rows[stem] = {"round": 1, "fingerprint": "product:aaa", "summary": str(src / f"{stem}.summary.json"),
+                          "result": str(src / f"{stem}.result.md")}
+        ev = self.evidence(rnd, judge, review=review)
+        for stem in CARRIED:
+            (ev / f"{stem}.summary.json").unlink()
+        scope = {"scope": "focused", "milestone": "M1", "kind": "hotfix" if fixes else "changes",
+                 "reasons": ["the previous round (r1) ended CHANGES"],
+                 "since": {"round": 1, "fingerprint": "product:aaa", "snapshot": "x"},
+                 "changed_files": [{"path": "app.py", "status": "modified", "added": 2, "removed": 1}],
+                 "changed_lines": 3, "delta_patch": str(ev / "delta.patch"),
+                 "findings": [{"id": i, "summary": f"{i} defect", "class": "correctness", "severity": "high",
+                               "files": f, "where": "app.py:1", "fixed_when": "it prints"} for i, f in findings],
+                 "fixes": [{"id": i, "title": f"{i} fix", "symptom": "s", "reproduction": "python3 t.py",
+                            "change": "app.py"} for i in fixes],
+                 "carried": rows if carried else {}}
+        (ev / "scope.json").write_text(json.dumps(scope))
+        return ev
+
+    def reverify(self, *rows):
+        return {**REVIEW_PASS, "mode": "reverify", "verdict": "FAIL" if any(s == "NOT_FIXED" for _, s in rows) else "PASS",
+                "reverify": [{"id": i, "status": s, "evidence": "python3 app.py: 1. milk"} for i, s in rows]}
+
+    def blocked_in_round_one(self):
+        j = dict(CLEAN, verdict="CHANGES", blocking=[{"id": "M1-F01", "summary": "the list loses an item",
+                                                      "evidence": "q", "loop_back": "fix", "files": ["app.py"]}])
+        self.assertEqual(self.report(1, self.evidence(1, j))["verdict"], "CHANGES")
+
+    def test_a_focused_round_carries_the_evaluator(self):
+        self.blocked_in_round_one()
+        r = self.report(2, self.focused(2, dict(CLEAN, resolved=["M1-F01"]), self.reverify(("M1-F01", "FIXED"))))
+        self.assertEqual(r["verdict"], "ACCEPT-READY", r)
+        self.assertIn("loyal-evaluator CARRIED (r1)", r["evidence_line"])
+        self.assertEqual(r["carried"]["loyal-evaluator-pass2"]["round"], 1)
+        self.assertEqual(r["scope"]["scope"], "focused")
+        block = (self.root / "docs/project/reviews/M1.md").read_text().split("## Round 2")[1]
+        self.assertIn("Scope: focused (changes) \u00b7 the previous round (r1) ended CHANGES", block)
+        self.assertIn("loyal-evaluator CARRIED r1 OK", block)
+        self.assertIn("- loyal-evaluator (CARRIED from r1, product:aaa): route loyal-evaluator", block)
+
+    def test_missing_or_failed_carried_evidence_is_inconclusive(self):
+        r = self.report(2, self.focused(2, CLEAN, self.reverify(("M1-F01", "FIXED")), carried=False))
+        self.assertEqual(r["verdict"], "INCONCLUSIVE", r)
+        self.assertTrue(any("loyal-evaluator CARRIED" in x and "no summary" in x for x in r["reasons"]), r["reasons"])
+        r = self.report(3, self.focused(3, CLEAN, self.reverify(("M1-F01", "FIXED")), carried_status="ERROR"))
+        self.assertEqual(r["verdict"], "INCONCLUSIVE", r)
+        self.assertTrue(any("ended ERROR" in x for x in r["reasons"]), r["reasons"])
+        ev = self.focused(4, CLEAN, self.reverify(("M1-F01", "FIXED")))
+        Path(json.loads((ev / "scope.json").read_text())["carried"]["loyal-evaluator"]["result"]).unlink()
+        r = self.report(4, ev)
+        self.assertEqual(r["verdict"], "INCONCLUSIVE", r)
+        self.assertTrue(any("no result at" in x for x in r["reasons"]), r["reasons"])
+
+    def test_a_scope_finding_without_a_reverify_row_is_inconclusive(self):
+        r = self.report(2, self.focused(2, CLEAN, self.reverify(("M1-F02", "FIXED"))))
+        self.assertEqual(r["verdict"], "INCONCLUSIVE", r)
+        self.assertIn("the re-verify has no row for finding M1-F01", r["reasons"])
+        r = self.report(3, self.focused(3, CLEAN, self.reverify(("M1-F01", "PARTLY"))))
+        self.assertEqual(r["verdict"], "INCONCLUSIVE", r)
+        r = self.report(4, self.focused(4, CLEAN, REVIEW_PASS))
+        self.assertTrue(any("no reverify rows" in x for x in r["reasons"]), r["reasons"])
+
+    def test_not_fixed_keeps_the_finding_blocking_and_the_next_round_is_blocked(self):
+        # A hotfix whose fix does not hold: blocking for the first time, so CHANGES.
+        r = self.report(2, self.focused(2, CLEAN, self.reverify(("F-001", "NOT_FIXED")), findings=(), fixes=("F-001",)))
+        self.assertEqual(r["verdict"], "CHANGES", r)
+        self.assertTrue(any("stays blocking although the judge did not list it" in e for e in r["exceptions"]))
+        ledger = json.loads((self.root / "docs/project/reviews/M1.findings.json").read_text())
+        self.assertEqual((ledger["F-001"]["rounds_blocking"], ledger["F-001"]["status"]), ([2], "open"))
+        # Still not fixed the round after: blocked in two rounds, the owner decides.
+        r = self.report(3, self.focused(3, CLEAN, self.reverify(("F-001", "NOT_FIXED")), findings=(("F-001", ["app.py"]),)))
+        self.assertEqual(r["verdict"], "BLOCKED", r)
+        self.assertTrue(any("blocked in two rounds" in x and "F-001" in x for x in r["reasons"]), r["reasons"])
+
+    def test_a_finding_not_fixed_after_its_round_is_blocked_even_when_the_judge_lets_it_go(self):
+        self.blocked_in_round_one()
+        r = self.report(2, self.focused(2, CLEAN, self.reverify(("M1-F01", "NOT_FIXED"))))
+        self.assertEqual(r["verdict"], "BLOCKED", r)
+        self.assertTrue(any("M1-F01" in x for x in r["reasons"]), r["reasons"])
+
+    def test_the_ledger_keeps_files_and_the_reviewers_class_severity_and_where(self):
+        review = {**REVIEW_PASS, "verdict": "FAIL", "findings": [
+            {"id": "F01", "class": "silent-degradation", "severity": "high", "where": "src/store.py:41",
+             "summary": "a failed save shows success"}]}
+        j = dict(CLEAN, verdict="CHANGES", blocking=[
+            {"id": "M1-F01", "summary": "F01 a failed save shows success", "evidence": "F01: saved",
+             "loop_back": "fix", "fixed_when": "a failed save shows an error", "files": ["src/store.py"]},
+            {"id": "M1-F02", "summary": "the order is lost", "evidence": "q"}])
+        self.report(1, self.evidence(1, j, review=review))
+        ledger = json.loads((self.root / "docs/project/reviews/M1.findings.json").read_text())
+        row = ledger["M1-F01"]
+        self.assertEqual((row["files"], row["class"], row["severity"], row["where"]),
+                         (["src/store.py"], "silent-degradation", "high", "src/store.py:41"))
+        self.assertIsNone(ledger["M1-F02"]["files"], "allowed; it only makes the next round full")
+        j2 = dict(CLEAN, verdict="CHANGES", blocking=[{"id": "M1-F01", "summary": "F01 again", "evidence": "q"}])
+        self.report(2, self.evidence(2, j2))
+        ledger = json.loads((self.root / "docs/project/reviews/M1.findings.json").read_text())
+        self.assertEqual(ledger["M1-F01"]["files"], ["src/store.py"], "a later entry without files keeps them")
+
+    def test_the_round_block_lists_each_checkers_model_and_effort(self):
+        extra = {"code-verifier": {"route": "code-verifier.review", "requested_model": "claude-opus-5-5",
+                                   "requested_effort": "xhigh", "served_model": "claude-opus-5-5-20261001",
+                                   "escalated": True, "escalation_reason": "attempt 1 ended ERROR; model claude-sonnet-5-5 "
+                                                                          "is not claude-opus-5-5"},
+                 "gate-judge": {"route": "gate-judge", "requested_model": "default", "requested_effort": "xhigh",
+                                "served_model": "claude-opus-5-5", "escalated": False,
+                                "escalation_reason": "attempt 1 ended ERROR; retried as routed"},
+                 "code-verifier-demo": {"route": "code-verifier.demo", "route_applies": False, "family": "codex"}}
+        r = self.report(1, self.evidence(1, CLEAN, extra=extra))
+        self.assertEqual(r["models"]["code-verifier"]["served_model"], "claude-opus-5-5-20261001")
+        self.assertTrue(r["models"]["code-verifier"]["escalated"])
+        block = (self.root / "docs/project/reviews/M1.md").read_text()
+        self.assertIn("Models:\n- code-verifier: route code-verifier.review, asked claude-opus-5-5 at xhigh, served "
+                      "claude-opus-5-5-20261001, escalated (attempt 1 ended ERROR", block)
+        self.assertIn("- gate-judge: route gate-judge, asked default at xhigh, served claude-opus-5-5, retried, not "
+                      "escalated", block)
+        self.assertIn("- code-verifier-demo: route code-verifier.demo does not apply; the codex family", block)
+        self.assertIn("- loyal-evaluator: route ?, asked ? at ?, served not named, not escalated", block)
+        self.assertIn("Scope: full (no scope record)", block)
+
+    def test_accept_ready_records_the_files_the_milestone_changed(self):
+        baseline = ROOT / "skills/_shared/scripts/baseline.py"
+        subprocess.run([sys.executable, str(baseline), "record", str(self.root), "M1"], check=True,
+                       capture_output=True)
+        (self.root / "app.py").write_text("items = []\n")
+        r = self.report(1, self.evidence(1, CLEAN))
+        self.assertEqual(r["verdict"], "ACCEPT-READY", r)
+        changed = self.root / "docs/project/reviews/M1.changed.txt"
+        self.assertIn("app.py", changed.read_text())
+        self.assertFalse(any("baseline.py changed" in e for e in r["exceptions"]), r["exceptions"])
+        changed.unlink()
+        changed.mkdir()  # the record cannot be written: an exception, never another verdict
+        r = self.report(2, self.evidence(2, CLEAN))
+        self.assertEqual(r["verdict"], "ACCEPT-READY", r)
+        self.assertTrue(any("baseline.py changed M1 --write failed" in e for e in r["exceptions"]), r["exceptions"])
+        changed.rmdir()
+        r = self.report(3, self.evidence(3, dict(CLEAN, verdict="CHANGES", blocking=[{"id": "M1-F01", "summary": "x"}])))
+        self.assertEqual(r["verdict"], "CHANGES")
+        self.assertFalse(changed.exists(), "only an ACCEPT-READY round records the changed files")
 
 
 if __name__ == "__main__":

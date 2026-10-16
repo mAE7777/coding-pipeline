@@ -34,10 +34,26 @@ Deterministic checks that were skipped or not run are listed as exceptions.
 When the judge's own verdict is stricter than the computed one it is recorded as an exception and the
 result is INCONCLUSIVE (its verdict does not follow from its findings); when it is looser, the computed
 verdict stands and the disagreement is listed.
+A focused round (<dir>/scope.json says "focused", from regate_scope.py): the loyal-evaluator's pass 1 and pass 2
+are CARRIED from the earlier round scope.json names, read from its paths, not this folder; a carried summary
+or result that is missing, not status OK, or without its round and fingerprint -> INCONCLUSIVE. The
+code-verifier's result is the re-verify: the review JSON's keys plus "reverify", one row per scope finding (or
+hotfix fix) with FIXED or NOT_FIXED and its evidence. A scope item with no row, or another status ->
+INCONCLUSIVE. NOT_FIXED keeps the item blocking in this round even when the judge does not list it, so the
+two-round rule (4) applies to it; FIXED with no judge block marks the ledger entry fixed. New findings in the
+delta are triaged like any review finding.
+The judge's blocking findings may carry "files" (the paths a fix must touch); the ledger keeps them, with the
+class, severity, and where of the reviewer finding the entry names. A finding without files makes the next
+round full (regate_scope.py).
+At ACCEPT-READY, baseline.py changed <project> M<k> --write records the files the milestone changed (for scoped
+regression demos); a failure there is an exception and never changes the verdict.
+The round block lists the round's scope with its reasons, and for each checker step its route, the model and
+effort it asked for, the model that served it, and whether its retry escalated (or that it was CARRIED).
 Prints the verdict JSON, and for ACCEPT-READY the evidence line, built from what each checker said:
   gate M<k> ACCEPT-READY=SHIP · code-verifier SHIP · loyal-evaluator SHIP · gate-judge SHIP · gate.sh 0-FAIL
-(the code-verifier part reads "code-verifier FAIL (overruled: ...)" when its FAIL was triaged as logged, and the
-gate.sh part names its status when it did not pass).
+(the code-verifier part reads "code-verifier FAIL (overruled: ...)" when its FAIL was triaged as logged, the
+loyal-evaluator part "loyal-evaluator CARRIED (r<n>)" in a focused round, and the gate.sh part names its status
+when it did not pass).
 --intent-only (the standalone intent check): only the loyal-evaluator's three passes and the judge are required, the
 copies and deterministic layer are not, the two-round rule does not apply, the milestone's status is not
 changed, and the round is logged as one line in docs/project/reviews/intent-ledger.md instead of the review file.
@@ -47,6 +63,7 @@ import datetime
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,6 +77,8 @@ INTENT_DEFECTS = {"DRIFT", "MISSING", "INACCURATE"}
 # not defects by themselves, and never cover a carried item.
 INTENT_NOTES = {"EXTRA", "ORPHAN"}
 CHECKERS = ("code-verifier", "loyal-evaluator", "loyal-evaluator-pass2", "code-verifier-demo", "gate-judge")
+CARRIED = ("loyal-evaluator", "loyal-evaluator-pass2")  # in a focused round, from the last full round
+REVERIFY = {"FIXED", "NOT_FIXED"}
 
 
 def last_json(text):
@@ -136,8 +155,9 @@ def cls(value):
     return key(value).replace("_", "-").replace(" ", "-")
 
 
-def checker_rules(review, demo, judge, mid):
-    """(forced CHANGES reasons, INCONCLUSIVE reasons) that hold whatever the judge concluded."""
+def checker_rules(review, demo, judge, mid, not_fixed=()):
+    """(forced CHANGES reasons, INCONCLUSIVE reasons) that hold whatever the judge concluded. not_fixed: the
+    scope items a re-verify reported NOT_FIXED (each one is something named)."""
     changes, unsure = [], []
     steps = demo.get("steps") or []
     for s in steps:
@@ -174,12 +194,12 @@ def checker_rules(review, demo, judge, mid):
         if cls(f.get("class")) in REVIEW_BLOCKING and key(f.get("severity")) != "low" and not mentioned(f, triaged):
             unsure.append(f"code-verifier finding {f.get('id')} ({f.get('class')}, {f.get('severity')}) is neither "
                           f"blocking nor logged by the judge: {str(f.get('summary', ''))[:70]}")
-    if str(review.get("verdict")).upper() == "FAIL" and not (findings or failing or broken):
+    if str(review.get("verdict")).upper() == "FAIL" and not (findings or failing or broken or not_fixed):
         unsure.append("the code-verifier said FAIL but named no finding, failing row, or broken wiring to triage")
     return changes, unsure
 
 
-def evidence_line(mid, review, layer1, judge):
+def evidence_line(mid, review, layer1, judge, carried_round=None):
     """The ACCEPT-READY line, each part saying what that checker actually reported."""
     if str((review or {}).get("verdict")).upper() == "PASS":
         cv = "code-verifier SHIP"
@@ -188,11 +208,80 @@ def evidence_line(mid, review, layer1, judge):
         cv = f"code-verifier {(review or {}).get('verdict', 'missing')} (overruled: {', '.join(logged) or 'no logged ids'})"
     gs = next((c.get("status") for c in layer1.get("checks", []) if c.get("name") == "gate.sh"), "NOT_RUN")
     gs = "gate.sh 0-FAIL" if gs in ("PASS", "WARN") else f"gate.sh {gs}"
-    return f"gate {mid} ACCEPT-READY=SHIP · {cv} · loyal-evaluator SHIP · gate-judge SHIP · {gs}"
+    le = f"loyal-evaluator CARRIED (r{carried_round})" if carried_round is not None else "loyal-evaluator SHIP"
+    return f"gate {mid} ACCEPT-READY=SHIP \u00b7 {cv} \u00b7 {le} \u00b7 gate-judge SHIP \u00b7 {gs}"
+
+
+def carried_summaries(scope):
+    """The carried evaluator summaries of a focused round ({stem: summary with a "carried" record}) and what makes
+    them unusable."""
+    out, problems = {}, []
+    for stem in CARRIED:
+        c = (scope.get("carried") or {}).get(stem)
+        c = c if isinstance(c, dict) else {}
+        where = f"{stem} CARRIED from r{c.get('round')}"
+        s = load(c["summary"]) if c.get("summary") else None
+        if not isinstance(s, dict):
+            problems.append(f"{where}: no summary at {c.get('summary') or '(no path in scope.json)'}")
+            s = {}
+        elif s.get("status") != "OK":
+            problems.append(f"{where} ended {s.get('status')}, so it cannot stand for this round")
+        if not c.get("result") or not Path(c["result"]).is_file():
+            problems.append(f"{where}: no result at {c.get('result') or '(no path in scope.json)'}")
+        if not c.get("round") or not c.get("fingerprint"):
+            problems.append(f"{stem} CARRIED: scope.json does not record the round and fingerprint it ran on")
+        out[stem] = {**s, "carried": {"round": c.get("round"), "fingerprint": c.get("fingerprint"),
+                                      "result": c.get("result")}}
+    return out, problems
+
+
+def reverify_rows(scope, review):
+    """(INCONCLUSIVE reasons, NOT_FIXED items, FIXED ids) from a focused round's re-verify against its scope."""
+    items = [(f.get("id"), "finding", f) for f in scope.get("findings") or [] if isinstance(f, dict)] + \
+        [(f.get("id"), "fix", f) for f in scope.get("fixes") or [] if isinstance(f, dict)]
+    if not items:
+        return [], [], []
+    rows = review.get("reverify")
+    if not isinstance(rows, list):
+        return ["the re-verify result has no reverify rows (one per scope finding or fix)"], [], []
+    by_id = {key(x.get("id")): x for x in rows if isinstance(x, dict)}
+    unsure, not_fixed, fixed = [], [], []
+    for fid, what, item in items:
+        row = by_id.get(key(fid))
+        if row is None:
+            unsure.append(f"the re-verify has no row for {what} {fid}")
+        elif st(row) not in REVERIFY:
+            unsure.append(f"the re-verify row for {fid} has status {st(row) or 'none'}, not FIXED or NOT_FIXED")
+        elif st(row) == "NOT_FIXED":
+            not_fixed.append((fid, what, item, row))
+        else:
+            fixed.append(fid)
+    return unsure, not_fixed, fixed
+
+
+def keep_blocking(judge, not_fixed, ledger, exceptions):
+    """A scope item the re-verify reports NOT_FIXED stays blocking this round, whether or not the judge lists it."""
+    blocking = list(judge.get("blocking") or [])
+    have = {key(b.get("id")) for b in blocking if isinstance(b, dict)}
+    for fid, what, item, row in not_fixed:
+        if key(fid) in have:
+            continue
+        led = ledger.get(fid) or {}
+        exceptions.append(f"{fid}: the re-verify says NOT_FIXED, so it stays blocking although the judge did not "
+                          "list it")
+        blocking.append({"id": fid, "summary": item.get("summary") or item.get("title") or led.get("summary", ""),
+                         "evidence": f"re-verify NOT_FIXED: {str(row.get('evidence', ''))[:240]}",
+                         "loop_back": led.get("loop_back") or "fix",
+                         "fixed_when": item.get("fixed_when") or led.get("fixed_when") or item.get("reproduction"),
+                         "files": item.get("files") or led.get("files"),
+                         **{k: item.get(k) or led.get(k) for k in ("class", "severity", "where")}})
+    judge["blocking"] = blocking
 
 
 def compute(project, mid, rnd, ev, ledger, intent_only=False):
     reasons, exceptions = [], []
+    scope = None if intent_only else load(ev / "scope.json")
+    focused = isinstance(scope, dict) and scope.get("scope") == "focused"
     copies = load(ev / "copies.json")
     layer1 = load(ev / "layer1.json")
     if not intent_only:
@@ -206,8 +295,9 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
     if copies.get("status") == "FAIL":
         reasons.append("copies: " + "; ".join(f"{k}: {len(v)}" for k, v in (copies.get("problems") or {}).items()))
     if layer1.get("status") == "FAIL":
-        reasons.append("deterministic layer: " + ", ".join(c["name"] for c in layer1.get("checks", [])
-                                                           if c.get("status") == "FAIL"))
+        reasons.append("deterministic layer: " + ", ".join(
+            c["name"] + (f" ({c['detail']})" if c.get("detail") else "") for c in layer1.get("checks", [])
+            if c.get("status") == "FAIL"))
     if reasons:
         return "CHANGES", reasons, exceptions, None, {}
     if layer1.get("status") == "NOT_RUN":
@@ -216,8 +306,10 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
             + "; run the round again"], exceptions, None, {}
     for c in layer1.get("checks", []):
         if c.get("status") in ("SKIP", "NOT_RUN"):
-            exceptions.append(f"deterministic check {c.get('name')} {c.get('status')}: {str(c.get('detail', ''))[:120]}")
-    required = INTENT_CHECKERS if intent_only else CHECKERS
+            exceptions.append(f"deterministic check {c.get('name')} {c.get('status')}: "
+                              f"{str(c.get('reason') or c.get('detail') or '')[:120]}")
+    # A focused round runs no evaluator: its pass 1 and pass 2 are carried from the round scope.json names.
+    required = INTENT_CHECKERS if intent_only else tuple(c for c in CHECKERS if not (focused and c in CARRIED))
     summaries = {c: load(ev / f"{c}.summary.json") for c in required}
     for c, s in summaries.items():
         if s is None:
@@ -236,12 +328,18 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
     missing = [c for c in required if summaries.get(c) is None]
     if missing:
         reasons.append("did not run: " + ", ".join(missing))
+    if focused:
+        carried, problems = carried_summaries(scope)
+        reasons += problems
+        merged = {**summaries, **carried}
+        summaries = {c: merged.get(c) for c in CHECKERS}
     judge = last_json((ev / "gate-judge.result.md").read_text(encoding="utf-8")) \
         if (ev / "gate-judge.result.md").is_file() else None
     if judge is None or str(judge.get("verdict")).strip().upper() not in ("ACCEPT-READY", "CHANGES", "BLOCKED",
                                                                            "INCONCLUSIVE"):
         reasons.append("no valid verdict JSON from gate-judge")
     review = demo = None
+    not_fixed, fixed = [], []
     if not intent_only:
         review, demo = checker_json(ev, "code-verifier"), checker_json(ev, "code-verifier-demo")
         if review and isinstance(review.get("verdict"), str):
@@ -250,6 +348,9 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
             reasons.append("no valid verdict JSON from the code-verifier")
         elif review.get("verdict") == "INCONCLUSIVE":
             reasons.append("the code-verifier's own verdict is INCONCLUSIVE")
+        elif focused:
+            unsure_rv, not_fixed, fixed = reverify_rows(scope, review)
+            reasons += unsure_rv
         if not demo or not demo.get("steps"):
             reasons.append("no demo steps from the demo run")
     if reasons:
@@ -259,7 +360,14 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
             ["the evaluator's purpose guess describes a different product (purpose drift)"]
         unsure = []
     else:
-        forced, unsure = checker_rules(review, demo, judge, mid)
+        if not_fixed:
+            keep_blocking(judge, not_fixed, ledger, exceptions)
+        if fixed:
+            # FIXED and not blocked again: the ledger entry is fixed even when the judge did not list it resolved.
+            now = {key(b.get("id")) for b in judge.get("blocking") or [] if isinstance(b, dict)}
+            judge["resolved"] = list(judge.get("resolved") or []) + \
+                [f for f in fixed if f in ledger and key(f) not in now and f not in (judge.get("resolved") or [])]
+        forced, unsure = checker_rules(review, demo, judge, mid, not_fixed)
     blocking = judge.get("blocking") or []
     two_rounds = [] if intent_only else \
         [b["id"] for b in blocking if b.get("id") and
@@ -301,9 +409,43 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
     return computed, reasons, exceptions, judge, summaries
 
 
-def update_ledger(ledger, judge, rnd):
+def model_record(s):
+    """What a checker step asked for and what served it (plan 7.3 step 1), from its summary."""
+    if not s:
+        return None
+    rec = {k: s.get(k) for k in ("route", "requested_model", "requested_effort", "served_model", "family")}
+    rec["escalated"] = bool(s.get("escalated"))
+    if s.get("route_applies") is False:
+        rec["route_applies"] = False
+    if s.get("carried"):
+        rec["carried_from"] = s["carried"].get("round")
+    return rec
+
+
+def model_line(name, s):
+    """One line of the round block: the step's route, asked model and effort, served model, and escalation."""
+    if not s:
+        return f"- {name}: did not run"
+    head = f"- {name}" + (f" (CARRIED from r{s['carried'].get('round')}, {s['carried'].get('fingerprint')})"
+                          if s.get("carried") else "") + ": "
+    if s.get("route_applies") is False:
+        body = f"route {s.get('route', '?')} does not apply; the {s.get('family')} family keeps its own model and effort"
+    else:
+        body = (f"route {s.get('route', '?')}, asked {s.get('requested_model', '?')} at "
+                f"{s.get('requested_effort', '?')}, served {s.get('served_model') or 'not named'}")
+    if s.get("escalated"):
+        esc = f"escalated ({str(s.get('escalation_reason', ''))[:160]})"
+    elif s.get("escalation_reason"):
+        esc = f"retried, not escalated ({str(s['escalation_reason'])[:160]})"
+    else:
+        esc = "not escalated"
+    return head + body + ", " + esc
+
+
+def update_ledger(ledger, judge, rnd, review=None):
     if not judge:
         return ledger
+    findings = [f for f in (review or {}).get("findings") or [] if isinstance(f, dict)]
     for b in judge.get("blocking") or []:
         fid = b.get("id")
         if not fid:
@@ -314,6 +456,15 @@ def update_ledger(ledger, judge, rnd):
             row["rounds_blocking"].append(rnd)
         row.update({"status": "open", "last_evidence": b.get("evidence", "")[:300], "loop_back": b.get("loop_back"),
                     "fixed_when": b.get("fixed_when")})
+        # The paths a fix must touch (regate_scope.py bounds a focused round by them); none given keeps what an
+        # earlier round said, and none at all makes the next round full.
+        files = b.get("files")
+        files = [files] if isinstance(files, str) else files
+        files = [str(f).strip() for f in files or [] if str(f).strip()] if isinstance(files, list) else []
+        row["files"] = files or row.get("files") or None
+        source = next((f for f in findings if mentioned(f, [b])), {})
+        for k in ("class", "severity", "where"):
+            row[k] = b.get(k) or source.get(k) or row.get(k)
     for fid in judge.get("resolved") or []:
         if fid in ledger:
             ledger[fid]["status"] = "fixed"
@@ -371,7 +522,7 @@ def main(argv):
     try:
         verdict, reasons, exceptions, judge, summaries = compute(project, mid, rnd, ev, ledger, intent_only)
         if not intent_only:
-            ledger = update_ledger(ledger, judge, rnd)
+            ledger = update_ledger(ledger, judge, rnd, checker_json(ev, "code-verifier"))
         diff_counts = {}
         for r in (judge or {}).get("intent_diff") or []:
             diff_counts[st(r)] = diff_counts.get(st(r), 0) + 1
@@ -388,18 +539,37 @@ def main(argv):
     reviews.mkdir(parents=True, exist_ok=True)
     if not intent_only and judge is not None:
         ledger_path.write_text(json.dumps(ledger, indent=2, ensure_ascii=False))
+    scope = None if intent_only else load(ev / "scope.json")
+    scope = scope if isinstance(scope, dict) else None
+    carried = {c: s["carried"] for c, s in summaries.items() if s and s.get("carried")}
+    if verdict == "ACCEPT-READY" and not intent_only:
+        # The files this milestone changed, so a later milestone replays its demo only when it touches them.
+        try:
+            ch = subprocess.run([sys.executable, str(HERE / "baseline.py"), "changed", str(project), mid, "--write"],
+                                capture_output=True, text=True, timeout=600)
+            failed = None if ch.returncode == 0 else f"exit {ch.returncode}: {(ch.stderr or ch.stdout).strip()[-200:]}"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            failed = f"{exc.__class__.__name__}: {exc}"
+        if failed:
+            exceptions.append(f"baseline.py changed {mid} --write failed ({failed}); the files this milestone "
+                              "changed are not recorded")
     result = {"milestone": mid, "round": rnd, "fingerprint": fp, "verdict": verdict,
               "judge_verdict": (judge or {}).get("verdict"), "reasons": reasons, "exceptions": exceptions,
               "intent_diff": diff_counts, "checkers": {c: (s or {}).get("status") for c, s in summaries.items()},
               "sessions": {c: (s or {}).get("session_id") for c, s in summaries.items()},
+              "models": {c: model_record(s) for c, s in summaries.items()},
               "written": stamp}
+    if scope:
+        result["scope"] = {k: scope.get(k) for k in ("scope", "kind", "reasons", "since", "changed_lines")}
+    if carried:
+        result["carried"] = carried
     if intent_only:
         # Which draft of the intent this check read, so a later edit shows the check is out of date.
         intent = project / "docs/project/intent.md"
         result["intent_sha"] = hashlib.sha256(intent.read_bytes()).hexdigest() if intent.is_file() else None
     if verdict == "ACCEPT-READY" and not intent_only:
         result["evidence_line"] = evidence_line(mid, checker_json(ev, "code-verifier"), load(ev / "layer1.json") or {},
-                                                judge or {})
+                                                judge or {}, (carried.get("loyal-evaluator") or {}).get("round"))
     (ev / "verdict.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
     if intent_only:
         with open(reviews / "intent-ledger.md", "a", encoding="utf-8") as f:
@@ -414,7 +584,12 @@ def main(argv):
                 for b in (judge or {}).get("blocking") or []]
     block = [f"\n## Round {rnd} · {stamp} · fingerprint {fp}",
              f"Verdict: {verdict} (computed; judge said {result['judge_verdict']})",
-             "Checkers: " + " · ".join(f"{c} {s}" for c, s in result["checkers"].items() if s),
+             "Scope: " + (f"{scope.get('scope')}" + (f" ({scope['kind']})" if scope.get("kind") else "") + " \u00b7 "
+                          + "; ".join(scope.get("reasons") or []) if scope else "full (no scope record)"),
+             "Checkers: " + " \u00b7 ".join(
+                 f"{c} CARRIED r{carried[c]['round']} {s}" if c in carried else f"{c} {s}"
+                 for c, s in result["checkers"].items() if s),
+             "Models:", *[model_line(c, s) for c, s in summaries.items()],
              "Intent diff: " + (" · ".join(f"{k} {v}" for k, v in diff_counts.items()) or "none"),
              "Reasons: " + ("; ".join(reasons) or "none"),
              "Blocking: " + ("; ".join(blocking) or "none"),
