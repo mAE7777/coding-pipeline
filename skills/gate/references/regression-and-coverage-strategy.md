@@ -2,36 +2,25 @@
 
 Full regression execution and coverage-gap analysis. Load when a milestone changes behavior that earlier milestones depend on. Regression is always the first check; a broken foundation invalidates everything. Below, M{k} is the milestone under test and M{j} an earlier one; earlier milestones' checks run in milestone order.
 
-Every command here (install, build, test suites, simulators) runs through the machine-wide lock: `python3 <heavy.py> run -- <command>`. A server the checks need runs as `python3 <heavy.py> serve -- <command>` in the background.
+Every command you run here (a test, a simulator, a probe script) goes through the machine-wide lock: `python3 <heavy.py> run -- <command>`. A server the checks need runs as `python3 <heavy.py> serve -- <command>` in the background.
 
 ---
 
-## Section 1: Regression Execution Order
+## Section 1: Read Layer 1 First, Then Run Only What It Did Not
 
-Regression tests run in strict order. Stop on first failure.
+Read `layer1.json` in your pack before anything else. The gate's deterministic layer already ran the labeled install, typecheck, lint, build, and test suite, and every checkpoint check of this and every earlier milestone, and checked the test paths the wiring rows name. Do not run them again: a re-run costs a slot on the machine lock and proves nothing the gate has not. You run only after layer 1 passed; a SKIP there carries its reason.
 
-### Order of Operations
+What you run:
 
-1. **Build/compile checks**: These are the foundation. If the project doesn't build, nothing else matters.
-   - Package installation (`npm install` / equivalent)
-   - TypeScript compilation (`npx tsc --noEmit` / equivalent)
-   - Linter pass (`npm run lint` / equivalent)
-   - Build succeeds (`npm run build` / equivalent)
+1. **The items layer 1 lists under "Not run by the gate"**, in milestone order (M1's, then M2's, and so on).
+2. **What probes this milestone's contract**: its done examples, the carried done examples, the must-not-lose items it touches, and its wiring rows (Section 2 maps them).
+3. **Cross-milestone interaction checks**: new checks that M{k} does not break earlier milestones (Section 3 has the patterns and the missed-integration checklist).
 
-2. **Automated test suites from all earlier milestones**: Every test command recorded for every earlier milestone in `docs/project/milestones.md` (its checkpoint checks and the tests named in its wiring table), plus the project's full test command.
-   - Run in milestone order: M1's checks, then M2's, then M3's, etc.
-   - Each milestone's checks must all pass before moving to the next milestone's checks.
-   - The demo run also replays every earlier milestone's demo ending from a clean start; a regression demo step that fails is a regression like any other.
-
-3. **Cross-milestone interaction tests**: New tests that verify M{k} doesn't break earlier milestones.
-   - Shared component rendering (components used by multiple milestones)
-   - API endpoint availability (endpoints from earlier milestones still respond)
-   - Data integrity (data structures from earlier milestones still valid)
-   - Navigation flows (routes from earlier milestones still accessible)
+The demo run replays the earlier milestones' demo endings the pack lists, from a clean start; a regression demo step that fails is a regression like any other.
 
 ### Execution Protocol
 
-For each regression check:
+For each check you run:
 
 ```
 1. Run the command exactly as recorded, through python3 <heavy.py> run -- <command>
@@ -39,7 +28,7 @@ For each regression check:
 3. Compare against expected result
 4. Record: PASS (matches) or FAIL (doesn't match); NOT_RUN with the reason if it could not run
    (exit 75 means the lock stayed busy and the command never ran: NOT_RUN, never PASS)
-5. If FAIL → STOP immediately
+5. If FAIL: STOP immediately
 ```
 
 ### On Regression Failure
@@ -159,6 +148,18 @@ If M{k} modifies global state, context, or shared stores:
 1. Test that earlier milestones read the correct values from shared state
 2. Verify no state pollution between features
 3. Check that state initialization still works for earlier milestones' flows
+
+### Frequently Missed Integration Cases
+
+Where M{k} touches what an earlier milestone built, go through the rows that apply to this product and probe each one that could break:
+
+- **Time and numbers**: daylight saving, time zones, rounding, extremes, negatives, units.
+- **Empty data**: empty lists, missing fields, null, zero, emptiness caused by an authorization filter.
+- **Text and files**: Unicode, long text, encodings, name collisions, large files, archive bombs.
+- **Network**: timeouts, partial responses, dropped streams, 429 and 5xx responses, duplicate callbacks, cancellation.
+- **Identity and session**: refresh, revocation, account switching, tenant isolation, expiry.
+- **Cache**: invalidation after a data change, permission changes, stampedes, configuration kept separate.
+- **External integrations**: request IDs, idempotency, server-side validation, response versions, unknown outcomes.
 
 ---
 
