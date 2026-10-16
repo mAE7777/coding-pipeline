@@ -22,8 +22,9 @@ evidence folder immediately before launch (--render ... --), so nothing editable
 running; its sha256 is recorded. When render_pack.py writes <stem>.change.patch beside the pack (the full
 change, for a code-verifier review or re-verify pack), its absolute path joins the read allow list as an
 --allow-read path would, in either family's fence; the summary records it as change_patch. For the
-loyal-evaluator's first pass the pack is checked against intent.md first, and a hit stops the run with status LEAK. The agent definition comes from --agent-file
-(staging) or ~/.claude/agents/<role>.md and is passed inline, so the checker runs exactly that text.
+loyal-evaluator's first pass the pack is checked against intent.md first, and a hit stops the run with status
+LEAK. The agent definition comes from --agent-file (staging) or ~/.claude/agents/<role>.md and is passed
+inline, so the checker runs exactly that text.
 
 Claude family: `claude -p --agents <file> --agent <role>` with cwd=<workdir>, the pack on standard input, and
   --restricted                 no user, project, or local settings files (no user CLAUDE.md rules, hooks,
