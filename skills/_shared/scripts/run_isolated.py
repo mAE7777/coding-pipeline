@@ -930,7 +930,7 @@ def run_shadow(role, opts, plan, main, workdir, stem, raw_pack, pack):
     rec = {k: plan[k] for k in ("route", "model", "effort", "source") if plan.get(k)}
     dry, sdir, why = main.get("status") == "DRY_RUN", workdir, plan.get("skipped")
     if not why and main.get("family") == "codex":
-        why = "the Codex family served the main run; it keeps its own model and effort, so no Claude setting is compared"
+        why = "the Codex family served the main run; it keeps its own model and effort, so no setting is compared"
     elif not why and not opts.get("_routing"):
         why = f"the main run has no model routing ({opts.get('_route_error')})"
     elif not why and main.get("status") not in ("OK", "DRY_RUN"):

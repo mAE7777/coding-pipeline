@@ -31,9 +31,10 @@ Exit 0 when both parse (whatever they say), 1 when one does not (named), 2 on ba
 summary reads the shadow log (default ~/.claude/.pipeline-shadow.jsonl, one line per shadow run, appended by
 run_isolated.py) and prints, per route and shadow setting: runs, distinct rounds compared (distinct evidence
 folders), total misses and extras, and failed shadow runs (the shadow did not end OK, or its result could not be
-compared). Runs under .evidence/fixtures/ (agent_fixtures.py) are not real work and are left out. It says "ready to promote" only with at least 3 distinct rounds compared, zero misses, and no failed
-shadow run (plan 7.3 step 4: no case where the candidate missed what today's setting caught); otherwise "not
-ready" with the reason. Whether today's setting was itself right about a miss is the owner's call, from that
+compared). Runs under .evidence/fixtures/ (agent_fixtures.py) are not real work and are left out. It says
+"ready to promote" only with at least 3 distinct rounds compared, zero misses, and no failed shadow run (plan
+7.3 step 4: no case where the candidate missed what today's setting caught); otherwise "not ready" with the
+reason. Whether today's setting was itself right about a miss is the owner's call, from that
 round's <stem>.shadow-diff.json. Promotion stays manual: a /evolve change to skills/_shared/models.json.
 Exit 0, 1 when the log cannot be read, 2 on bad usage.
 """
@@ -252,7 +253,8 @@ def compare_files(primary_path, shadow_path, role):
 
 def describe_item(item):
     if item["kind"] == "row":
-        return f"{item['group']} {item['key']}: primary {item['primary'] or 'no row'}, shadow {item['shadow'] or 'no row'}"
+        return (f"{item['group']} {item['key']}: primary {item['primary'] or 'no row'}, "
+                f"shadow {item['shadow'] or 'no row'}")
     p, s = item.get("primary"), item.get("shadow")
     one = p or s
     head = f"finding {item['class']}" + (f" {one['id']}" if one.get("id") else "") + \
