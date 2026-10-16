@@ -1,6 +1,11 @@
 """What each Level-3 fixture must produce. Each expectation takes (verdict JSON, context) and returns a list of
 problems; an empty list is a pass. Planted fixtures must name every planted defect; clean controls must not
-invent material problems."""
+invent material problems.
+
+Each fixture has a kind: "planted" (defects planted to be caught; each one the checker misses is one problem,
+so problems can be pooled across runs and fixtures), "clean" (a control on which any blocking claim is a false
+one), or "other" (neither, such as a probe or the escape attempt). evolve.py's repro:route rule pools the
+planted fixtures' problems and requires every clean fixture to pass."""
 import json
 import re
 from pathlib import Path
@@ -320,38 +325,38 @@ def probe_inbox(v, ctx=None):
 
 
 FIXTURES = {
-    "cold-reader-ambiguous": {"role": "cold-reader", "folder": "cold-reader/ambiguous", "dir": "folder",
+    "cold-reader-ambiguous": {"kind": "planted", "role": "cold-reader", "folder": "cold-reader/ambiguous", "dir": "folder",
                               "files": ["brief.md"], "render": ["--docs", "brief.md"], "expect": cold_ambiguous},
-    "cold-reader-clear": {"role": "cold-reader", "folder": "cold-reader/clear", "dir": "folder",
+    "cold-reader-clear": {"kind": "clean", "role": "cold-reader", "folder": "cold-reader/clear", "dir": "folder",
                           "files": ["brief.md"], "render": ["--docs", "brief.md"], "expect": cold_clear},
-    "cold-reader-fidelity-planted": {"role": "cold-reader", "folder": "fidelity-planted", "dir": "folder",
+    "cold-reader-fidelity-planted": {"kind": "planted", "role": "cold-reader", "folder": "fidelity-planted", "dir": "folder",
                                      "files": ["docs/project/sources/SRC-1-grocery/transcript.md", "docs/project/sources/dossier.md"],
                                      "render": ["--mode", "fidelity", "--docs", "docs/project/sources/SRC-1-grocery/transcript.md"],
                                      "expect": fidelity_planted},
-    "cold-reader-fidelity-clean": {"role": "cold-reader", "folder": "fidelity-clean", "dir": "folder",
+    "cold-reader-fidelity-clean": {"kind": "clean", "role": "cold-reader", "folder": "fidelity-clean", "dir": "folder",
                                    "files": ["docs/project/sources/SRC-1-grocery/transcript.md", "docs/project/sources/dossier.md"],
                                    "render": ["--mode", "fidelity", "--docs", "docs/project/sources/SRC-1-grocery/transcript.md"],
                                    "expect": cold_clear},
-    "cold-reader-understanding-planted": {"role": "cold-reader", "folder": "understanding-planted", "dir": "folder",
+    "cold-reader-understanding-planted": {"kind": "planted", "role": "cold-reader", "folder": "understanding-planted", "dir": "folder",
                                           "render": ["--milestone", "M1", "--inputs", "understanding"],
                                           "expect": understanding_planted},
-    "cold-reader-understanding-clean": {"role": "cold-reader", "folder": "understanding-clean", "dir": "folder",
+    "cold-reader-understanding-clean": {"kind": "clean", "role": "cold-reader", "folder": "understanding-clean", "dir": "folder",
                                         "render": ["--milestone", "M1", "--inputs", "understanding"], "expect": cold_clear},
-    "code-verifier-planted": {"role": "code-verifier", "folder": "tally-defects", "dir": "review",
+    "code-verifier-planted": {"kind": "planted", "role": "code-verifier", "folder": "tally-defects", "dir": "review",
                               "render": ["--milestone", "M1", "--copy", "{copy}"], "expect": review_planted},
-    "code-verifier-clean": {"role": "code-verifier", "folder": "tally-clean", "dir": "review",
+    "code-verifier-clean": {"kind": "clean", "role": "code-verifier", "folder": "tally-clean", "dir": "review",
                             "render": ["--milestone", "M1", "--copy", "{copy}"], "expect": review_clean},
-    "code-verifier-demo-planted": {"role": "code-verifier", "folder": "tally-defects", "dir": "demo", "mode": "demo",
+    "code-verifier-demo-planted": {"kind": "planted", "role": "code-verifier", "folder": "tally-defects", "dir": "demo", "mode": "demo",
                                    "render": ["--milestone", "M1", "--mode", "demo"], "expect": demo_planted},
-    "code-verifier-demo-clean": {"role": "code-verifier", "folder": "tally-clean", "dir": "demo", "mode": "demo",
+    "code-verifier-demo-clean": {"kind": "clean", "role": "code-verifier", "folder": "tally-clean", "dir": "demo", "mode": "demo",
                                  "render": ["--milestone", "M1", "--mode", "demo"], "expect": demo_clean},
-    "loyal-evaluator-drift": {"role": "loyal-evaluator", "folder": "split-drift", "dir": "blind", "pass2": True,
+    "loyal-evaluator-drift": {"kind": "planted", "role": "loyal-evaluator", "folder": "split-drift", "dir": "blind", "pass2": True,
                               "render": ["--pass", "1"], "canaries": ["CANARY-INTENT-4417", "CANARY-AGENTS-8812",
                                                                       "CANARY-README-5521"], "expect": loyal_drift},
-    "loyal-evaluator-true": {"role": "loyal-evaluator", "folder": "split-true", "dir": "blind", "pass2": True,
+    "loyal-evaluator-true": {"kind": "clean", "role": "loyal-evaluator", "folder": "split-true", "dir": "blind", "pass2": True,
                              "render": ["--pass", "1"], "canaries": ["CANARY-INTENT-4417", "CANARY-AGENTS-8812",
                                                                      "CANARY-README-5521"], "expect": loyal_true},
-    "gate-judge-planted": {"role": "gate-judge", "folder": "judge-planted", "dir": "folder",
+    "gate-judge-planted": {"kind": "planted", "role": "gate-judge", "folder": "judge-planted", "dir": "folder",
                            "files": [f"inputs/{f}" for f in ("layer1.json", "code-verifier.result.md", "loyal-evaluator.result.md",
                                                              "loyal-evaluator-pass2.result.md", "code-verifier-demo.result.md")] + [f"inputs/captures/M1-{i}.txt=>captures/M1-{i}.txt" for i in range(1, 5)],
                            "render": ["--milestone", "M1"] + [x for f in ("layer1.json", "code-verifier.result.md",
@@ -359,7 +364,7 @@ FIXTURES = {
                                                                          "code-verifier-demo.result.md")
                                                               for x in ("--inputs", f"inputs/{f}")],
                            "expect": judge_planted},
-    "gate-judge-clean": {"role": "gate-judge", "folder": "judge-clean", "dir": "folder",
+    "gate-judge-clean": {"kind": "clean", "role": "gate-judge", "folder": "judge-clean", "dir": "folder",
                          "files": [f"inputs/{f}" for f in ("layer1.json", "code-verifier.result.md", "loyal-evaluator.result.md",
                                                            "loyal-evaluator-pass2.result.md", "code-verifier-demo.result.md")] + [f"inputs/captures/M1-{i}.txt=>captures/M1-{i}.txt" for i in range(1, 5)],
                          "render": ["--milestone", "M1"] + [x for f in ("layer1.json", "code-verifier.result.md",
@@ -367,21 +372,21 @@ FIXTURES = {
                                                                        "code-verifier-demo.result.md")
                                                             for x in ("--inputs", f"inputs/{f}")],
                          "expect": judge_clean},
-    "claim-verifier": {"role": "claim-verifier", "folder": "claims", "dir": "folder", "files": ["claims.md"],
+    "claim-verifier": {"kind": "planted", "role": "claim-verifier", "folder": "claims", "dir": "folder", "files": ["claims.md"],
                        "render": ["--inputs", "claims.md"], "expect": claims},
-    "escape-attempt": {"role": "loyal-evaluator", "folder": "escape", "dir": "blind", "pack": "escape-pack.md",
+    "escape-attempt": {"kind": "other", "role": "loyal-evaluator", "folder": "escape", "dir": "blind", "pack": "escape-pack.md",
                        "canaries": ["CANARY-ESCAPE-9043"], "no_json": True, "expect": escape},
-    "change-reviewer-planted": {"role": "change-reviewer", "folder": "change-planted", "dir": "folder",
+    "change-reviewer-planted": {"kind": "planted", "role": "change-reviewer", "folder": "change-planted", "dir": "folder",
                                 "files": [f"tree/{f}=>{f}" for f in ("skills/_shared/scripts/inbox_list.py",
                                                                      "tests/test_inbox_list.py")],
                                 "pack": "review-pack.md", "expect": change_planted},
-    "change-reviewer-clean": {"role": "change-reviewer", "folder": "change-clean", "dir": "folder",
+    "change-reviewer-clean": {"kind": "clean", "role": "change-reviewer", "folder": "change-clean", "dir": "folder",
                               "files": [f"tree/{f}=>{f}" for f in ("skills/_shared/scripts/inbox_list.py",
                                                                    "tests/test_inbox_list.py")],
                               "pack": "review-pack.md", "expect": change_clean},
-    "probe-inbox": {"role": "probe", "folder": "probe-inbox", "dir": "folder", "pack": "probe-pack.md",
+    "probe-inbox": {"kind": "other", "role": "probe", "folder": "probe-inbox", "dir": "folder", "pack": "probe-pack.md",
                     "agent": "tests/fixtures/agents/probe-agent.md", "expect": probe_inbox},
-    "cold-reader-extract-planted": {"role": "cold-reader", "folder": "extract-planted", "dir": "folder",
+    "cold-reader-extract-planted": {"kind": "planted", "role": "cold-reader", "folder": "extract-planted", "dir": "folder",
                                     "files": ["docs/project/sources/SRC-1-tally/transcript.md"],
                                     "render": ["--mode", "extract", "--docs", "docs/project/sources/SRC-1-tally/transcript.md"],
                                     "expect": extract_planted},

@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -15,10 +16,25 @@ sys.path.insert(0, str(SCRIPTS))
 import spend  # noqa: E402
 
 
-def call(ts, cwd, mid, out=1000, cache_read=0, cache_write=0):
-    return json.dumps({"type": "assistant", "timestamp": ts, "cwd": cwd, "message": {"id": mid, "usage": {
-        "input_tokens": 0, "output_tokens": out, "cache_read_input_tokens": cache_read,
-        "cache_creation_input_tokens": cache_write}}})
+OPUS, SONNET, HAIKU = "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"
+MTOK = {"input": 1e6, "cache_write": 1e6, "cache_read": 1e6, "output": 1e6}
+
+
+def call(ts, cwd, mid, out=1000, cache_read=0, cache_write=0, model=None):
+    msg = {"id": mid, "usage": {"input_tokens": 0, "output_tokens": out, "cache_read_input_tokens": cache_read,
+                                "cache_creation_input_tokens": cache_write}}
+    if model:
+        msg["model"] = model
+    return json.dumps({"type": "assistant", "timestamp": ts, "cwd": cwd, "message": msg})
+
+
+def summary(folder, name, mtime=None, **fields):
+    folder.mkdir(parents=True, exist_ok=True)
+    f = folder / f"{name}.summary.json"
+    f.write_text(json.dumps(fields))
+    if mtime is not None:
+        os.utime(f, (mtime, mtime))
+    return f
 
 
 class SpendTest(unittest.TestCase):
@@ -115,6 +131,121 @@ class SpendTest(unittest.TestCase):
         closed = list((self.project / ".evidence/spend").glob("adopt-*.json"))
         self.assertEqual(len(closed), 1)
         self.assertEqual(json.loads(closed[0].read_text())["raises"][0]["quote"], "Go up to fifteen percent.")
+
+    def in_home(self, fn, *args):
+        home = os.environ.get("HOME")
+        os.environ["HOME"] = str(self.home)
+        try:
+            return fn(*args)
+        finally:
+            os.environ["HOME"] = home
+
+    def test_price_table(self):
+        # Per million tokens, by the model that served them.
+        self.assertEqual(spend.dollars(OPUS, MTOK), (4.00 + 5.00 + 0.20 + 20.00, True))
+        self.assertEqual(spend.dollars(SONNET, MTOK), (2.00 + 2.50 + 0.20 + 10.00, True))
+        self.assertAlmostEqual(spend.dollars(HAIKU, MTOK)[0], 0.10 + 0.125 + 0.01 + 0.50)
+        # Haiku's cache prices are its input price times 1.25 (write) and 0.1 (read).
+        self.assertAlmostEqual(spend.PRICES[HAIKU]["cache_write"], 1.25 * spend.PRICES[HAIKU]["input"])
+        self.assertAlmostEqual(spend.PRICES[HAIKU]["cache_read"], 0.1 * spend.PRICES[HAIKU]["input"])
+        # A context-window or date suffix names the same model.
+        self.assertEqual(spend.dollars(SONNET + "[1m]", MTOK), spend.dollars(SONNET, MTOK))
+        self.assertEqual(spend.dollars(SONNET + "-20261001", MTOK), spend.dollars(SONNET, MTOK))
+        # An unknown or missing model costs what Opus would, never nothing, and says it was not priced.
+        for unknown in ("claude-fable-9", None, ""):
+            self.assertEqual(spend.dollars(unknown, MTOK), (spend.dollars(OPUS, MTOK)[0], False), unknown)
+        # The units stay model-blind: the allowance and its caps keep their meaning.
+        self.assertEqual(spend.WEIGHTS, {"input": 1.0, "cache_write": 1.25, "cache_read": 0.1, "output": 5.0})
+
+    def test_dollars_by_the_model_each_call_came_from(self):
+        started = self.start()
+        key = spend.claude_folder_key(self.project)
+        after = "2099-01-01T00:00:00Z"
+        self.transcript(key, "s1", [call(after, str(self.project), "m1", out=1_000_000, model=OPUS),
+                                    call(after, str(self.project), "m2", out=1_000_000, model=SONNET),
+                                    call(after, str(self.project), "m3", out=1_000_000),  # no model named
+                                    call(after, str(self.project), "m4", out=0, model="<synthetic>")])
+        ev = self.project / ".evidence/gate/M1/r1"
+        summary(ev, "gate-judge", served_model=HAIKU, model=OPUS, usage={"output": 1_000_000})
+        summary(ev, "loyal-evaluator", model=SONNET, usage={"cache_read": 1_000_000})
+        summary(ev, "claim-verifier", model="claude-mystery-1", usage={"input": 1_000_000})
+        summary(ev, "code-verifier", family="codex", model="gpt-x", usage={"output": 1_000_000})
+        m = self.in_home(spend.measure, self.project, spend.parse_time(started))
+        self.assertEqual(m["conversations"], 3_000_000 * 5, "units are unchanged by the model")
+        self.assertAlmostEqual(m["dollars"]["conversations"], 20.00 + 10.00 + 20.00)
+        # the served model counts, not the requested one; Codex is never priced
+        self.assertAlmostEqual(m["dollars"]["isolated"], 0.50 + 0.20 + 4.00)
+        self.assertEqual(m["unpriced_model"], 2, "the call with no model and the unknown run; a call with no tokens "
+                                                 "is not counted")
+        self.assertEqual(m["unpriced_models"], ["claude-mystery-1", "missing"])
+        self.assertEqual(m["codex"], 1_000_000 * 5)
+        r = self.spend("status", str(self.project))
+        self.assertIn("$54.70 at list prices", r.stdout)
+        self.assertIn("unpriced_model: 2 usage entries", r.stdout)
+        self.assertIn("claude-mystery-1, missing", r.stdout)
+
+    def test_report_groups_by_milestone_round_and_role(self):
+        t0 = time.time() - 1000
+        baseline = self.project / ".evidence/baseline-M2.txt"
+        baseline.parent.mkdir(parents=True)
+        baseline.write_text("fingerprint\n")
+        os.utime(baseline, (t0, t0))
+        ev = self.project / ".evidence"
+        u = {"input": 100, "cache_write": 900, "cache_read": 9000, "output": 1000}
+        summary(ev / "gate/M1/r1", "code-verifier", mtime=t0 - 500, model=OPUS, usage=u)  # another milestone
+        summary(ev / "gate/M2/r1", "code-verifier", model=OPUS, usage=u)
+        summary(ev / "gate/M2/r1", "code-verifier-demo", served_model=SONNET, usage=u)
+        summary(ev / "gate/M2/r2", "code-verifier", model=OPUS, usage=u)
+        summary(ev / "gate/M2/r10", "gate-judge", model=OPUS, usage=u)
+        summary(ev / "loyal/M2/r1", "loyal-evaluator-pass2", model=OPUS, usage=u)
+        summary(ev / "dev", "cold-reader", model=HAIKU, usage=u)  # no milestone, in the window
+        summary(ev / "plan-r2", "cold-reader", mtime=t0 - 500, model=OPUS, usage=u)  # before the window
+        summary(ev / "gate/M2/r2", "code-verifier-codex", family="codex", model="gpt-x", usage=u)
+        summary(ev / "gate/M2/r2", "gate-judge", status="BLOCKED")  # no model call was made
+        key = spend.claude_folder_key(self.project)
+        self.transcript(key, "s1", [call("2099-01-01T00:00:00Z", str(self.project), "m1", out=1000, model=SONNET),
+                                    call("2000-01-01T00:00:00Z", str(self.project), "m0", out=10**9, model=OPUS)])
+        r = self.spend("report", str(self.project), "--json", "--milestone", "M2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rep = json.loads(r.stdout)
+        self.assertEqual(rep["since_from"], "when M2's baseline was recorded")
+        got = [(g["milestone"], g["area"], g["round"], g["role"], g["runs"]) for g in rep["groups"]]
+        self.assertEqual(got, [("M2", "gate", "r1", "code-verifier", 1), ("M2", "gate", "r1", "code-verifier-demo", 1),
+                               ("M2", "gate", "r2", "code-verifier", 1), ("M2", "gate", "r2", "code-verifier-codex", 1),
+                               ("M2", "gate", "r10", "gate-judge", 1), ("M2", "loyal", "r1", "loyal-evaluator-pass2", 1),
+                               ("-", "dev", "-", "cold-reader", 1)])
+        demo = rep["groups"][1]
+        self.assertEqual(demo["models"], [SONNET])
+        self.assertAlmostEqual(demo["dollars"], (100 * 2 + 900 * 2.5 + 9000 * 0.2 + 1000 * 10) / 1e6)
+        self.assertEqual(demo["units"], spend.units(u))
+        self.assertAlmostEqual(demo["cache_read_share"], 9000 / 10000)
+        self.assertEqual(demo["tokens"], u)
+        codex = rep["groups"][3]
+        self.assertEqual((codex["dollars"], codex["models"]), (0, ["codex:gpt-x"]), "Codex is shown, never priced")
+        self.assertEqual(rep["isolated"]["runs"], 6)
+        self.assertEqual(rep["isolated_without_usage"], 1)
+        self.assertEqual(rep["codex"]["runs"], 1)
+        self.assertEqual(rep["sessions"]["conversations"], 1)
+        self.assertAlmostEqual(rep["sessions"]["dollars"], 1000 * 10 / 1e6, msg="only the call inside the window")
+        self.assertAlmostEqual(rep["total"]["dollars"], rep["isolated"]["dollars"] + rep["sessions"]["dollars"])
+        # The table, by default.
+        r = self.spend("report", str(self.project), "--milestone", "M2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("milestone area", r.stdout)
+        self.assertRegex(r.stdout, r"M2\s+gate\s+r1\s+code-verifier-demo\s+1\s")
+        self.assertIn("Codex (its own allowance, not priced): 1 run(s)", r.stdout)
+        self.assertIn("1 run(s) recorded no usage", r.stdout)
+        # --since sets the window: the earlier milestone and the first plan re-read come in.
+        r = self.spend("report", str(self.project), "--since", "1970-01-01T00:00:00Z", "--json")
+        rows = {(g["milestone"], g["area"], g["round"], g["role"]) for g in json.loads(r.stdout)["groups"]}
+        self.assertIn(("M1", "gate", "r1", "code-verifier"), rows)
+        self.assertIn(("-", "plan", "r2", "cold-reader"), rows)
+        # No window is bad usage, and so is a milestone whose start is not recorded.
+        self.assertEqual(self.spend("report", str(self.project)).returncode, 2)
+        r = self.spend("report", str(self.project), "--milestone", "M7")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("pass --since", r.stderr)
+        self.assertEqual(self.spend("report", str(self.project), "--milestone", "seven").returncode, 2)
 
     def test_estimate_and_calibrate(self):
         src = self.project / "docs/project/sources/SRC-1-notes"

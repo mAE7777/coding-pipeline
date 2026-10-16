@@ -2,13 +2,19 @@
 """Levels 4 and 5: the installed pipeline on toy projects, driven by headless Claude Code sessions, judged by
 deterministic checks (never by a session's own report).
 
-Usage: system_scenarios.py [--only <name>[,<name>...]] [--project <planned and built project>] [--keep]
+Usage: system_scenarios.py [--only <name>[,<name>...]] [--project <planned and built project>] [--keep] [--dry-run]
 
 Scenarios (each in a fresh folder under ~/.gate-copies/system/, evidence in <repo>/.evidence/system/<name>/):
   plan        /plan on a small idea with the owner's answers and lock words given in the owner's message:
               the record is complete, the intent locked, the lints and rulings pass, no product code exists
   build-gate  /dev M1 then a real gate round on the planned project: the round completes with a verdict file,
               every checker ran, and the verdict is ACCEPT-READY or names what blocks
+  build-gate-3  a reading log planned as three milestones, then for each: /dev builds it and drives its gate
+              rounds to ACCEPT-READY, and /gate accept records the owner's acceptance words; every round
+              has a verdict and every checker ran, each milestone ends accepted, the rulings pass, and the
+              last M3 round's demo replayed the demo endings of M1 and M2 (regression demos). Rounds per
+              milestone are written to rounds.json. It runs only when named with --only: it is the most
+              expensive scenario.
   injected    three defects planted into the built product (a swallowed error with an invented default,
               sample data on the product path, an unwired command): the next gate round is CHANGES and names them
   adopt       /plan adopt on an unadopted project with a documented feature that does not exist and a built
@@ -19,10 +25,23 @@ Scenarios (each in a fresh folder under ~/.gate-copies/system/, evidence in <rep
   inbox       three suggestions from other people arrive (one the intent rules out): the session files them in the
               inbox verbatim and recommends; after the owner's ruling each leaves the inbox with a proven,
               routed decision, the ruled-out one is rejected, and the product is untouched
-Each scenario prints PASS or FAIL with its reasons. Sessions run with the owner's installed skills, hooks, and
-settings, in dontAsk mode with file and shell tools allowed, never with permission checks disabled.
+Each scenario prints PASS or FAIL with its reasons, then its cost. Sessions run with the owner's installed skills,
+hooks, and settings, in dontAsk mode with file and shell tools allowed, never with permission checks disabled.
+
+Cost: each scenario writes cost.json into its evidence folder (evolve.py reads it from there): the raw token
+usage, by the model that served it, of the headless sessions it ran (their stream-json output, the *.jsonl files
+in its evidence folder: each model call once, by message id, under the model the message names) and of the
+isolated runs those sessions or the harness started (every run summary written under the scenario's projects'
+.evidence while it ran, under its served model; Codex runs under codex:<model>, never priced). It adds the
+dollars at list prices by this tree's spend.py, for the reader (null when its spend.py has no price table);
+evolve.py computes its own from the raw usage.
+
+--dry-run prints each chosen scenario's steps (build-gate-3's prompts, resumes, and checks; the others' line
+above) and calls no model, makes no folder, and removes no evidence. An unknown name in --only is bad usage.
+Exit 0 when every scenario passes, 1 otherwise, 2 on bad usage.
 """
 import json
+import re
 import secrets
 import shutil
 import subprocess
@@ -35,6 +54,8 @@ SCRIPTS = Path.home() / ".claude/skills/_shared/scripts"
 BASE = Path.home() / ".gate-copies/system"
 EVIDENCE = REPO / ".evidence/system"
 PY = sys.executable
+CURRENT = {"projects": []}  # the projects the running scenario made or works in: where its isolated runs land
+TOKEN_KEYS = ("input", "cache_write", "cache_read", "output")
 
 IDEA = ("I want a tiny command-line habit tracker for myself. I add a habit by name, mark it done for today, "
         "and see each habit's current streak of consecutive days. Data lives in a JSON file in the folder. If "
@@ -99,11 +120,120 @@ def run(cmd, cwd=None):
     return r.returncode, r.stdout + r.stderr
 
 
-def fresh(name):
-    d = BASE / f"{name}-{secrets.token_hex(4)}" / "habit"
+def fresh(name, folder="habit"):
+    d = BASE / f"{name}-{secrets.token_hex(4)}" / folder
     d.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(d)], check=True)
+    CURRENT["projects"].append(d)
     return d
+
+
+# ---------- cost ----------
+
+def add_usage(acc, model, u):
+    t = acc.setdefault(model, {k: 0 for k in TOKEN_KEYS})
+    for k in TOKEN_KEYS:
+        t[k] += u.get(k) or 0
+
+
+def api_usage(u):
+    """A model call's usage as the pipeline counts it (input, cache_write, cache_read, output)."""
+    return {"input": u.get("input_tokens", 0) or 0, "cache_write": u.get("cache_creation_input_tokens", 0) or 0,
+            "cache_read": u.get("cache_read_input_tokens", 0) or 0, "output": u.get("output_tokens", 0) or 0}
+
+
+def stream_usage(path):
+    """Raw usage by model of the headless sessions whose stream-json output one file holds (several turns appended,
+    resumed ones included). Each model call counts once, by its message id, with the latest usage the stream gave
+    it, under the model the message names (else the model its session started on). A turn whose stream holds no
+    call with usage (stopped before one was written) counts its result event's usage under its session's model."""
+    calls, fallback, model, seen_calls = {}, [], None, 0
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        kind = ev.get("type")
+        if kind == "system" and ev.get("subtype") == "init":
+            model, seen_calls = ev.get("model") or model, 0
+        elif kind == "assistant":
+            msg = ev.get("message") or {}
+            if isinstance(msg.get("usage"), dict) and msg.get("id"):
+                calls[msg["id"]] = (msg.get("model") or model or "unknown", api_usage(msg["usage"]))
+                seen_calls += 1
+        elif kind == "result" and not seen_calls and isinstance(ev.get("usage"), dict):
+            fallback.append((model or "unknown", api_usage(ev["usage"])))
+    usage = {}
+    for m, u in list(calls.values()) + fallback:
+        add_usage(usage, m, u)
+    return usage
+
+
+def isolated_usage(projects, since):
+    """(raw usage by served model, runs counted, runs with no usage) of the isolated runs whose summaries were
+    written under the projects' .evidence at or after since (a Codex run under codex:<model>)."""
+    usage, runs, bare = {}, 0, 0
+    for p in projects:
+        ev = Path(p) / ".evidence"
+        for s in sorted(ev.rglob("*.summary.json")) if ev.is_dir() else []:
+            try:
+                if s.stat().st_mtime < since:
+                    continue
+                d = json.loads(s.read_text())
+            except (OSError, ValueError):
+                continue
+            u = d.get("usage") if isinstance(d, dict) else None
+            if not isinstance(u, dict):
+                bare += 1
+                continue
+            model = d.get("served_model") or d.get("model") or "unknown"
+            add_usage(usage, f"codex:{model}" if d.get("family") == "codex" or u.get("family") == "codex" else model, u)
+            runs += 1
+    return usage, runs, bare
+
+
+def dollars_of(usage):
+    """Dollars at list prices of the Claude usage, by this tree's spend.py; None when it has no price table."""
+    try:
+        scripts = str(REPO / "skills/_shared/scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import spend
+        return round(sum(spend.dollars(m, u)[0] for m, u in usage.items() if not m.startswith("codex")), 4)
+    except (ImportError, AttributeError):
+        return None
+
+
+def record_cost(ev, projects, since):
+    """Write the scenario's cost.json (see the module text) and return it."""
+    sessions, streams = {}, sorted(Path(ev).glob("*.jsonl"))
+    for f in streams:
+        for m, u in stream_usage(f).items():
+            add_usage(sessions, m, u)
+    runs_usage, runs, bare = isolated_usage(projects, since)
+    total = {}
+    for part in (sessions, runs_usage):
+        for m, u in part.items():
+            add_usage(total, m, u)
+    total = {m: u for m, u in total.items() if any(u.values())}
+    cost = {"usage": total, "models": sorted(total), "dollars": dollars_of(total),
+            "tokens": sum(sum(u.values()) for u in total.values()),
+            "sessions": {"streams": [f.name for f in streams], "usage": sessions},
+            "isolated": {"runs": runs, "without_usage": bare, "usage": runs_usage},
+            "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)),
+            "projects": [str(p) for p in projects]}
+    (Path(ev) / "cost.json").write_text(json.dumps(cost, indent=2))
+    return cost
+
+
+def cost_line(cost):
+    if not cost:
+        return "cost not recorded"
+    d = f"${cost['dollars']:.2f} at list prices" if cost.get("dollars") is not None else "dollars not computed"
+    return (f"cost: {cost['tokens'] / 1e6:.1f}M tokens, {d}, {len(cost['sessions']['streams'])} session stream(s), "
+            f"{cost['isolated']['runs']} isolated run(s); models {', '.join(cost['models']) or 'none'}")
 
 
 def check_record(project):
@@ -177,6 +307,137 @@ def scenario_build_gate(ev, project):
     return problems
 
 
+IDEA3 = ("I want a small command-line reading log for myself, built in three milestones, in this order. First, I "
+         "add a book by title, author, and page count, and list my books. Second, I log the pages I read on a day "
+         "and see each book's progress as a percentage of its page count. Third, I see a weekly summary: pages "
+         "read on each of the last seven days, and the books I finished that week. Data lives in a JSON file in "
+         "the folder. If the file is unreadable it must say so and never overwrite it.")
+ANSWERS3 = ("My answers to anything you need to ask: it is only for me, on this laptop, in English only, no colors "
+            "needed; a book's page count is required when adding it; logging pages past the last page caps the "
+            "progress at 100 percent and marks the book finished on that day; the week is the seven days ending "
+            "today; no stand-ins or sample data anywhere. Plan it as exactly three milestones, one for each part "
+            "above. When you play the lock back to me, my reply is the next line.\n"
+            "Yes, lock it. That is the reading log I want.")
+DEV3 = ("/dev {m}\n\nBuild the whole milestone, then freeze it and run the gate round. If the round asks for "
+        "changes, fix them, freeze again, and run the next round, until the verdict is ACCEPT-READY or BLOCKED. "
+        "Report the last verdict. Do not wait for me between steps.")
+ACCEPT3 = "/gate accept {m}\n\nI have looked at the demo and it does what I asked. I accept {m}."
+MILESTONES3 = ("M1", "M2", "M3")
+
+
+def steps_build_gate_3():
+    """The three-milestone scenario as data: --dry-run prints these steps, and the run carries out the same ones."""
+    steps = [{"name": "plan", "session": "new, in a fresh folder named reading",
+              "prompt": f"/plan {IDEA3}\n\n{ANSWERS3}",
+              "resume": "resumed with the continue prompt until the intent is locked, at most 3 times",
+              "check": "record_check, intent_lock verify, milestone_lint, and rulings pass; milestones.md plans "
+                       "exactly M1, M2, and M3; no product code exists"}]
+    for m in MILESTONES3:
+        steps.append({"name": f"dev {m}", "session": "new", "prompt": DEV3.format(m=m),
+                      "resume": f"resumed with the continue prompt until the last {m} round ends ACCEPT-READY or "
+                                f"BLOCKED, at most 6 times",
+                      "check": f"every {m} round has a verdict.json in which every checker ran; the last one is "
+                               f"ACCEPT-READY; the rounds are recorded in rounds.json"})
+        steps.append({"name": f"accept {m}", "session": "new", "prompt": ACCEPT3.format(m=m), "resume": "",
+                      "check": f"milestones.md gives {m} Status: accepted"})
+    steps.append({"name": "regression demos", "session": "none (reads the evidence)", "prompt": "", "resume": "",
+                  "check": "rulings check passes; the last M3 round's demo result has steps for M1 and M2 (their "
+                           "demo endings were replayed)"})
+    return steps
+
+
+def milestone_ids(project):
+    f = project / "docs/project/milestones.md"
+    return re.findall(r"^## (M\d+) · ", f.read_text(), re.M) if f.is_file() else []
+
+
+def milestone_status(project, m):
+    f = project / "docs/project/milestones.md"
+    text = f.read_text() if f.is_file() else ""
+    sec = re.search(rf"^## {m} · .*?(?=^## |\Z)", text, re.M | re.S)
+    st = re.search(r"^Status:\s*(\S+)", sec.group(0), re.M) if sec else None
+    return st.group(1) if st else None
+
+
+def gate_rounds(project, m):
+    """[(round, verdict, checkers that did not run)] of a milestone's finished gate rounds, in order."""
+    out = []
+    folder = project / ".evidence/gate" / m
+    dirs = [d for d in folder.glob("r*") if re.match(r"^r\d+$", d.name)] if folder.is_dir() else []
+    for d in sorted(dirs, key=lambda d: int(d.name[1:])):
+        try:
+            v = json.loads((d / "verdict.json").read_text())
+        except (OSError, ValueError):
+            continue
+        out.append((d.name, v.get("verdict"), [c for c, s in (v.get("checkers") or {}).items() if s is None]))
+    return out
+
+
+def demo_milestones(round_dir):
+    """The milestones whose demo steps a round's demo result reports (its last JSON block's steps)."""
+    f = round_dir / "code-verifier-demo.result.md"
+    blocks = re.findall(r"```json\s*(\{.*?\})\s*```", f.read_text(errors="replace"), re.S) if f.is_file() else []
+    for b in reversed(blocks):
+        try:
+            return {s.get("milestone") for s in json.loads(b).get("steps") or [] if isinstance(s, dict)}
+        except (ValueError, AttributeError):
+            continue
+    return set()
+
+
+def scenario_build_gate_3(ev):
+    project = fresh("build-gate-3", "reading")
+    steps = steps_build_gate_3()
+    result, session, code = claude(steps[0]["prompt"], project, ev / "plan.jsonl")
+    for turn in range(3):
+        if locked(project) or not session:
+            break
+        (ev / "notes.txt").open("a").write(f"resumed the plan session after its background work (turn {turn + 1})\n")
+        result, _, code = claude(CONTINUE, project, ev / "plan.jsonl", resume=session)
+    (ev / "plan.result.md").write_text(result)
+    problems = check_record(project)
+    planned = milestone_ids(project)
+    if planned != list(MILESTONES3):
+        problems.append(f"the plan has milestones {planned or 'none'}, not exactly M1, M2, and M3")
+    if problems:
+        return problems  # building on a plan that failed proves nothing
+    rounds = {}
+    for m in MILESTONES3:
+        stream = ev / f"dev-{m}.jsonl"
+        result, session, code = claude(DEV3.format(m=m), project, stream)
+        for turn in range(6):
+            done = gate_rounds(project, m)
+            if (done and done[-1][1] in ("ACCEPT-READY", "BLOCKED")) or not session:
+                break
+            (ev / "notes.txt").open("a").write(f"resumed the {m} dev session after its background work "
+                                               f"(turn {turn + 1})\n")
+            result, _, code = claude(CONTINUE, project, stream, resume=session)
+        (ev / f"dev-{m}.result.md").write_text(result)
+        done = gate_rounds(project, m)
+        rounds[m] = [{"round": r, "verdict": v, "not_run": missing} for r, v, missing in done]
+        (ev / "rounds.json").write_text(json.dumps(rounds, indent=1))
+        problems += [f"{m} {r}: {', '.join(missing)} did not run" for r, _, missing in done if missing]
+        if not done:
+            return problems + [f"{m}: no gate round finished (no verdict.json)"]
+        if done[-1][1] != "ACCEPT-READY":
+            return problems + [f"{m} ended {done[-1][1]} after {len(done)} round(s)"]
+        result, _, code = claude(ACCEPT3.format(m=m), project, ev / f"accept-{m}.jsonl")
+        (ev / f"accept-{m}.result.md").write_text(result)
+        status = milestone_status(project, m)
+        if status != "accepted":
+            return problems + [f"{m} is {status or 'missing'} after the owner's acceptance words, not accepted"]
+    code, out = run([PY, str(SCRIPTS / "rulings.py"), "check", str(project)])
+    if code != 0:
+        problems.append("rulings.py check: " + out.strip()[-300:])
+    last = project / ".evidence/gate/M3" / rounds["M3"][-1]["round"]
+    replayed = demo_milestones(last)
+    missing = [m for m in ("M1", "M2") if m not in replayed]
+    if missing:
+        problems.append(f"the last M3 round's demo did not replay the demo endings of {', '.join(missing)} "
+                        f"(its steps name {sorted(x for x in replayed if x) or 'no milestone'})")
+    return problems
+
+
 INJECT = r'''
 import re, sys
 from pathlib import Path
@@ -235,6 +496,7 @@ def scenario_adopt(ev):
     src = REPO / "tests/fixtures/agents/split-drift"
     project = BASE / f"adopt-{secrets.token_hex(4)}" / "split"
     shutil.copytree(src, project)
+    CURRENT["projects"].append(project)
     shutil.rmtree(project / "docs", ignore_errors=True)
     (project / "README.md").write_text("# split\nTwo flatmates see who owes whom. Run `python3 app.py settle` to see it.\n")
     subprocess.run(["git", "init", "-q", str(project)], check=True)
@@ -263,6 +525,7 @@ def scenario_adopt(ev):
 def scenario_capture(ev):
     project = BASE / f"capture-{secrets.token_hex(4)}" / "idea"
     project.mkdir(parents=True)
+    CURRENT["projects"].append(project)
     export = [{"conversation_id": "c-1", "title": "Plant watering idea", "create_time": 1790000000, "current_node": "a3",
                "mapping": {
                    "root": {"id": "root", "parent": None, "children": ["u1"], "message": None},
@@ -366,10 +629,47 @@ def scenario_switch(ev, project):
     return problems
 
 
+SCENARIOS = ("plan", "build-gate", "switch", "inbox", "injected", "adopt", "capture", "build-gate-3")
+NAMED_ONLY = {"build-gate-3"}  # run only when named with --only
+
+
+def described(name):
+    """A scenario's entry in the module text, on one line."""
+    m = re.search(rf"^  {re.escape(name)}\s+(.*?)(?=^  \S|^\S|\Z)", __doc__, re.M | re.S)
+    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+
+
+def dry_run(chosen):
+    for name in chosen:
+        if name != "build-gate-3":
+            print(f"{name}: {described(name)}")
+            print("  (its steps are code; only build-gate-3 lists its steps here)")
+            continue
+        print(f"{name}: {len(steps_build_gate_3())} steps; each session is a headless claude -p in the project folder")
+        for i, s in enumerate(steps_build_gate_3(), 1):
+            print(f"  {i}. {s['name']} · session: {s['session']}")
+            for j, line in enumerate(s["prompt"].splitlines()):
+                lead = "     prompt: " if j == 0 else "             "
+                print(lead + line if line else "")
+            if s["resume"]:
+                print(f"     {s['resume']}")
+            print(f"     check: {s['check']}")
+    print("dry run: no model was called, no folder was made, no evidence was removed")
+    return 0
+
+
 def main(argv):
     only = set((argv[argv.index("--only") + 1].split(",")) if "--only" in argv else [])
+    unknown = sorted(only - set(SCENARIOS))
+    if unknown:
+        print(f"system_scenarios: unknown scenario {', '.join(unknown)} (known: {', '.join(SCENARIOS)})",
+              file=sys.stderr)
+        return 2
+    chosen = [s for s in SCENARIOS if s in only or (not only and s not in NAMED_ONLY)]
+    if "--dry-run" in argv:
+        return dry_run(chosen)
     EVIDENCE.mkdir(parents=True, exist_ok=True)
-    results = {}
+    results, costs = {}, {}
 
     def ev_dir(name):
         d = EVIDENCE / name
@@ -379,21 +679,30 @@ def main(argv):
         return d
 
     def attempt(name, fn, *args):
-        # One scenario's crash is that scenario's failure; the others still run.
+        # One scenario's crash is that scenario's failure; the others still run. Its cost is recorded either way.
+        ev, started = ev_dir(name), time.time()
+        CURRENT["projects"] = [a for a in args if isinstance(a, Path)]
         try:
-            return fn(ev_dir(name), *args)
+            problems = fn(ev, *args)
         except Exception as exc:
-            return [f"the scenario itself failed: {exc.__class__.__name__}: {str(exc)[:300]}"]
+            problems = [f"the scenario itself failed: {exc.__class__.__name__}: {str(exc)[:300]}"]
+        try:
+            costs[name] = record_cost(ev, CURRENT["projects"], started)
+        except Exception as exc:
+            problems = problems + [f"its cost could not be recorded: {exc.__class__.__name__}: {str(exc)[:200]}"]
+        return problems
 
     # --project reuses a project that an earlier run planned and built, so the scenarios that only need one
     # (switch, inbox, injected) do not pay for planning and building again.
     project = Path(argv[argv.index("--project") + 1]) if "--project" in argv else None
     if project is None and (not only or only & {"plan", "build-gate", "injected", "switch", "inbox"}):
-        try:
-            project, problems = scenario_plan(ev_dir("plan"))
-        except Exception as exc:
-            project, problems = None, [f"the scenario itself failed: {exc.__class__.__name__}: {str(exc)[:300]}"]
-        results["plan"] = problems
+        planned = {}
+
+        def plan(ev):
+            planned["project"], problems = scenario_plan(ev)
+            return problems
+        results["plan"] = attempt("plan", plan)
+        project = planned.get("project")
         if project:
             (EVIDENCE / "plan/project.txt").write_text(str(project))
         if project and (not only or only & {"build-gate", "injected", "switch", "inbox"}):
@@ -408,9 +717,12 @@ def main(argv):
         results["adopt"] = attempt("adopt", scenario_adopt)
     if not only or "capture" in only:
         results["capture"] = attempt("capture", scenario_capture)
+    if "build-gate-3" in only:
+        results["build-gate-3"] = attempt("build-gate-3", scenario_build_gate_3)
     failed = 0
     for name, problems in results.items():
         print(f"{'PASS' if not problems else 'FAIL':<5} {name:<12} {'; '.join(problems)[:600]}", flush=True)
+        print(f"      {name} {cost_line(costs.get(name))}", flush=True)
         failed += bool(problems)
     print(f"system-scenarios: {'PASS' if not failed else 'FAIL'} ({len(results) - failed}/{len(results)})")
     return 1 if failed else 0

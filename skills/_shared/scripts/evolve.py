@@ -41,24 +41,53 @@ Suites (bench, compare):
                              installed pipeline, measured only when the installed revision is exactly the ref
   test:<tests/file.py>[::<Class.test>]   one test file or test
   repro:<fixtures:...|scenario:...|test:...>   the same, marked as the reproduction of the incidents
+  repro:cost:fixtures:<prefix>, repro:cost:scenario:<name>   the reproduction of a change made to spend less
+  repro:route:fixtures:<prefix>   the reproduction of a change to the model routing table (skills/_shared/
+                             models.json), judged on the matching fixtures pooled by kind (rule below)
 Fixture, scenario, and test suites run with the tests/ folder of the instrument ref (default: the ref itself),
 so both sides of a comparison are measured by the same instrument and only the pipeline differs. selftest
-runs each ref's own tests. Every result carries the environment (Claude Code, Codex, Python, OS, and the
-models the checkers ran on); a measurement already stored for the same commit, suite, instrument, and
-environment is reused, never repeated; --again adds another measurement of the same size (pooled).
+runs each ref's own tests. Every suite runs with PIPELINE_MODELS_IGNORE_OVERRIDE=1, so both sides use the
+repository's own routing table, never the owner's personal override. Every result carries the environment
+(Claude Code, Codex, Python, OS, and the models the checkers and sessions were served by); a measurement
+already stored for the same commit, suite, instrument, and environment is reused, never repeated; --again adds
+another measurement of the same size (pooled).
 
-compare applies this rule, never judgment:
+A fixture or scenario measurement stores each run's raw token usage by the model that served it, never a
+computed cost. Cost is computed when comparing, from that raw usage and the spend.py of the evolve.py that
+compares: cost units (spend.py's weights) shown for the allowance, and dollars at list prices (spend.py's
+price table, by the serving model), which the rule below judges. A weight or price change therefore moves both
+sides alike. Codex usage is shown beside, never priced or judged (it draws on another allowance).
+
+compare applies this rule, never judgment. "Cost" is dollars at list prices per run (fixtures) or per
+scenario run (scenarios), Claude usage only.
   INCOMPARABLE  a suite not measured on one side; for fixtures and scenarios no pair of measurements taken in
-                the same environment, or a different number of runs
+                the same environment, or a different number of runs; a cost that cannot be computed because a
+                side's measurements hold no raw usage (taken before usage was stored per run: measure both
+                sides again with bench --again); for repro:route, a fixture with no kind or a run with no
+                problem count. Environments match on everything above, the served models included, except
+                when the change's own diff touches skills/_shared/models.json: then the served models are left
+                out of the match, and the output says "model routing changed" with each route that differs,
+                before and after.
   WORSE         a selftest suite that passed now fails or is missing, or any selftest suite fails at head; a
                 test file with fewer tests than before; a fixture passing a smaller share of its runs, or
-                costing more than a quarter more per run (cost units, spend.py); a scenario or a
-                non-reproduction test that passed now fails
+                costing more than a quarter more per run; a scenario or a non-reproduction test that passed now
+                fails; a scenario that passed at base costing more than a quarter more at head (one that failed
+                at base stopped early, so its cost is no measure); under repro:route, a fixture of kind other
+                (a probe) passing a smaller share of its runs
   reproduction  a test must fail at base (an assertion, or the code under test raising) and pass at head; a
                 test that needs a name only the change adds (an import or name error) cannot show the problem
                 and does not count; a fixture must fail at least one run at base and pass every run at head;
                 a scenario must fail at base and pass at head; repro:cost:fixtures:<prefix> (a change made to
-                spend less) must cut the fixture's cost per run by a fifth or more and pass at least as often
+                spend less) must cut each fixture's cost per run by a fifth or more and pass at least as often;
+                repro:cost:scenario:<name> must pass at head and cut the scenario's cost by a fifth or more;
+                repro:route:fixtures:<prefix> (a routing change) holds when, over the fixtures the prefix
+                matches, with as many runs of each on both sides: the head's problems, summed over every run
+                of every planted fixture, are no more than the base's; every clean fixture passes every run at
+                head; the cost per run over all of them at head is at most 0.8 of the base's; and at least one
+                planted and one clean fixture match. A run's problems are the ones its expectation reported
+                (a runner status other than OK is one of them); a run that gave no verdict of its own (no
+                summary, no verdict block, or escalated to another model) missed everything, so it counts one
+                plus every problem its expectation finds in an empty verdict.
   BETTER        nothing incomparable or worse, at least one reproduction, and every reproduction flipped
   SAME          otherwise, with the reason (not an improvement)
 
@@ -610,6 +639,9 @@ FIXTURES_OF_AGENT = {"code-verifier": "code-verifier,escape", "loyal-evaluator":
                      "gate-judge": "gate-judge", "cold-reader": "cold-reader", "claim-verifier": "claim-verifier",
                      "change-reviewer": "change-reviewer"}
 ALL_CHECKERS = "code-verifier,loyal-evaluator,gate-judge,cold-reader,claim-verifier,change-reviewer,escape,probe"
+ROUTING_TABLE = "skills/_shared/models.json"
+# Every suite measures the repository's own routing table, never the owner's personal override.
+SUITE_ENV = {"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"}
 
 
 def probe_fixtures(root, changed):
@@ -634,7 +666,7 @@ def cmd_touchmap(argv):
         m = re.match(r"^agents/([\w-]+)\.md$", f)
         if m and m.group(1) in FIXTURES_OF_AGENT:
             fixtures.update(FIXTURES_OF_AGENT[m.group(1)].split(","))
-        if re.match(r"^skills/_shared/scripts/(run_isolated|render_pack)\.py$", f):
+        if re.match(r"^skills/_shared/scripts/(run_isolated|render_pack|models)\.py$", f) or f == ROUTING_TABLE:
             fixtures.update(ALL_CHECKERS.split(","))
         if f == "skills/_shared/scripts/gate_copies.py":
             fixtures.update(["code-verifier", "loyal-evaluator", "escape"])
@@ -707,48 +739,97 @@ def unittest_outcome(returncode, out):
     return "fail" if failures else "error"
 
 
+def suite_env():
+    return {**os.environ, **SUITE_ENV}
+
+
+def summary_usage(summary_files):
+    """(raw usage by the model that served it, served models) over some run summaries: each summary's usage
+    under its served model (served_model, else model, else "unknown"); a Codex run's under codex:<model>."""
+    usage, models = {}, set()
+    for f in summary_files:
+        try:
+            s = json.loads(Path(f).read_text())
+        except (OSError, ValueError):
+            continue
+        model = s.get("served_model") or s.get("model") or "unknown"
+        models.add(model)
+        u = s.get("usage")
+        if not isinstance(u, dict):
+            continue
+        key = f"codex:{model}" if s.get("family") == "codex" or u.get("family") == "codex" else model
+        acc = usage.setdefault(key, {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0})
+        for k in acc:
+            acc[k] += u.get(k) or 0
+    return usage, sorted(models)
+
+
 def measure(tree, suite, runs):
     kind, _, arg = suite.partition(":")
-    if kind in ("repro", "cost"):
+    if kind in ("repro", "cost", "route"):
         return measure(tree, arg, runs)
     if kind == "selftest":
-        r = subprocess.run(["bash", str(tree / "tests/pipeline-selftest.sh")], capture_output=True, text=True, cwd=tree)
+        r = subprocess.run(["bash", str(tree / "tests/pipeline-selftest.sh")], capture_output=True, text=True, cwd=tree,
+                           env=suite_env())
         rows = {m.group(2): m.group(1) for m in re.finditer(r"^(PASS|FAIL)\s+(\S+)", r.stdout, re.M)}
         return {"suites": rows, "tests": test_counts(tree), "tail": r.stdout[-1500:]}
     if kind == "fixtures":
         shutil.rmtree(tree / ".evidence/fixtures", ignore_errors=True)
         r = subprocess.run([sys.executable, str(tree / "tests/agent_fixtures.py"), "--only", arg, "--runs", str(runs)],
-                           capture_output=True, text=True, cwd=tree)
+                           capture_output=True, text=True, cwd=tree, env=suite_env())
         passes = {}
         for m in re.finditer(r"^(PASS|FAIL)\s+(\S+)\s+run (\d+)", r.stdout, re.M):
             passes.setdefault(m.group(2), []).append(m.group(1) == "PASS")
         if not passes:
             raise RuntimeError(f"no fixture matched {arg}: {(r.stdout + r.stderr)[-400:]}")
-        summaries = list((tree / ".evidence/fixtures").glob("*/run-*/*.summary.json"))
-        models = sorted({json.loads(f.read_text()).get("model") or "unknown" for f in summaries})
-        from spend import units as cost_units
-        cost = {}
-        for f in summaries:
-            name, run = f.parent.parent.name, f.parent.name
-            u = json.loads(f.read_text()).get("usage") or {}
-            cost.setdefault(name, {}).setdefault(run, 0)
-            cost[name][run] += cost_units(u)
-        return {"fixtures": passes, "models": models, "units": {k: sorted(v.values()) for k, v in cost.items()},
+        # Each run's raw usage by served model, read from its summaries here, so the cost never depends on the
+        # instrument's arithmetic; the instrument's own record adds the run's kind, problems, and escalation.
+        per_run, kinds, models = {}, {}, set()
+        for d in sorted((tree / ".evidence/fixtures").glob("*/run-*")):
+            name = d.parent.name
+            if name not in passes or not re.match(r"^run-\d+$", d.name):
+                continue
+            usage, served = summary_usage(sorted(d.glob("*.summary.json")))
+            models.update(served)
+            rec = {"run": int(d.name[4:]), "usage": usage, "models": served, "problems": None}
+            res = d / "fixture-result.json"
+            try:
+                own = json.loads(res.read_text()) if res.is_file() else {}
+            except ValueError:
+                own = {}
+            rec.update({k: own[k] for k in ("pass", "escalated", "status") if k in own})
+            if isinstance(own.get("problem_count"), int):
+                rec["problems"] = own["problem_count"]
+            if own.get("kind"):
+                kinds[name] = own["kind"]
+            per_run.setdefault(name, []).append(rec)
+        return {"fixtures": passes, "models": sorted(models) or ["unknown"], "per_run": per_run, "kinds": kinds,
                 "tail": r.stdout[-1500:]}
     if kind == "scenario":
         r = subprocess.run([sys.executable, str(tree / "tests/system_scenarios.py"), "--only", arg],
-                           capture_output=True, text=True, cwd=tree)
+                           capture_output=True, text=True, cwd=tree, env=suite_env())
         rows = {m.group(2): m.group(1) for m in re.finditer(r"^(PASS|FAIL)\s+(\S+)", r.stdout, re.M)
                 if m.group(2) != "system-scenarios:"}
         if not rows:
             raise RuntimeError(f"no scenario ran for {arg}: {(r.stdout + r.stderr)[-400:]}")
-        return {"scenarios": rows, "tail": r.stdout[-1500:]}
+        # Each scenario's raw usage (its sessions and the isolated runs they caused), as the instrument wrote it.
+        cost = {}
+        for name in rows:
+            f = tree / ".evidence/system" / name / "cost.json"
+            try:
+                c = json.loads(f.read_text()) if f.is_file() else None
+            except ValueError:
+                c = None
+            if isinstance(c, dict) and isinstance(c.get("usage"), dict):
+                cost[name] = {"usage": c["usage"], "models": sorted(c["usage"])}
+        models = sorted({m for c in cost.values() for m in c["models"]})
+        return {"scenarios": rows, "cost": cost, **({"models": models} if models else {}), "tail": r.stdout[-1500:]}
     if kind == "test":
         path, _, name = arg.partition("::")
         if not (tree / path).is_file():
             raise RuntimeError(f"{path} is not in the instrument's tests")
         r = subprocess.run([sys.executable, str(tree / path), *([name] if name else [])], capture_output=True,
-                           text=True, cwd=tree)
+                           text=True, cwd=tree, env=suite_env())
         out = r.stdout + r.stderr
         return {"outcome": unittest_outcome(r.returncode, out), "error": error_line(out), "tail": out[-1500:]}
     raise ValueError(f"unknown suite {suite}")
@@ -788,7 +869,7 @@ def cmd_bench(argv):
     runs = int(opts.get("--runs", 3))
     suites = [s.strip() for s in opts["--suites"].split(";") if s.strip()]
     for s in suites:
-        if s.removeprefix("repro:").startswith("scenario:") and installed_revision() != sha:
+        if s.removeprefix("repro:").removeprefix("cost:").startswith("scenario:") and installed_revision() != sha:
             return fail(f"{s} runs against the installed pipeline, which is {installed_revision()[:20] or 'unknown'}, "
                         f"not {sha[:12]}: install that exact commit first (install.py apply from a clean checkout)")
     env = env_fingerprint()
@@ -838,12 +919,53 @@ def pooled(measurements):
     return out
 
 
-def mean_units(measurements):
-    out = {}
+def run_cost(usage):
+    """(cost units, dollars, Codex tokens) of one run's raw usage ({model: tokens by type}), by this evolve.py's
+    spend.py: computed when comparing, never stored, so a weight or price change moves both sides alike."""
+    import spend
+    u_sum, d_sum, codex = 0.0, 0.0, 0
+    for model, u in (usage or {}).items():
+        if spend.is_codex(model):
+            codex += sum(u.get(k) or 0 for k in spend.WEIGHTS)
+            continue
+        u_sum += spend.units(u)
+        d_sum += spend.dollars(model, u)[0]
+    return u_sum, d_sum, codex
+
+
+def fixture_costs(measurements):
+    """{fixture: (units per run, dollars per run, Codex tokens per run, runs counted)} over the runs whose raw usage
+    is stored; a fixture none of whose runs has it is missing (its cost cannot be computed)."""
+    acc = {}
     for m in measurements:
-        for name, runs in (m.get("units") or {}).items():
-            out.setdefault(name, []).extend(runs)
-    return {k: sum(v) / len(v) for k, v in out.items() if v}
+        for name, runs in (m.get("per_run") or {}).items():
+            for r in runs:
+                u, d, c = run_cost(r.get("usage"))
+                a = acc.setdefault(name, [0.0, 0.0, 0, 0])
+                a[0], a[1], a[2], a[3] = a[0] + u, a[1] + d, a[2] + c, a[3] + 1
+    return {k: (u / n, d / n, c / n, n) for k, (u, d, c, n) in acc.items() if n}
+
+
+def scenario_costs(measurements):
+    """{scenario: (units, dollars, Codex tokens)} per run, the mean over the measurements that stored its raw usage."""
+    acc = {}
+    for m in measurements:
+        for name, c in (m.get("cost") or {}).items():
+            u, d, x = run_cost(c.get("usage"))
+            a = acc.setdefault(name, [0.0, 0.0, 0, 0])
+            a[0], a[1], a[2], a[3] = a[0] + u, a[1] + d, a[2] + x, a[3] + 1
+    return {k: (u / n, d / n, x / n) for k, (u, d, x, n) in acc.items() if n}
+
+
+def cost_text(b, h, per="a run"):
+    """How a cost moved, in dollars with the units beside: b and h are (units, dollars, Codex tokens, ...)."""
+    codex = f"; Codex {b[2] / 1e3:.0f}k -> {h[2] / 1e3:.0f}k tokens, not priced" if b[2] or h[2] else ""
+    return f"${b[1]:.2f} -> ${h[1]:.2f} {per} ({b[0] / 1e3:.0f}k -> {h[0] / 1e3:.0f}k units){codex}"
+
+
+def no_raw_usage(what, side, suite):
+    return (f"{what}: cost not comparable: the {side}'s stored measurements hold no raw usage (taken before usage was "
+            f"stored per run); measure both sides again with evolve.py bench <ref> --suites \"{suite}\" --again")
 
 
 def summary_line(data):
@@ -852,35 +974,154 @@ def summary_line(data):
         bad = [k for k, v in last["suites"].items() if v != "PASS"]
         return f"{len(last['suites']) - len(bad)}/{len(last['suites'])} suites pass" + (f", failing {', '.join(bad)}" if bad else "")
     if "fixtures" in last:
-        return ", ".join(f"{k} {p}/{n}" for k, (p, n) in pooled(data["measurements"]).items())
+        costs = fixture_costs(data["measurements"])
+        return ", ".join(f"{k} {p}/{n}" + (f" ${costs[k][1]:.2f} a run" if k in costs else "")
+                         for k, (p, n) in pooled(data["measurements"]).items())
     if "scenarios" in last:
-        return ", ".join(f"{k} {v}" for k, v in last["scenarios"].items())
+        costs = scenario_costs(data["measurements"])
+        return ", ".join(f"{k} {v}" + (f" ${costs[k][1]:.2f}" if k in costs else "") for k, v in last["scenarios"].items())
     return last.get("outcome", "?")
+
+
+def flat_routes(obj, path=""):
+    """{route: its setting} of a routing table: each innermost object (a role's model and effort) is one route,
+    written "model claude-opus-5-5, effort xhigh"; a value outside such an object is a route of its own."""
+    if isinstance(obj, dict):
+        if path and obj and all(not isinstance(v, (dict, list)) for v in obj.values()):
+            return {path: ", ".join(f"{k} {v}" for k, v in obj.items())}
+        out = {}
+        for k, v in obj.items():
+            out.update(flat_routes(v, f"{path}.{k}" if path else str(k)))
+        return out
+    return {path or "(the table)": obj if isinstance(obj, str) else json.dumps(obj)}
+
+
+def routes_at(sha):
+    text = git("show", f"{sha}:{ROUTING_TABLE}")
+    if not text:
+        return {}
+    try:
+        return flat_routes(json.loads(text))
+    except ValueError as exc:
+        return {"(the table)": f"not JSON ({exc})"}
+
+
+def routing_change(base, head):
+    """The routes that differ, [(route, before, after)], when the change's own diff touches the routing table;
+    None when it does not."""
+    if ROUTING_TABLE not in git("diff", "--name-only", base, head).splitlines():
+        return None
+    before, after = routes_at(base), routes_at(head)
+    return [(k, before.get(k, "(none)"), after.get(k, "(none)")) for k in sorted(set(before) | set(after))
+            if before.get(k) != after.get(k)]
+
+
+def same_env(x, y, ignore_models):
+    drop = (lambda e: {k: v for k, v in e.items() if k != "models"}) if ignore_models else (lambda e: e)
+    return drop(x["env"]) == drop(y["env"])
+
+
+def route_rule(suite, bms, hms):
+    """(incomparable, worse, reproduction) of repro:route:fixtures:<prefix>, the pooled rule for a routing change:
+    see the module text. Only measurements that stored each run's record take part."""
+    inc, worse = [], []
+    b_runs, h_runs, kinds = {}, {}, {}
+    for ms, runs in ((bms, b_runs), (hms, h_runs)):
+        for m in ms:
+            kinds.update(m.get("kinds") or {})
+            for name, rs in (m.get("per_run") or {}).items():
+                runs.setdefault(name, []).extend(rs)
+    for side, runs in (("base", b_runs), ("head", h_runs)):
+        if not runs:
+            inc.append(no_raw_usage(suite, side, suite))
+    if inc:
+        return inc, worse, None
+    counts = {"planted": [0, 0], "clean": [0, 0]}
+    cost, n_runs, clean_ok, clean_runs = [0.0, 0.0], [0, 0], 0, 0
+    for name in sorted(set(b_runs) | set(h_runs)):
+        b, h = b_runs.get(name, []), h_runs.get(name, [])
+        kind = kinds.get(name)
+        if len(b) != len(h):
+            inc.append(f"fixture {name}: {len(b)} runs at base, {len(h)} at head (measure both sides alike)")
+            continue
+        if kind not in ("planted", "clean", "other"):
+            inc.append(f"fixture {name} has no kind (planted, clean, or other) in the instrument's records: measure "
+                       f"with an instrument whose fixture_expectations.py gives every fixture one")
+            continue
+        if kind == "planted" and any(r.get("problems") is None for r in b + h):
+            inc.append(f"fixture {name}: a run records no problem count: measure with an instrument that counts them")
+            continue
+        for i, rs in enumerate((b, h)):
+            for r in rs:
+                cost[i] += run_cost(r.get("usage"))[1]
+                n_runs[i] += 1
+        if kind == "planted":
+            counts["planted"][0] += sum(r["problems"] for r in b)
+            counts["planted"][1] += sum(r["problems"] for r in h)
+        elif kind == "clean":
+            counts["clean"][0] += 1
+            clean_runs += len(h)
+            clean_ok += sum(1 for r in h if r.get("pass") is True)
+        else:
+            bp, hp = sum(1 for r in b if r.get("pass") is True), sum(1 for r in h if r.get("pass") is True)
+            if hp < bp:
+                worse.append(f"fixture {name} ({kind}): {bp}/{len(b)} at base, {hp}/{len(h)} at head")
+    if inc:
+        return inc, worse, None
+    planted = sum(1 for n in b_runs if kinds.get(n) == "planted")
+    bd, hd = cost[0] / max(n_runs[0], 1), cost[1] / max(n_runs[1], 1)
+    bp, hp = counts["planted"]
+    checks = [(planted > 0, f"{planted} planted fixture(s)"),
+              (counts["clean"][0] > 0, f"{counts['clean'][0]} clean fixture(s)"),
+              (hp <= bp, f"planted problems {bp} at base, {hp} at head"),
+              (clean_runs > 0 and clean_ok == clean_runs, f"clean runs passing at head {clean_ok}/{clean_runs}"),
+              (n_runs[0] > 0 and hd <= 0.8 * bd, f"${bd:.2f} -> ${hd:.2f} a run" + (f" ({hd / bd:.2f} of base, at "
+                                                                                     f"most 0.80)" if bd else ""))]
+    how = "; ".join(text for _, text in checks)
+    return inc, worse, (f"route {suite.removeprefix('repro:').removeprefix('route:')}", all(ok for ok, _ in checks), how)
 
 
 def compare(base_sha, head_sha, suites, inst_sha):
     """(verdict, reasons, rows) by the rule fixed in advance."""
     worse, incomparable, repro, rows = [], [], [], []
+    routing = routing_change(base_sha, head_sha)
+    if routing is not None:
+        rows.append({"suite": "model routing changed", "note": True,
+                     "routes": [{"route": k, "before": v, "after": w} for k, v, w in routing],
+                     "base": "; ".join(f"{k}: {v}" for k, v, _ in routing) or "no route differs",
+                     "head": "; ".join(f"{k}: {v}" for k, _, v in routing) or "no route differs"})
     for s in suites:
         is_repro = s.startswith("repro:")
         inner = s.removeprefix("repro:")
-        cost_repro = inner.startswith("cost:")
-        inner = inner.removeprefix("cost:")
+        cost_repro, route = inner.startswith("cost:"), inner.startswith("route:")
+        inner = inner.removeprefix("cost:").removeprefix("route:")
         b_all, h_all = stored(base_sha, s, inst_sha), stored(head_sha, s, inst_sha)
         if not b_all or not h_all:
             incomparable.append(f"{s} is not measured at {'base' if not b_all else 'head'}")
             continue
         b, h = b_all[-1], h_all[-1]
         if inner.startswith(("fixtures:", "scenario:")):
-            pairs = [(x, y) for x in b_all for y in h_all if x["env"] == y["env"]]
+            pairs = [(x, y) for x in b_all for y in h_all if same_env(x, y, routing is not None)]
             if not pairs:
+                only_models = any(same_env(x, y, True) for x in b_all for y in h_all)
                 incomparable.append(f"{s}: base and head were measured in different environments "
-                                    f"({b['env']} / {h['env']})")
+                                    f"({b['env']} / {h['env']})" +
+                                    (f"; only the served models differ, and a change meant to move work to another "
+                                     f"model changes {ROUTING_TABLE}" if only_models else ""))
                 continue
             b, h = pairs[-1]
         rows.append({"suite": s, "base": summary_line(b), "head": summary_line(h)})
         bm, hm = b["measurements"][-1], h["measurements"][-1]
-        if s == "selftest":
+        if route:
+            if not inner.startswith("fixtures:"):
+                incomparable.append(f"{s}: the route rule judges fixtures only (repro:route:fixtures:<prefix>)")
+                continue
+            i, w, r = route_rule(s, b["measurements"], h["measurements"])
+            incomparable += i
+            worse += w
+            if r:
+                repro.append(r)
+        elif s == "selftest":
             for name, st in bm["suites"].items():
                 if st == "PASS" and hm["suites"].get(name) != "PASS":
                     worse.append(f"selftest {name}: PASS at base, {hm['suites'].get(name, 'missing')} at head")
@@ -892,28 +1133,41 @@ def compare(base_sha, head_sha, suites, inst_sha):
                     worse.append(f"{name}: {n} tests at base, {hm['tests'].get(name, 0)} at head (tests removed)")
         elif inner.startswith("fixtures:"):
             bp, hp = pooled(b["measurements"]), pooled(h["measurements"])
-            bu, hu = mean_units(b["measurements"]), mean_units(h["measurements"])
+            bc, hc = fixture_costs(b["measurements"]), fixture_costs(h["measurements"])
             for name, (p, n) in bp.items():
                 hp_, hn = hp.get(name, (0, 0))
-                cost = f"{bu[name] / 1e3:.0f}k -> {hu[name] / 1e3:.0f}k units a run" if name in bu and name in hu else ""
+                costed = name in bc and name in hc
+                cost = cost_text(bc[name], hc[name]) if costed else ""
+                if not costed:
+                    incomparable.append(no_raw_usage(f"fixture {name}", "base" if name not in bc else "head", s))
                 if hn != n:
                     incomparable.append(f"fixture {name}: {n} runs at base, {hn} at head (measure both sides alike)")
                 elif cost_repro:
-                    ok = hp_ * n >= p * hn and name in bu and name in hu and hu[name] <= 0.8 * bu[name]
+                    ok = hp_ * n >= p * hn and costed and hc[name][1] <= 0.8 * bc[name][1]
                     repro.append((f"fixture {name} cost", ok, f"{cost or 'no cost measured'}; passes {p}/{n} -> {hp_}/{hn}"))
                 elif is_repro:
                     repro.append((f"fixture {name}", p < n and hp_ == hn, f"base {p}/{n}, head {hp_}/{hn}"))
                 elif hp_ * n < p * hn:
                     worse.append(f"fixture {name}: {p}/{n} at base, {hp_}/{hn} at head")
-                if not cost_repro and name in bu and name in hu and hu[name] > 1.25 * bu[name]:
+                if not cost_repro and costed and hc[name][1] > 1.25 * bc[name][1]:
                     worse.append(f"fixture {name} costs more: {cost} (more than a quarter over, beyond run-to-run noise)")
         elif inner.startswith("scenario:"):
+            bc, hc = scenario_costs(b["measurements"]), scenario_costs(h["measurements"])
             for name, st in bm["scenarios"].items():
-                if is_repro:
-                    repro.append((f"scenario {name}", st == "FAIL" and hm["scenarios"].get(name) == "PASS",
-                                  f"base {st}, head {hm['scenarios'].get(name)}"))
-                elif st == "PASS" and hm["scenarios"].get(name) != "PASS":
-                    worse.append(f"scenario {name}: PASS at base, {hm['scenarios'].get(name, 'missing')} at head")
+                hst = hm["scenarios"].get(name)
+                costed = name in bc and name in hc
+                cost = cost_text(bc[name], hc[name], "a run") if costed else ""
+                if not costed:
+                    incomparable.append(no_raw_usage(f"scenario {name}", "base" if name not in bc else "head", s))
+                if cost_repro:
+                    repro.append((f"scenario {name} cost", hst == "PASS" and costed and hc[name][1] <= 0.8 * bc[name][1],
+                                  f"{cost or 'no cost measured'}; base {st}, head {hst}"))
+                elif is_repro:
+                    repro.append((f"scenario {name}", st == "FAIL" and hst == "PASS", f"base {st}, head {hst}"))
+                elif st == "PASS" and hst != "PASS":
+                    worse.append(f"scenario {name}: PASS at base, {hst or 'missing'} at head")
+                if not cost_repro and costed and st == "PASS" and hc[name][1] > 1.25 * bc[name][1]:
+                    worse.append(f"scenario {name} costs more: {cost} (more than a quarter over, beyond run-to-run noise)")
         elif inner.startswith("test:"):
             bo, ho = bm["outcome"], hm["outcome"]
             if is_repro:
@@ -945,7 +1199,11 @@ def cmd_compare(argv):
     suites = [s.strip() for s in opts["--suites"].split(";") if s.strip()]
     verdict, reasons, rows = compare(base, head, suites, inst)
     for r in rows:
-        print(f"  {r['suite']}: base {r['base']} | head {r['head']}")
+        if r.get("note"):
+            print(f"model routing changed ({ROUTING_TABLE}): " + ("; ".join(
+                f"{x['route']}: {x['before']} -> {x['after']}" for x in r["routes"]) or "the file changed, no route did"))
+        else:
+            print(f"  {r['suite']}: base {r['base']} | head {r['head']}")
     print(f"{verdict}: " + "; ".join(reasons))
     if opts.get("--out"):
         Path(opts["--out"]).write_text(json.dumps({"base": base, "head": head, "instrument": inst, "suites": suites,

@@ -1,12 +1,15 @@
 """Tests for evolve.py: the harvest finds the pipeline's own trouble and nothing else, and a change is kept only
 when the rule fixed in advance says it is better, the isolated review accepts it, and the owner ruled where
 they must."""
+import contextlib
+import io
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -78,6 +81,30 @@ CODEX_SESSION = [
         "aggregated_output": "READ-ONLY-NOISE"}}),
     entry(type="compacted", timestamp="t", payload={"message": ""}),
 ]
+
+
+OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5-5"
+
+
+def per_run(passes, output=100_000, model=OPUS, problems=None):
+    """A fixture's stored run records: each run's raw usage (output tokens) by its served model, never a cost."""
+    return [{"run": i + 1, "pass": p, "problems": problems[i] if problems else (0 if p else 1), "escalated": False,
+             "status": "OK", "usage": {model: {"input": 0, "cache_write": 0, "cache_read": 0, "output": output}}}
+            for i, p in enumerate(passes)]
+
+
+def fixtures(kinds=None, **runs):
+    """A fixtures measurement as bench stores it: {fixture name with _ for -: run records}."""
+    runs = {k.replace("_", "-"): v for k, v in runs.items()}
+    return {"fixtures": {k: [r["pass"] for r in v] for k, v in runs.items()}, "per_run": runs,
+            "kinds": {k.replace("_", "-"): v for k, v in (kinds or {}).items()}}
+
+
+def scenario(status, output=None, model=OPUS):
+    m = {"scenarios": {"build-gate": status}}
+    if output is not None:
+        m["cost"] = {"build-gate": {"usage": {model: {"input": 0, "cache_write": 0, "cache_read": 0, "output": output}}}}
+    return m
 
 
 def run(*args, env, cwd=None):
@@ -281,12 +308,12 @@ class Rule(unittest.TestCase):
 
     def test_fixtures_compare_shares_of_equal_runs_in_one_environment(self):
         suite = "fixtures:gate-judge"
-        self.store(self.base, suite, {"fixtures": {"gate-judge-planted": [True, True, True]}})
-        self.store(self.head, suite, {"fixtures": {"gate-judge-planted": [True, False, True]}})
+        self.store(self.base, suite, fixtures(gate_judge_planted=per_run([True, True, True])))
+        self.store(self.head, suite, fixtures(gate_judge_planted=per_run([True, False, True])))
         self.assertEqual(self.verdict([suite])[0], "WORSE")
-        self.store(self.head, suite, {"fixtures": {"gate-judge-planted": [True, True]}})
+        self.store(self.head, suite, fixtures(gate_judge_planted=per_run([True, True])))
         self.assertEqual(self.verdict([suite])[0], "INCOMPARABLE")
-        self.store(self.head, suite, {"fixtures": {"gate-judge-planted": [True, True, True]}},
+        self.store(self.head, suite, fixtures(gate_judge_planted=per_run([True, True, True])),
                    env={"python": "3", "os": "x", "claude": "2", "codex": "absent"})
         # the head's only measurement in the first environment still has two runs; the one in a new environment
         # has no partner at base
@@ -296,32 +323,215 @@ class Rule(unittest.TestCase):
     def test_cost_is_measured_too(self):
         suite = "fixtures:cold-reader"
         runs = [True, True, True]
-        self.store(self.base, suite, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [100e3] * 3}})
-        self.store(self.head, suite, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [120e3] * 3}})
+        self.store(self.base, suite, fixtures(cold_reader_clear=per_run(runs, 100e3)))
+        self.store(self.head, suite, fixtures(cold_reader_clear=per_run(runs, 120e3)))
         self.assertNotEqual(self.verdict([suite])[0], "WORSE", "a fifth more is inside run-to-run noise")
-        self.store(self.head, suite, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [140e3] * 3}})
+        self.store(self.head, suite, fixtures(cold_reader_clear=per_run(runs, 140e3)))
         verdict, reasons, _ = self.verdict([suite])
         self.assertEqual(verdict, "WORSE")
-        self.assertIn("costs more", " ".join(reasons))
+        self.assertIn("costs more: $2.00 -> $2.80 a run (500k -> 700k units)", " ".join(reasons))
         repro = "repro:cost:fixtures:cold-reader"
-        self.store(self.base, repro, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [100e3] * 3}})
-        self.store(self.head, repro, {"fixtures": {"cold-reader-clear": runs}, "units": {"cold-reader-clear": [70e3] * 3}})
+        self.store(self.base, repro, fixtures(cold_reader_clear=per_run(runs, 100e3)))
+        self.store(self.head, repro, fixtures(cold_reader_clear=per_run(runs, 70e3)))
         self.assertEqual(self.verdict([repro])[0], "BETTER", "cheaper by more than a fifth, passing as often")
-        self.store(self.head, repro, {"fixtures": {"cold-reader-clear": [True, False, True]},
-                                      "units": {"cold-reader-clear": [50e3] * 3}})
+        self.store(self.head, repro, fixtures(cold_reader_clear=per_run([True, False, True], 50e3)))
         self.assertEqual(self.verdict([repro])[0], "SAME", "cheaper but worse is not an improvement")
+
+    def test_cost_is_computed_at_compare_time_from_raw_usage(self):
+        import spend
+        repro = "repro:cost:fixtures:cold-reader"
+        runs = [True, True, True]
+        # More tokens on a cheaper model: the units rise, the dollars fall by a quarter.
+        for suite in (repro, "fixtures:cold-reader"):
+            self.store(self.base, suite, fixtures(cold_reader_clear=per_run(runs, 100e3, OPUS)))
+            self.store(self.head, suite, fixtures(cold_reader_clear=per_run(runs, 150e3, SONNET)))
+        self.assertEqual(self.verdict(["fixtures:cold-reader"])[0], "SAME", "cheaper is not worse")
+        verdict, reasons, rows = self.verdict([repro])
+        self.assertEqual(verdict, "BETTER", reasons)
+        self.assertIn("$2.00 -> $1.50 a run (500k -> 750k units)", reasons[0])
+        stored = json.dumps([json.loads(f.read_text()) for f in (evolve.HOME / "benchmarks").rglob("*.json")])
+        self.assertNotIn("dollars", stored)
+        # A price change after the measurements applies to both sides alike, when comparing.
+        saved = spend.PRICES[SONNET]
+        spend.PRICES[SONNET] = {**saved, "output": 30.00}
+        try:
+            verdict, reasons, _ = self.verdict([repro])
+            self.assertEqual(verdict, "SAME")
+            self.assertIn("$2.00 -> $4.50 a run", reasons[0])
+            self.assertEqual(self.verdict([repro.replace("repro:cost:", "")])[0], "WORSE")
+        finally:
+            spend.PRICES[SONNET] = saved
+
+    def test_an_old_measurement_without_raw_usage_is_not_compared_silently(self):
+        suite = "fixtures:cold-reader"
+        old = {"fixtures": {"cold-reader-clear": [True, True, True]}, "units": {"cold-reader-clear": [100e3] * 3}}
+        new = fixtures(cold_reader_clear=per_run([True, True, True], 100e3))
+        self.store(self.base, suite, old)
+        self.store(self.head, suite, new)
+        verdict, reasons, _ = self.verdict([suite])
+        self.assertEqual(verdict, "INCOMPARABLE")
+        self.assertIn("fixture cold-reader-clear: cost not comparable: the base's stored measurements hold no raw "
+                      "usage", reasons[0])
+        self.assertIn("--again", reasons[0])
+        # Measured again on both sides, the cost comes from the measurements that hold raw usage.
+        self.store(self.base, suite, None, measurements=[old, new])
+        self.store(self.head, suite, None, measurements=[new, new])
+        self.assertEqual(self.verdict([suite])[0], "SAME")
+        # Scenarios alike.
+        self.store(self.base, "scenario:build-gate", scenario("PASS"))
+        self.store(self.head, "scenario:build-gate", scenario("PASS", 1e6))
+        verdict, reasons, _ = self.verdict(["scenario:build-gate"])
+        self.assertEqual(verdict, "INCOMPARABLE")
+        self.assertIn("scenario build-gate: cost not comparable", reasons[0])
+
+    def routed(self, before, after):
+        """Two commits on this test's repository whose diff is the routing table."""
+        table = self.repo / "skills/_shared/models.json"
+        table.parent.mkdir(parents=True, exist_ok=True)
+        shas = []
+        for content in (before, after):
+            table.write_text(json.dumps(content))
+            git(self.repo, "add", "-A")
+            git(self.repo, "commit", "-qm", "routing")
+            shas.append(git(self.repo, "rev-parse", "HEAD"))
+        return shas
+
+    def test_a_routing_change_is_compared_across_the_models_it_moves_to(self):
+        suite = "fixtures:cold-reader"
+        env = {"python": "3", "os": "x", "claude": "1", "codex": "absent"}
+        runs = [True, True, True]
+        self.store(self.base, suite, fixtures(cold_reader_clear=per_run(runs, 100e3, OPUS)), env={**env, "models": [OPUS]})
+        self.store(self.head, suite, fixtures(cold_reader_clear=per_run(runs, 100e3, SONNET)),
+                   env={**env, "models": [SONNET]})
+        verdict, reasons, _ = self.verdict([suite])
+        self.assertEqual(verdict, "INCOMPARABLE", "the change does not touch the routing table")
+        self.assertIn("only the served models differ", reasons[0])
+        before = {"version": 1, "roles": {"gate-judge": {"model": OPUS, "effort": "xhigh"},
+                                          "cold-reader": {"model": OPUS, "effort": "xhigh"}}}
+        after = {"version": 1, "roles": {"gate-judge": {"model": OPUS, "effort": "xhigh"},
+                                         "cold-reader": {"model": SONNET, "effort": "high"}}}
+        self.base, self.head = self.routed(before, after)
+        self.store(self.base, suite, fixtures(cold_reader_clear=per_run(runs, 100e3, OPUS)), env={**env, "models": [OPUS]})
+        self.store(self.head, suite, fixtures(cold_reader_clear=per_run(runs, 100e3, SONNET)),
+                   env={**env, "models": [SONNET]})
+        verdict, reasons, rows = self.verdict([suite])
+        self.assertEqual(verdict, "SAME", reasons)
+        self.assertEqual(rows[0]["suite"], "model routing changed")
+        self.assertEqual(rows[0]["routes"], [{"route": "roles.cold-reader", "before": f"model {OPUS}, effort xhigh",
+                                              "after": f"model {SONNET}, effort high"}])
+        # Only the served models are left out of the match: another Claude Code version still does not pair.
+        other = "fixtures:cold-reader-clear"
+        self.store(self.base, other, fixtures(cold_reader_clear=per_run(runs, 100e3, OPUS)), env={**env, "models": [OPUS]})
+        self.store(self.head, other, fixtures(cold_reader_clear=per_run(runs, 100e3, SONNET)),
+                   env={**env, "claude": "2", "models": [SONNET]})
+        self.assertEqual(self.verdict([other])[0], "INCOMPARABLE")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            evolve.cmd_compare([self.base, self.head, "--suites", suite])
+        self.assertIn(f"model routing changed (skills/_shared/models.json): roles.cold-reader: model {OPUS}, effort "
+                      f"xhigh -> model {SONNET}, effort high", out.getvalue())
+
+    def route(self, base_runs, head_runs, kinds=None):
+        suite = "repro:route:fixtures:gate-judge"
+        kinds = kinds if kinds is not None else {"gate_judge_planted": "planted", "gate_judge_clean": "clean"}
+        self.store(self.base, suite, fixtures(kinds, **base_runs))
+        self.store(self.head, suite, fixtures(kinds, **head_runs))
+        return self.verdict([suite])
+
+    def test_the_route_rule_pools_planted_problems_and_holds_every_clean_run(self):
+        five = [True] * 5
+        base = {"gate_judge_planted": per_run([False, True, False, True, True], problems=[1, 0, 2, 0, 0]),
+                "gate_judge_clean": per_run(five)}
+        cheaper = {"gate_judge_planted": per_run([True, False, True, False, True], model=SONNET, problems=[0, 2, 0, 1, 0]),
+                   "gate_judge_clean": per_run(five, model=SONNET)}
+        verdict, reasons, _ = self.route(base, cheaper)
+        self.assertEqual(verdict, "BETTER", reasons)
+        self.assertIn("planted problems 3 at base, 3 at head; clean runs passing at head 5/5; $2.00 -> $1.00 a run "
+                      "(0.50 of base, at most 0.80)", reasons[0])
+        # More problems pooled over the planted runs: the cheaper model misses more.
+        worse = {**cheaper, "gate_judge_planted": per_run([True, False, False, False, True], model=SONNET,
+                                                         problems=[0, 2, 1, 1, 0])}
+        verdict, reasons, _ = self.route(base, worse)
+        self.assertEqual(verdict, "SAME")
+        self.assertIn("planted problems 3 at base, 4 at head", reasons[0])
+        # One false block on a clean fixture.
+        verdict, reasons, _ = self.route(base, {**cheaper, "gate_judge_clean": per_run([True] * 4 + [False], model=SONNET)})
+        self.assertEqual(verdict, "SAME")
+        self.assertIn("clean runs passing at head 4/5", reasons[0])
+        # Not cheaper by a fifth.
+        verdict, reasons, _ = self.route(base, {k: per_run([r["pass"] for r in v], 90e3, OPUS, [r["problems"] for r in v])
+                                                for k, v in cheaper.items()})
+        self.assertEqual(verdict, "SAME")
+        self.assertIn("$2.00 -> $1.80 a run (0.90 of base", reasons[0])
+        # A planted fixture alone cannot show the routing raises no false block.
+        verdict, reasons, _ = self.route({"gate_judge_planted": base["gate_judge_planted"]},
+                                         {"gate_judge_planted": cheaper["gate_judge_planted"]})
+        self.assertEqual(verdict, "SAME")
+        self.assertIn("0 clean fixture(s)", reasons[0])
+
+    def test_the_route_rule_needs_kinds_counts_and_equal_runs(self):
+        five = [True] * 5
+        base = {"gate_judge_planted": per_run(five), "gate_judge_clean": per_run(five)}
+        head = {"gate_judge_planted": per_run(five, model=SONNET), "gate_judge_clean": per_run(five, model=SONNET)}
+        verdict, reasons, _ = self.route(base, {**head, "gate_judge_planted": per_run([True] * 4, model=SONNET)})
+        self.assertEqual(verdict, "INCOMPARABLE")
+        self.assertIn("fixture gate-judge-planted: 5 runs at base, 4 at head", " ".join(reasons))
+        verdict, reasons, _ = self.route(base, head, kinds={})
+        self.assertEqual(verdict, "INCOMPARABLE")
+        self.assertIn("has no kind", reasons[0])
+        uncounted = per_run(five, model=SONNET)
+        uncounted[2]["problems"] = None
+        verdict, reasons, _ = self.route(base, {**head, "gate_judge_planted": uncounted})
+        self.assertEqual(verdict, "INCOMPARABLE")
+        self.assertIn("records no problem count", reasons[0])
+        # A probe among them keeps the ordinary rule: passing less often is worse.
+        kinds = {"gate_judge_planted": "planted", "gate_judge_clean": "clean", "gate_judge_probe": "other"}
+        verdict, reasons, _ = self.route({**base, "gate_judge_probe": per_run(five)},
+                                         {**head, "gate_judge_probe": per_run([True, False] + [True] * 3, model=SONNET)},
+                                         kinds)
+        self.assertEqual(verdict, "WORSE")
+        self.assertIn("fixture gate-judge-probe (other): 5/5 at base, 4/5 at head", reasons[0])
+        # Old measurements, with no run records, cannot show it.
+        self.store(self.base, "repro:route:fixtures:gate-judge", {"fixtures": {"gate-judge-planted": five}})
+        verdict, reasons, _ = self.verdict(["repro:route:fixtures:gate-judge"])
+        self.assertEqual(verdict, "INCOMPARABLE")
+        self.assertIn("--again", " ".join(reasons))
+
+    def test_scenarios_record_cost(self):
+        suite = "scenario:build-gate"
+        self.store(self.base, suite, scenario("PASS", 1e6))  # $20.00 on Opus
+        self.store(self.head, suite, scenario("PASS", 1.2e6))
+        self.assertEqual(self.verdict([suite])[0], "SAME", "a fifth more is inside run-to-run noise")
+        self.store(self.head, suite, scenario("PASS", 1.3e6))
+        verdict, reasons, rows = self.verdict([suite])
+        self.assertEqual(verdict, "WORSE")
+        self.assertIn("scenario build-gate costs more: $20.00 -> $26.00 a run", reasons[0])
+        self.assertEqual(rows[0]["head"], "build-gate PASS $26.00")
+        # A scenario that failed at base stopped early: its cost is no measure of a full run.
+        self.store(self.base, suite, scenario("FAIL", 0.2e6))
+        self.assertEqual(self.verdict([suite])[0], "SAME")
+        repro = "repro:cost:scenario:build-gate"
+        self.store(self.base, repro, scenario("PASS", 1e6))
+        self.store(self.head, repro, scenario("PASS", 1.5e6, SONNET))  # $15.00
+        verdict, reasons, _ = self.verdict([repro])
+        self.assertEqual(verdict, "BETTER", reasons)
+        self.assertIn("scenario build-gate cost: $20.00 -> $15.00 a run", reasons[0])
+        self.store(self.head, repro, scenario("FAIL", 0.5e6, SONNET))
+        self.assertEqual(self.verdict([repro])[0], "SAME", "cheaper but failing is not an improvement")
+        self.store(self.head, repro, scenario("PASS", 1.7e6, SONNET))  # $17.00, a cut of only 15 percent
+        self.assertEqual(self.verdict([repro])[0], "SAME")
 
     def test_a_stochastic_reproduction(self):
         suite = "repro:fixtures:probe-inbox"
-        self.store(self.base, suite, {"fixtures": {"probe-inbox": [True, False, True]}})
-        self.store(self.head, suite, {"fixtures": {"probe-inbox": [True, True, True]}})
+        self.store(self.base, suite, fixtures(probe_inbox=per_run([True, False, True])))
+        self.store(self.head, suite, fixtures(probe_inbox=per_run([True, True, True])))
         self.assertEqual(self.verdict([suite])[0], "BETTER")
-        self.store(self.base, suite, {"fixtures": {"probe-inbox": [True, True, True]}})
+        self.store(self.base, suite, fixtures(probe_inbox=per_run([True, True, True])))
         self.assertEqual(self.verdict([suite])[0], "SAME")
-        self.store(self.base, suite, None, measurements=[{"fixtures": {"probe-inbox": [True, True, False]}},
-                                                         {"fixtures": {"probe-inbox": [True, True, True]}}])
-        self.store(self.head, suite, None, measurements=[{"fixtures": {"probe-inbox": [True, True, True]}},
-                                                         {"fixtures": {"probe-inbox": [True, True, True]}}])
+        self.store(self.base, suite, None, measurements=[fixtures(probe_inbox=per_run([True, True, False])),
+                                                         fixtures(probe_inbox=per_run([True, True, True]))])
+        self.store(self.head, suite, None, measurements=[fixtures(probe_inbox=per_run([True, True, True])),
+                                                         fixtures(probe_inbox=per_run([True, True, True]))])
         self.assertEqual(self.verdict([suite])[0], "BETTER", "pooled: base 5/6, head 6/6")
 
     def test_pushback_in_either_language(self):
@@ -391,6 +601,160 @@ class Rule(unittest.TestCase):
                     {"findings": [{"id": "R02", "class": "silent-path", "severity": "medium", "summary": "skips"}]}):
             self.assertTrue(evolve.review_problems({**good, **bad}), bad)
         self.assertTrue(evolve.review_problems(None))
+
+
+FAKE_FIXTURES = '''import json, os, sys
+from pathlib import Path
+root = Path(__file__).resolve().parents[1]
+want = os.environ.get("PIPELINE_MODELS_IGNORE_OVERRIDE")
+for n in (1, 2):
+    ev = root / ".evidence/fixtures/gate-judge-planted" / f"run-{n}"
+    ev.mkdir(parents=True)
+    (ev / "gate-judge.summary.json").write_text(json.dumps({"status": "OK", "model": "claude-sonnet-5-5",
+        "usage": {"input": 10, "cache_write": 0, "cache_read": 1000, "output": 500 * n}}))
+    (ev / "fixture-result.json").write_text(json.dumps({"kind": "planted", "pass": n == 1, "problem_count": n - 1,
+        "escalated": False, "status": "OK", "dollars": 99}))
+    print(("PASS" if n == 1 and want == "1" else "FAIL") + f"  gate-judge-planted  run {n}  override={want}")
+'''
+FAKE_SCENARIOS = '''import json, os
+from pathlib import Path
+ev = Path(__file__).resolve().parents[1] / ".evidence/system/build-gate"
+ev.mkdir(parents=True)
+(ev / "cost.json").write_text(json.dumps({"usage": {"claude-opus-5-5": {"input": 1, "cache_write": 2, "cache_read": 3,
+    "output": 4}, "codex:gpt-x": {"input": 5, "cache_write": 0, "cache_read": 0, "output": 6}}, "dollars": 99}))
+print("PASS  build-gate" if os.environ.get("PIPELINE_MODELS_IGNORE_OVERRIDE") == "1" else "FAIL  build-gate")
+print("      build-gate cost: ...")
+'''
+
+
+class Instrument(unittest.TestCase):
+    """What bench reads from the fixture and scenario harnesses, and what they record, without any model."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_bench_reads_raw_usage_and_the_runs_records_with_the_override_ignored(self):
+        tree = self.d / "tree"
+        (tree / "tests").mkdir(parents=True)
+        (tree / "tests/agent_fixtures.py").write_text(FAKE_FIXTURES)
+        (tree / "tests/system_scenarios.py").write_text(FAKE_SCENARIOS)
+        saved = os.environ.pop("PIPELINE_MODELS_IGNORE_OVERRIDE", None)
+        try:
+            m = evolve.measure(tree, "repro:route:fixtures:gate-judge", 2)
+            s = evolve.measure(tree, "scenario:build-gate", 1)
+        finally:
+            if saved is not None:
+                os.environ["PIPELINE_MODELS_IGNORE_OVERRIDE"] = saved
+        self.assertEqual(m["fixtures"], {"gate-judge-planted": [True, False]}, "the suite ran with the override ignored")
+        self.assertEqual(m["kinds"], {"gate-judge-planted": "planted"})
+        self.assertEqual(m["models"], [SONNET])
+        runs = m["per_run"]["gate-judge-planted"]
+        self.assertEqual([(r["run"], r["problems"], r["pass"]) for r in runs], [(1, 0, True), (2, 1, False)])
+        self.assertEqual(runs[1]["usage"], {SONNET: {"input": 10, "cache_write": 0, "cache_read": 1000, "output": 1000}})
+        self.assertNotIn("dollars", json.dumps(m), "raw usage is stored, never a cost")
+        self.assertEqual(s["scenarios"], {"build-gate": "PASS"})
+        self.assertEqual(s["models"], [OPUS, "codex:gpt-x"])
+        self.assertEqual(s["cost"]["build-gate"]["usage"][OPUS]["output"], 4)
+        self.assertNotIn("dollars", json.dumps(s))
+        u, d, codex = evolve.run_cost(s["cost"]["build-gate"]["usage"])
+        self.assertEqual(codex, 11, "Codex tokens are counted apart")
+        self.assertAlmostEqual(d, (1 * 4 + 2 * 5 + 3 * 0.2 + 4 * 20) / 1e6)
+
+    def fixture_run(self, *summaries):
+        ev = self.d / f"run-{len(list(self.d.iterdir()))}"
+        ev.mkdir()
+        for name, s in summaries:
+            (ev / f"{name}.summary.json").write_text(json.dumps(s))
+        return ev
+
+    def test_a_fixture_run_records_usage_cost_problems_and_escalation(self):
+        sys.path.insert(0, str(ROOT / "tests"))
+        import agent_fixtures
+        from fixture_expectations import FIXTURES
+        spec = FIXTURES["gate-judge-planted"]
+        self.assertEqual(spec["kind"], "planted")
+        self.assertEqual({s["kind"] for s in FIXTURES.values()}, {"planted", "clean", "other"})
+        self.assertEqual(FIXTURES["probe-inbox"]["kind"], "other")
+        misses = len(spec["expect"]({}, {"summary": {}, "result": ""}))
+        self.assertGreater(misses, 1)
+        usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 1_000_000}
+        ev = self.fixture_run(("gate-judge", {"status": "OK", "model": SONNET, "usage": usage}),
+                              ("code-verifier", {"status": "OK", "family": "codex", "model": "gpt-x", "usage": usage}))
+        _, _, problems, _, rec = agent_fixtures.record("gate-judge-planted", spec, 1, ev, ["not caught: x"], True,
+                                                       {"status": "OK"})
+        self.assertEqual((rec["kind"], rec["pass"], rec["problem_count"], rec["escalated"]), ("planted", False, 1, False))
+        self.assertEqual(rec["usage"][SONNET]["output"], 1_000_000)
+        self.assertIn("codex:gpt-x", rec["usage"])
+        self.assertEqual(rec["dollars"], 10.0, "Sonnet's output price; Codex is never priced")
+        self.assertEqual(json.loads((ev / "fixture-result.json").read_text())["problem_count"], 1)
+        # A run escalated to another model fails, and counts as missing everything, whatever the retry found.
+        ev = self.fixture_run(("gate-judge", {"status": "OK", "model": OPUS, "escalated": True, "usage": usage}))
+        _, _, problems, _, rec = agent_fixtures.record("gate-judge-planted", spec, 2, ev, [], True, {"status": "OK"})
+        self.assertFalse(rec["pass"])
+        self.assertIn("escalated", problems[-1])
+        self.assertEqual(rec["problem_count"], 1 + misses)
+        # A run with no verdict of its own missed everything too.
+        ev = self.fixture_run(("gate-judge", {"status": "ERROR", "model": SONNET}))
+        rec = agent_fixtures.record("gate-judge-planted", spec, 3, ev, ["runner status ERROR", "no JSON verdict block"],
+                                    False, {"status": "ERROR"})[4]
+        self.assertEqual(rec["problem_count"], 1 + misses)
+        self.assertEqual(rec["usage"], {})
+
+    def test_a_scenario_records_its_sessions_and_the_runs_they_caused(self):
+        sys.path.insert(0, str(ROOT / "tests"))
+        import system_scenarios as sc
+        ev, project = self.d / "ev", self.d / "project"
+        ev.mkdir()
+        call = lambda mid, out, model=None: json.dumps({"type": "assistant", "message": {
+            "id": mid, **({"model": model} if model else {}), "usage": {"input_tokens": 1, "output_tokens": out}}})
+        (ev / "dev.jsonl").write_text("\n".join([
+            json.dumps({"type": "system", "subtype": "init", "model": OPUS, "session_id": "s1"}),
+            call("m1", 10), call("m1", 30),  # one call, streamed twice: its latest usage counts once
+            call("m2", 100, SONNET),
+            json.dumps({"type": "result", "usage": {"output_tokens": 999}}),  # its calls are counted already
+            json.dumps({"type": "system", "subtype": "init", "model": OPUS, "session_id": "s1"}),
+            json.dumps({"type": "result", "usage": {"input_tokens": 5, "output_tokens": 7}}),  # a turn with no calls
+        ]) + "\n")
+        since = time.time() - 100
+        runs = project / ".evidence/gate/M1/r1"
+        runs.mkdir(parents=True)
+        (runs / "gate-judge.summary.json").write_text(json.dumps({"served_model": SONNET, "model": OPUS,
+                                                                  "usage": {"output": 1000}}))
+        (runs / "code-verifier.summary.json").write_text(json.dumps({"family": "codex", "model": "gpt-x",
+                                                                     "usage": {"output": 50}}))
+        (runs / "loyal-evaluator.summary.json").write_text(json.dumps({"status": "BLOCKED"}))
+        old = runs / "old.summary.json"
+        old.write_text(json.dumps({"model": OPUS, "usage": {"output": 10**9}}))
+        os.utime(old, (since - 50, since - 50))
+        cost = sc.record_cost(ev, [project], since)
+        self.assertEqual(cost["usage"], {
+            OPUS: {"input": 6, "cache_write": 0, "cache_read": 0, "output": 37},
+            SONNET: {"input": 1, "cache_write": 0, "cache_read": 0, "output": 1100},
+            "codex:gpt-x": {"input": 0, "cache_write": 0, "cache_read": 0, "output": 50}})
+        self.assertEqual((cost["isolated"]["runs"], cost["isolated"]["without_usage"]), (2, 1))
+        self.assertAlmostEqual(cost["dollars"], round((6 * 4 + 37 * 20 + 1 * 2 + 1100 * 10) / 1e6, 4))
+        self.assertEqual(json.loads((ev / "cost.json").read_text())["usage"], cost["usage"])
+        self.assertIn("isolated run(s); models claude-opus-5-5, claude-sonnet-5-5, codex:gpt-x", sc.cost_line(cost))
+
+    def test_the_three_milestone_scenario_has_a_dry_run(self):
+        home = self.d / "home"
+        home.mkdir()
+        env = {**os.environ, "HOME": str(home), "PATH": "/usr/bin:/bin"}  # no claude to call
+        r = subprocess.run([sys.executable, str(ROOT / "tests/system_scenarios.py"), "--only", "build-gate-3", "--dry-run"],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for want in ("/plan I want a small command-line reading log", "/dev M2", "/gate accept M3",
+                     "I accept M3.", "replayed", "no model was called"):
+            self.assertIn(want, r.stdout)
+        self.assertEqual(list(home.iterdir()), [], "a dry run makes no folder")
+        r = subprocess.run([sys.executable, str(ROOT / "tests/system_scenarios.py"), "--only", "build-gate-4", "--dry-run"],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("unknown scenario build-gate-4", r.stderr)
 
 
 SELFTEST = """#!/bin/bash
