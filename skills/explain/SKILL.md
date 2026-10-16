@@ -4,16 +4,7 @@ description: "Explain what was built (a milestone, the whole product, or the cur
 argument-hint: "[engineer | founder | investor | user] [M<k> | product | status | demo M<k> | gate M<k>]"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /explain
 
@@ -24,8 +15,8 @@ Load-bearing rules:
   needs and does not have (an investor metric) is named as missing, never invented.
 - When a narrative lock exists (a venture project's `truth/narrative-lock.md`), identity and promise come
   first, rendered from it at the reader's scope.
-- Standalone: a reader with none of this project's context understands every sentence; an ID appears only in
-  parentheses after its plain meaning.
+- Standalone for a reader with none of this project's context (the charter's rule for owner-facing text):
+  plain meaning first, any ID only in parentheses after it.
 
 ## Steps
 1. Pick the register from the argument, or from who reads it and what they will decide; ask once if that is
@@ -42,9 +33,8 @@ will see (with the capture from the latest gate round beside it), and the one th
 user's register.
 
 ## gate M<k>
-The latest gate round as the one-screen owner summary: the verdict, exceptions first (what failed, what
-was skipped and why, what needs a ruling), what held and what drifted in words, how to see the demo, and the
-readiness line.
+The latest gate round as the one-screen owner summary that `~/.claude/skills/gate/SKILL.md` defines ("The
+owner summary": the verdict and the exceptions first).
 
 ## End
-Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill explain --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill explain --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).

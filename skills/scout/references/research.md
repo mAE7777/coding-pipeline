@@ -22,4 +22,14 @@
 - Search deliberately against your leading answer: look for why it fails, who abandoned it, what broke.
 - Fresh beats remembered: a fact about prices, limits, versions, or availability is fetched now, with its date.
 - Compute, do not estimate, when the numbers are available.
-- Report what you did not find as clearly as what you found.
+- Report what you did not find as clearly as what you found: what you searched, where, and with which words.
+- Absence of evidence is not evidence of absence. "No source mentions X" is reported as a search that found
+  nothing, never as "X is not a concern".
+
+## Phrasing (from `~/.claude/skills/craft/explore/epistemics.md`; the grades above stay)
+- Confidence words ("because", "was designed to", "fixes", "the team decided") need a primary or triangulated
+  source beside them. An inferred claim is hedged ("appears to", "likely", "is consistent with") and shows its
+  chain: given A and B, C seems likely because D.
+- Avoid "obviously", "clearly", "of course", "just", and "I think"; say what the evidence suggests.
+- A guess embedded in the question ("I assume it's for performance?") is one candidate, checked like any other.
+- Code shows what it does, not why it exists: never cite code as evidence of its own intent.

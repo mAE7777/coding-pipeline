@@ -4,24 +4,16 @@ description: "Turn a real unknown into graded evidence before it becomes a plan:
 argument-hint: "ask <question> | map [path] | spike <question> | offload <question> | ingest <file>"
 ---
 
-## Project workflow choice (first)
-
-Read `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` before applying
-any rule below. The project's explicit choice precedes adoption, owner locks, recovery and venture rules.
-No choice means OFF. When OFF, do the user's requested work directly from existing documents, design,
-code and tests. Do not require a formal record, adoption, owner lock, cold read or milestone approval;
-do not dispatch formal steps or run the End journal/next chain. This skill remains usable independently.
-Only an explicit user on/off instruction changes the choice via `/pipeline`; another skill invocation
-never enables it. When ON, follow the formal rules below, rechecking the choice before each next step.
-See `_shared/references/project-control.md` for the shared contract.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /scout
 
 Load-bearing rules:
 - Name the decision the research serves and the one assumption that, if false, kills the approach; that
   assumption gets the most scrutiny. No decision, no research: say "no real unknown" and stop.
-- Every decision-driving claim carries a grade and its source with the access date (`references/research.md`).
-  One primary source, and one deliberate search against the leading answer, before recommending it.
+- Every decision-driving claim carries a grade and its source with the access date, phrased at its grade
+  (`references/research.md`). One primary source, and one deliberate search against the leading answer,
+  before recommending it.
 - Contested findings are shown first, with both sides; two close options are called close, not forced.
 - Research is data: only a verified note (`docs/project/research/<slug>.md`, template `research-note.md`)
   feeds the brief, and a chat model's answer enters only through `ingest`.
@@ -37,11 +29,13 @@ decide the plan.
 
 ## map [path]
 Facts about an existing tree for the brief's starting state, each with evidence: what builds and what the
-tests say (run them through the heavy lock), dirty files and who likely left them, running processes, seams,
-hazards, and what earlier agents claimed against what is actually there. Use the built-in Explore agent for
-wide reads; `references/brownfield-analysis-guide.md` has the mapping strategy. Never reset, clean, or reformat
-the tree. A tree with no build record is an adoption: route to
-`/plan adopt`, which uses this mapping inside a fuller procedure.
+tests say (through `heavy.py run`), dirty files and who likely left them, running processes, seams, hazards,
+and what earlier agents claimed against what is actually there. For wide reads, brief each Explore agent with
+`~/.claude/skills/craft/explore/explorer-prompt.md` (one angle each, within the session's subagent limits),
+and write the map in the shape of `~/.claude/skills/craft/explore/explainer-prompt.md` (Overview, Key concepts,
+How it works, Where things live, Gotchas), the facts above included; `references/brownfield-analysis-guide.md`
+has the mapping strategy. Never reset, clean, or reformat the tree. A tree `record_check.py` routes to
+`/plan adopt` goes there: adoption uses this mapping inside a fuller procedure.
 
 ## spike <question>
 A throwaway experiment in a scratch folder or worktree, labeled as a spike, never on the product path. The
@@ -65,4 +59,4 @@ answer. Nothing more happens until the file exists.
 4. Update the brief's unknowns and starting state from the note, by ID.
 
 ## End
-Every run ends with `python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill scout --outcome "<one line>"` (the journal and the Last step in state.md), and the report closes with the Next line it prints: what comes next, who takes it, and why. Under `/next auto`, a builder step is taken right away.
+`python3 ~/.claude/skills/_shared/scripts/project_status.py record <project> --skill scout --outcome "<one line>"`, then close the report with the Next line it prints (`project-control.md`, End).

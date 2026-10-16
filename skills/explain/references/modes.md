@@ -30,6 +30,17 @@ Template:
 
 Lint: explains what and why, not line-by-line how; honest about residual rough edges.
 
+How the product or one of its mechanisms works (`product`, or a question about a part), rather than what a
+milestone changed, takes the explainer's shape (`~/.claude/skills/craft/explore/explainer-prompt.md`):
+1. **Overview**: what it is, what it does, why it exists; enough to decide whether to read on.
+2. **Key concepts**: the types, services, or ideas the rest depends on, briefly.
+3. **How it works**: the flow from trigger to result, naming the files and functions; a diagram only when it
+   clarifies.
+4. **Where things live**: the files and folders a newcomer needs first.
+5. **Gotchas**: surprising behavior and pitfalls; left out when there are none.
+
+Lint: concrete names, not abstractions; every step says where it lives; no claim beyond the evidence.
+
 ## MODE: founder
 **Cares about:** does it serve the customer and the problem; the user benefit (outcome not
 output); scope/tradeoffs; risk; what's next and is it worth shipping. **Altitude:** the customer
