@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tally</title>
+<style>
+  body { font-family: sans-serif; max-width: 32rem; margin: 2rem auto; }
+  form, .show { margin-bottom: 1rem; }
+  #message { color: #b00020; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<h1>Tally</h1>
+<form id="add">
+  <label>Category
+    <select id="category">
+      <option>food</option>
+      <option>travel</option>
+      <option>rent</option>
+    </select>
+  </label>
+  <label>Amount <input id="amount" autocomplete="off"></label>
+  <button type="submit">Add</button>
+</form>
+<p id="message" role="alert"></p>
+<div class="show">
+  <label>Show
+    <select id="show">
+      <option>all</option>
+      <option>food</option>
+      <option>travel</option>
+      <option>rent</option>
+    </select>
+  </label>
+</div>
+<ul id="list"></ul>
+<p id="empty">No expenses yet</p>
+<p>Total: <output id="total">0.00</output></p>
+<script src="app.js"></script>
+</body>
+</html>

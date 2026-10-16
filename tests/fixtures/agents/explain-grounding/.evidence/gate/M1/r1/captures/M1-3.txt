@@ -1,0 +1,5 @@
+$ python3 app.py export
+category,amount
+food,5.00
+travel,40.00
+food,7.50
