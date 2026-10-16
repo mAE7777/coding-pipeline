@@ -8,7 +8,9 @@ Each fixture folder holds a project (a small product with its docs/project build
 copies it to a fresh work folder under ~/.gate-copies/fixtures/, prepares the checker's directory the way
 the gate does (gate_copies.py review or blind copy, a verdict folder, or a documents folder), renders the
 pack with render_pack.py, runs the checker with run_isolated.py (the agent file from this repository unless
---installed; --model <id> passed on as run_isolated.py --model <id>, for both passes of a two-pass checker),
+--installed; --model <id> and --effort <level> passed on to run_isolated.py, for both passes of a two-pass
+checker; without them each checker runs on its models.json route, so a routing change is what gets measured;
+never with a shadow run),
 and checks the checker's final JSON block against the fixture's expectations (which also see the checker's
 folder, so a demo step's capture can be checked to exist). Canary strings planted in the project's intent and
 in files outside the checker's copy must never appear in its output. A judge whose folder holds captures runs
@@ -189,8 +191,10 @@ def run_one(name, spec, n, installed, effort, model=None):
         workdir, _ = prepare(spec, project, work)
     except RuntimeError as exc:
         return record(name, spec, n, ev, [str(exc)], False, None)
+    # No shadow runs here (a fixture measures one setting), and the route's effort unless --effort was given, so
+    # an effort change in models.json is measured like a model change.
     cmd = [sys.executable, str(SCRIPTS / "run_isolated.py"), spec["role"], "--dir", str(workdir), "--out", str(ev),
-           "--project", str(project), "--effort", effort]
+           "--project", str(project), "--no-shadow"] + (["--effort", effort] if effort else [])
     if spec.get("pack"):
         packed = ev / "fixture-pack.md"
         packed.write_text(embedded_pack(spec, project))
@@ -224,7 +228,8 @@ def run_one(name, spec, n, installed, effort, model=None):
     if spec.get("pass2") and summary.get("status") == "OK":
         render2 = ["--project", str(project), "--pass", "2"]
         cmd2 = [sys.executable, str(SCRIPTS / "run_isolated.py"), spec["role"], "--dir", str(workdir), "--out", str(ev),
-                "--project", str(project), "--effort", effort, "--resume", summary["session_id"],
+                "--project", str(project), "--no-shadow"] + (["--effort", effort] if effort else []) + [
+                "--resume", summary["session_id"],
                 "--render", *render2, "--"]
         for c in spec.get("canaries", []):
             cmd2 += ["--canary", c]
@@ -258,7 +263,7 @@ def main(argv):
     only = argv[argv.index("--only") + 1] if "--only" in argv else None
     runs = int(argv[argv.index("--runs") + 1]) if "--runs" in argv else 3
     parallel = int(argv[argv.index("--parallel") + 1]) if "--parallel" in argv else 1
-    effort = argv[argv.index("--effort") + 1] if "--effort" in argv else "xhigh"
+    effort = argv[argv.index("--effort") + 1] if "--effort" in argv else None  # None: the route's effort
     model = argv[argv.index("--model") + 1] if "--model" in argv[:-1] else None
     if "--model" in argv and not model:
         print("agent_fixtures: --model takes a model id, such as claude-sonnet-5-5", file=sys.stderr)

@@ -54,7 +54,8 @@ Roles and what their pack contains (nothing else reaches the checker):
                    interfaces, decisions, AGENTS.md, the stack pack, the owner's standing requirements) as
                    context not under review, and with --previous <result.md> the earlier read, whose
                    findings a re-read settles. Understanding mode (--inputs understanding):
-                   state.md's Understanding with the Goal, Must not lose, and the milestone's section.
+                   state.md's Understanding with the Goal, Must not lose, the milestone's section, and the
+                   mechanism cards it names.
                    Fidelity mode (--mode fidelity): the --docs transcripts verbatim, the dossier's summary
                    and only the units citing those transcripts, and with --previous the earlier read.
                    Extraction mode (--mode extract): the --docs
@@ -718,6 +719,9 @@ def render(role, opts):
             pack.need("Must not lose", "\n".join(f"- {k} {v}" for k, v in eff["must_not_lose"].items()),
                       "intent.md Must not lose")
             pack.need("Milestone contract", ms, f"the {mid} section of milestones.md")
+            # The cards say what each named mechanism guarantees: a restatement that swaps one is only visible here.
+            pack.need("Mechanism cards this milestone exercises", named_cards(intent, ms) if (ms and intent) else None,
+                      "the mechanism cards (docs/project/intent.md)")
             title = "Cold read, understanding mode"
         elif mode == "fidelity":
             srcs = set()
