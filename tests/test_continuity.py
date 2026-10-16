@@ -154,14 +154,25 @@ class LocalOnlyTest(unittest.TestCase):
             out = subprocess.run([sys.executable, str(lo), d], capture_output=True, text=True)
             self.assertEqual(out.returncode, 0, out.stderr)
             exclude = (Path(d) / ".git/info/exclude").read_text()
-            for pat in ("/docs/project/state.md", "/.evidence/", "/AGENTS.md", "/CLAUDE.md", "/docs/project/.gate-canary-*"):
+            for pat in ("/docs/project/state.md", "/.evidence/", "/AGENTS.md", "/CLAUDE.md", "/docs/project/.gate-canary-*",
+                        "/docs/project/verify/"):
                 self.assertIn(pat, exclude)
             again = subprocess.run([sys.executable, str(lo), d], capture_output=True, text=True)
             self.assertIn("nothing (all present)", again.stdout)
             self.assertFalse((Path(d) / ".gitignore").exists(), "never .gitignore")
             (Path(d) / "AGENTS.md").write_text("# map\n")
-            status = subprocess.run(["git", "-C", d, "status", "--porcelain"], capture_output=True, text=True).stdout
+            # the builder's verification skill and heavy.py's bounded-output logs and failure records stay local
+            for rel in ("docs/project/verify/SKILL.md", ".evidence/logs/20261016T000000Z-npm-test.log",
+                        ".evidence/failures.jsonl"):
+                (Path(d) / rel).parent.mkdir(parents=True, exist_ok=True)
+                (Path(d) / rel).write_text("local\n")
+            (Path(d) / "docs/project/intent.md").write_text("# Intent\n")
+            status = subprocess.run(["git", "-C", d, "status", "--porcelain", "-uall"], capture_output=True,
+                                    text=True).stdout
             self.assertNotIn("AGENTS.md", status)
+            for word in ("verify", ".evidence", "failures.jsonl"):
+                self.assertNotIn(word, status)
+            self.assertIn("docs/project/intent.md", status, "the committed record is not excluded")
 
     def test_outside_a_repository(self):
         with tempfile.TemporaryDirectory() as d:

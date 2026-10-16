@@ -4,10 +4,12 @@
 Usage: local_only.py <project> [<pattern> ...]
 
 With no patterns, adds the pipeline's standard local-only set: the working files of docs/project (brief, state,
-gate settings, handoffs, reviews, research, captured sources, gate canaries), .evidence/, the browser tool's
-snapshots, and AGENTS.md and CLAUDE.md (committed output carries no tooling files). Each pattern is added once;
-existing lines are kept. Works from any folder inside the repository (git rev-parse finds the exclude file,
-also in a worktree). Prints what it added. Exit 0; 1 when the folder is not in a git repository.
+gate settings, handoffs, reviews, research, captured sources, gate canaries, and verify/, the builder's own
+verification skill made from craft/verify, which never ships), .evidence/ (heavy.py's logs/ and failures.jsonl
+included), the browser tool's snapshots, and AGENTS.md and CLAUDE.md (committed output carries no tooling
+files). Each pattern is added once; existing lines are kept. Works from any folder inside the repository (git
+rev-parse finds the exclude file, also in a worktree). Prints what it added. Exit 0; 1 when the folder is not in
+a git repository.
 
 The file lives inside .git, which Claude Code never lets its file tools edit without asking; this script is
 the way to change it.
@@ -18,7 +20,7 @@ from pathlib import Path
 
 STANDARD = ["/docs/project/brief.md", "/docs/project/state.md", "/docs/project/gate.md", "/docs/project/handoffs/",
             "/docs/project/journal.md",
-            "/docs/project/reviews/", "/docs/project/research/", "/docs/project/sources/",
+            "/docs/project/reviews/", "/docs/project/research/", "/docs/project/sources/", "/docs/project/verify/",
             "/docs/project/.gate-canary-*", "/.evidence/", "/.playwright-cli/", "/AGENTS.md", "/CLAUDE.md"]
 
 
