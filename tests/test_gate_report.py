@@ -396,6 +396,84 @@ class GateReportTest(unittest.TestCase):
         self.assertTrue(any(e.startswith("code-verifier: its retry ran on claude-opus-5-5 at xhigh") for e in
                             r["exceptions"]), r["exceptions"])
 
+    def test_a_fixed_finding_checked_again_keeps_its_round_or_blocks_again(self):
+        self.blocked_in_round_one()
+        self.report(2, self.focused(2, CLEAN, self.reverify(("M1-F01", "FIXED"))))
+        ledger_path = self.root / "docs/project/reviews/M1.findings.json"
+        self.assertEqual(json.loads(ledger_path.read_text())["M1-F01"]["fixed_round"], 2)
+        r = self.report(3, self.focused(3, CLEAN, self.reverify(("M1-F01", "FIXED"))))
+        self.assertEqual(r["verdict"], "ACCEPT-READY", r)
+        self.assertEqual(json.loads(ledger_path.read_text())["M1-F01"]["fixed_round"], 2, "fixed in round 2, still")
+        r = self.report(4, self.focused(4, CLEAN, self.reverify(("M1-F01", "NOT_FIXED"))))
+        self.assertEqual(r["verdict"], "BLOCKED", "a fix undone later blocks again, in a second round")
+        self.assertEqual(json.loads(ledger_path.read_text())["M1-F01"]["status"], "open")
+
+    def test_a_shadow_leak_is_an_exception_naming_the_checker(self):
+        leak = {"shadow": {"route": "code-verifier.review", "model": "claude-sonnet-5-5", "effort": "high",
+                           "status": "LEAK", "summary": "shadow/code-verifier.summary.json"}}
+        r = self.report(1, self.evidence(1, CLEAN, extra={"code-verifier": leak}))
+        self.assertEqual(r["verdict"], "ACCEPT-READY", "the shadow never counts toward the verdict")
+        said = [e for e in r["exceptions"] if e.startswith("code-verifier: its shadow run")]
+        self.assertEqual(len(said), 1, r["exceptions"])
+        self.assertIn("claude-sonnet-5-5 high, route code-verifier.review) ended LEAK", said[0])
+        self.assertIn("its shadow run (claude-sonnet-5-5 high", (self.root / "docs/project/reviews/M1.md").read_text())
+        ok = {"shadow": {**leak["shadow"], "status": "OK"}}
+        r = self.report(2, self.evidence(2, CLEAN, extra={"code-verifier": ok}))
+        self.assertFalse(any("shadow" in e for e in r["exceptions"]), r["exceptions"])
+
+    # ---- the release record ----------------------------------------------------------------------------------
+    def regression(self, ev, replayed=("M0",), not_replayed=(), flag=False):
+        (ev / "code-verifier-demo.regression.json").write_text(json.dumps({
+            "milestone": "M1", "replay_all": flag, "all_replayed": not not_replayed,
+            "replayed": [{"milestone": m, "why": "--replay-all"} for m in replayed],
+            "not_replayed": [{"milestone": m, "why": why} for m, why in not_replayed]}))
+        return ev
+
+    def block(self, rnd):
+        return (self.root / "docs/project/reviews/M1.md").read_text().split(f"## Round {rnd} ")[1]
+
+    def test_the_release_record_says_whether_every_regression_ending_was_replayed(self):
+        r = self.report(1, self.regression(self.evidence(1, CLEAN), flag=True))
+        self.assertEqual((r["verdict"], r["replayed_all"], r["release_ready"]), ("ACCEPT-READY", True, True))
+        self.assertEqual(r["regression"]["replayed"], ["M0"])
+        self.assertIn("Regression endings: all replayed (M0)\nRelease: ready, every regression ending replayed",
+                      self.block(1))
+        why = "none of its 1 changed files changed since the M1 baseline"
+        r = self.report(2, self.regression(self.evidence(2, CLEAN), replayed=(), not_replayed=(("M0", why),)))
+        self.assertEqual((r["verdict"], r["replayed_all"], r["release_ready"]), ("ACCEPT-READY", False, False))
+        self.assertEqual(r["regression"]["not_replayed"], [{"milestone": "M0", "why": why}])
+        self.assertIn(f"Regression endings: scoped: M0 not replayed ({why})\n"
+                      "Release: not ready: run gate_run.py --full", self.block(2))
+        r = self.report(3, self.evidence(3, CLEAN))
+        self.assertEqual((r["replayed_all"], r["release_ready"], r["regression"]), (False, False, {"recorded": False}))
+        self.assertIn("Regression endings: not recorded", self.block(3))
+        r = self.report(4, self.regression(self.evidence(4, dict(CLEAN, verdict="CHANGES", blocking=[
+            {"id": "M1-F09", "summary": "x", "files": ["app.py"]}]))))
+        self.assertEqual((r["verdict"], r["replayed_all"], r["release_ready"]), ("CHANGES", True, False))
+        self.assertIn("Release: not ready: the round ended CHANGES", self.block(4))
+
+    def test_a_focused_hotfix_is_release_ready_only_when_its_accepted_candidate_was(self):
+        def hotfix(rnd, accepted_round):
+            ev = self.focused(rnd, CLEAN, self.reverify(("F-001", "FIXED")), findings=(), fixes=("F-001",))
+            scope = json.loads((ev / "scope.json").read_text())
+            scope["reverify"] = {"since": {"round": accepted_round, "fingerprint": "product:abc", "snapshot": "x"},
+                                 "changed_files": [], "changed_lines": 0, "delta_patch": str(ev / "delta.patch")}
+            (ev / "scope.json").write_text(json.dumps(scope))
+            return self.regression(ev, replayed=(), not_replayed=(("M0", "scoped"),))
+
+        self.report(1, self.regression(self.evidence(1, CLEAN), flag=True))  # every ending replayed: release ready
+        r = self.report(2, hotfix(2, 1))
+        self.assertEqual((r["verdict"], r["replayed_all"], r["release_ready"]), ("ACCEPT-READY", False, True), r)
+        self.assertIn("Release: ready, a focused hotfix of the accepted candidate (r1, product:abc), whose round was "
+                      "release ready", self.block(2))
+        self.report(3, self.regression(self.evidence(3, CLEAN), replayed=(), not_replayed=(("M0", "scoped"),)))
+        r = self.report(4, hotfix(4, 3))
+        self.assertEqual((r["verdict"], r["release_ready"]), ("ACCEPT-READY", False), "r3 was not release ready")
+        self.assertIn("Release: not ready: run gate_run.py --full", self.block(4))
+        r = self.report(5, self.regression(self.focused(5, CLEAN, self.reverify(("M1-F01", "FIXED"))), replayed=(),
+                                           not_replayed=(("M0", "scoped"),)))
+        self.assertEqual((r["verdict"], r["release_ready"]), ("ACCEPT-READY", False), "a changes round never inherits")
+
     def test_accept_ready_records_the_files_the_milestone_changed(self):
         baseline = ROOT / "skills/_shared/scripts/baseline.py"
         subprocess.run([sys.executable, str(baseline), "record", str(self.root), "M1"], check=True,

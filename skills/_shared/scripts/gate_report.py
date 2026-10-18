@@ -31,18 +31,21 @@ The verdict is computed, never taken on trust, from the judge's JSON and from th
   (Statuses, classes, and severities are compared without regard to case.)
   7. otherwise                                                                     -> ACCEPT-READY
 Deterministic checks that were skipped or not run are listed as exceptions, as is a checker served by another
-model than it asked for (model_mismatch) or retried on the escalate model.
+model than it asked for (model_mismatch) or retried on the escalate model, and a checker whose shadow run ended
+LEAK (its canary reached the shadow: the shadow never counts toward the verdict, but a fence leak is never
+silent).
 When the judge's own verdict is stricter than the computed one it is recorded as an exception and the
 result is INCONCLUSIVE (its verdict does not follow from its findings); when it is looser, the computed
 verdict stands and the disagreement is listed.
 A focused round (<dir>/scope.json says "focused", from regate_scope.py): the loyal-evaluator's pass 1 and pass 2
 are CARRIED from the earlier round scope.json names, read from its paths, not this folder; a carried summary
 or result that is missing, not status OK, or without its round and fingerprint -> INCONCLUSIVE. The
-code-verifier's result is the re-verify: the review JSON's keys plus "reverify", one row per scope finding (or
-hotfix fix) with FIXED or NOT_FIXED and its evidence. A scope item with no row, or another status ->
-INCONCLUSIVE. NOT_FIXED keeps the item blocking in this round even when the judge does not list it, so the
-two-round rule (4) applies to it; FIXED with no judge block marks the ledger entry fixed. New findings in the
-delta are triaged like any review finding.
+code-verifier's result is the re-verify: the review JSON's keys plus "reverify", one row per scope finding
+(every finding blocking since the last full round, fixed ones included) and hotfix fix, with FIXED or NOT_FIXED
+and its evidence. A scope item with no row, or another status -> INCONCLUSIVE. NOT_FIXED keeps the item blocking
+in this round even when the judge does not list it, so the two-round rule (4) applies to it (a fixed finding
+found undone blocks again); FIXED with no judge block marks an open ledger entry fixed (one already fixed keeps
+its fixed_round). New findings in the delta are triaged like any review finding.
 The judge's blocking findings may carry "files" (the paths a fix must touch); the ledger keeps them, with the
 class, severity, and where of the reviewer finding the entry names. A finding without files makes the next
 round full (regate_scope.py).
@@ -50,6 +53,17 @@ At ACCEPT-READY, baseline.py changed <project> M<k> --write records the files th
 regression demos); a failure there is an exception and never changes the verdict.
 The round block lists the round's scope with its reasons, and for each checker step its route, the model and
 effort it asked for, the model that served it, and whether its retry escalated (or that it was CARRIED).
+The release record, in verdict.json and the round block, from the demo pack's record
+(code-verifier-demo.regression.json, render_pack.py):
+  replayed_all   true when every earlier accepted or gate-passed milestone's demo ending was replayed this round
+                 (false when the record is missing); "regression" holds which replayed and why each other did not.
+                 The block says "Regression endings: all replayed" or "Regression endings: scoped: M<j> not
+                 replayed (<why>)".
+  release_ready  true when the verdict is ACCEPT-READY and either replayed_all is true, or this is a focused
+                 hotfix round and the round that produced the accepted candidate (scope.json's reverify since, or
+                 accepted-candidate.json) recorded release_ready true for that same fingerprint. The block says
+                 "Release: ready, ..." or "Release: not ready: run gate_run.py --full" (gate_run.py --full replays
+                 every ending). /deploy ships only a candidate whose passing round is release_ready.
 Prints the verdict JSON, and for ACCEPT-READY the evidence line, built from what each checker said:
   gate M<k> ACCEPT-READY=SHIP · code-verifier SHIP · loyal-evaluator SHIP · gate-judge SHIP · gate.sh 0-FAIL
 (the code-verifier part reads "code-verifier FAIL (overruled: ...)" when its FAIL was triaged as logged, the
@@ -326,6 +340,11 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
         if s.get("escalated"):
             exceptions.append(f"{c}: its retry ran on {s.get('requested_model')} at {s.get('requested_effort')} "
                               f"({str(s.get('escalation_reason', ''))[:160]})")
+        sh = s.get("shadow")
+        if isinstance(sh, dict) and str(sh.get("status") or "").upper() == "LEAK":
+            exceptions.append(f"{c}: its shadow run ({sh.get('model')} {sh.get('effort')}, route {sh.get('route')}) "
+                              "ended LEAK: the real project's canary reached the shadow checker. The shadow never "
+                              "counts toward the verdict, but the fence leaked; fix it before the next shadow run")
     for c, s in summaries.items():
         if s and s.get("status") == "BLOCKED":
             return "BLOCKED", [f"{c}: {s.get('reason')}"], exceptions, None, summaries
@@ -373,7 +392,8 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
             # FIXED and not blocked again: the ledger entry is fixed even when the judge did not list it resolved.
             now = {key(b.get("id")) for b in judge.get("blocking") or [] if isinstance(b, dict)}
             judge["resolved"] = list(judge.get("resolved") or []) + \
-                [f for f in fixed if f in ledger and key(f) not in now and f not in (judge.get("resolved") or [])]
+                [f for f in fixed if f in ledger and key(f) not in now and f not in (judge.get("resolved") or [])
+                 and (ledger.get(f) or {}).get("status") != "fixed"]  # one fixed earlier keeps its fixed_round
         forced, unsure = checker_rules(review, demo, judge, mid, not_fixed)
     blocking = judge.get("blocking") or []
     two_rounds = [] if intent_only else \
@@ -504,6 +524,41 @@ def set_status(project, mid, verdict, fp):
         ms.write_text(text.replace(block, new), encoding="utf-8")
 
 
+def regression_record(ev):
+    """(replayed_all, the record for verdict.json, the round block's line) from the demo pack's record."""
+    rec = load(ev / "code-verifier-demo.regression.json")
+    if not isinstance(rec, dict) or not isinstance(rec.get("not_replayed"), list):
+        return False, {"recorded": False}, ("Regression endings: not recorded (no code-verifier-demo.regression.json: "
+                                            "the demo pack was not rendered), so not every ending is known replayed")
+    skipped = [r for r in rec["not_replayed"] if isinstance(r, dict)]
+    replayed = [str(r.get("milestone")) for r in rec.get("replayed") or [] if isinstance(r, dict)]
+    out = {"recorded": True, "replay_all_flag": bool(rec.get("replay_all")), "replayed": replayed,
+           "not_replayed": [{"milestone": r.get("milestone"), "why": r.get("why")} for r in skipped]}
+    if skipped:
+        return False, out, "Regression endings: scoped: " + "; ".join(
+            f"{r.get('milestone')} not replayed ({str(r.get('why') or '')[:120]})" for r in skipped)
+    return True, out, "Regression endings: all replayed" + (
+        f" ({', '.join(replayed)})" if replayed else " (no earlier accepted or gate-passed milestone)")
+
+
+def release_record(project, mid, verdict, scope, replayed_all):
+    """(release_ready, the round block's line)."""
+    if verdict != "ACCEPT-READY":
+        return False, f"Release: not ready: the round ended {verdict}"
+    if replayed_all:
+        return True, "Release: ready, every regression ending replayed"
+    if isinstance(scope, dict) and scope.get("scope") == "focused" and scope.get("kind") == "hotfix":
+        since = (scope.get("reverify") or {}).get("since") if isinstance(scope.get("reverify"), dict) else None
+        acc = since if isinstance(since, dict) and since.get("round") else \
+            load(project / f".evidence/gate/{mid}/accepted-candidate.json") or {}
+        prior = load(project / f".evidence/gate/{mid}/r{acc.get('round')}/verdict.json") or {}
+        if acc.get("fingerprint") and prior.get("fingerprint") == acc.get("fingerprint") and \
+                prior.get("release_ready") is True:
+            return True, (f"Release: ready, a focused hotfix of the accepted candidate (r{acc.get('round')}, "
+                          f"{acc.get('fingerprint')}), whose round was release ready")
+    return False, "Release: not ready: run gate_run.py --full"
+
+
 def main(argv):
     if not argv or argv[0].startswith("--"):
         print(__doc__.strip(), file=sys.stderr)
@@ -566,6 +621,11 @@ def main(argv):
               "sessions": {c: (s or {}).get("session_id") for c, s in summaries.items()},
               "models": {c: model_record(s) for c, s in summaries.items()},
               "written": stamp}
+    replayed_all, regression, regression_line = regression_record(ev) if not intent_only else \
+        (False, {"recorded": False}, None)
+    release_ready, release_line = release_record(project, mid, verdict, scope, replayed_all) if not intent_only \
+        else (False, None)
+    result.update(replayed_all=replayed_all, release_ready=release_ready, regression=regression)
     if scope:
         result["scope"] = {k: scope.get(k) for k in ("scope", "kind", "reasons", "since", "changed_lines")}
     if carried:
@@ -598,6 +658,7 @@ def main(argv):
                  for c, s in result["checkers"].items() if s),
              "Models:", *[model_line(c, s) for c, s in summaries.items()],
              "Intent diff: " + (" · ".join(f"{k} {v}" for k, v in diff_counts.items()) or "none"),
+             regression_line, release_line,
              "Reasons: " + ("; ".join(reasons) or "none"),
              "Blocking: " + ("; ".join(blocking) or "none"),
              "Exceptions: " + ("; ".join(exceptions) or "none"),
