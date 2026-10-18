@@ -1,0 +1,29 @@
+{
+  "milestone": "M1",
+  "round": 1,
+  "fingerprint": "product:dc6708831c41886b",
+  "verdict": "CHANGES",
+  "judge_verdict": "CHANGES",
+  "reasons": [
+    "blocking: M1-F01 an empty list prints nothing"
+  ],
+  "exceptions": [],
+  "intent_diff": {
+    "HOLDS": 4
+  },
+  "checkers": {
+    "code-verifier": "OK",
+    "loyal-evaluator": "OK",
+    "loyal-evaluator-pass2": "OK",
+    "code-verifier-demo": "OK",
+    "gate-judge": "OK"
+  },
+  "sessions": {
+    "code-verifier": "fake-code-verifier",
+    "loyal-evaluator": "fake-loyal-evaluator",
+    "loyal-evaluator-pass2": "fake-loyal-evaluator",
+    "code-verifier-demo": "fake-code-verifier",
+    "gate-judge": "fake-gate-judge"
+  },
+  "written": "2026-10-18T22:51:16Z"
+}

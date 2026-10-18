@@ -1,0 +1,19 @@
+== gate: /Users/owner/Projects/shopping-list ==
+
+PASS   secrets           pattern scan clean (gitleaks not installed; patterns only)
+SKIP   env-files         not a git repo
+PASS   lint-py           ruff clean
+SKIP   typecheck         no tsconfig.json / Cargo.toml / go.mod / Swift project
+SKIP   evidence-fresh    .evidence exists but holds no images
+SKIP   deps              no lockfile+auditor pair (npm/pnpm audit, cargo audit, pip-audit)
+PASS   debug             no debugger/breakpoint statements
+PASS   focused-tests     no .only() in tests
+PASS   console-log       none
+PASS   todos             none
+PASS   placeholder-lint  no unconsented stand-in markers
+PASS   ai-traces         no AI fingerprints
+SKIP   pipeline-traces   not a git repo
+SKIP   record-tracked    not in a git repository
+SKIP   complexity        no complexity/clone tool installed (radon, jscpd)
+
+RESULT: PASS  (0 warning(s))

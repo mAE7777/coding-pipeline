@@ -1,0 +1,49 @@
+22:51:14 gate M1 round 1 · product:dc6708831c41886b
+22:51:14 copies: PASS
+22:51:14 deterministic layer:
+22:51:14   PASS  gate.sh exit 0
+22:51:15   PASS  milestone_lint exit 0
+22:51:15   PASS  intent_lock verify exit 0
+22:51:15   PASS  rulings exit 0
+22:51:15   PASS  inbox exit 0
+22:51:15   PASS  test suite exit 0
+22:51:15   PASS  tree unchanged exit 0
+22:51:15 code-verifier:
+22:51:15   code-verifier: OK (attempt 1, tools 1)
+22:51:15 loyal-evaluator:
+22:51:15   loyal-evaluator: OK (attempt 1, tools 1)
+22:51:16   loyal-evaluator-pass2: OK (attempt 1, tools 1)
+22:51:16 demo:
+22:51:16   code-verifier-demo: OK (attempt 1, tools 1)
+22:51:16 gate-judge:
+22:51:16   gate-judge: OK (attempt 1, tools 1)
+22:51:16 report:
+22:51:16 {
+  "milestone": "M1",
+  "round": 1,
+  "fingerprint": "product:dc6708831c41886b",
+  "verdict": "CHANGES",
+  "judge_verdict": "CHANGES",
+  "reasons": [
+    "blocking: M1-F01 an empty list prints nothing"
+  ],
+  "exceptions": [],
+  "intent_diff": {
+    "HOLDS": 4
+  },
+  "checkers": {
+    "code-verifier": "OK",
+    "loyal-evaluator": "OK",
+    "loyal-evaluator-pass2": "OK",
+    "code-verifier-demo": "OK",
+    "gate-judge": "OK"
+  },
+  "sessions": {
+    "code-verifier": "fake-code-verifier",
+    "loyal-evaluator": "fake-loyal-evaluator",
+    "loyal-evaluator-pass2": "fake-loyal-evaluator",
+    "code-verifier-demo": "fake-code-verifier",
+    "gate-judge": "fake-gate-judge"
+  },
+  "written": "2026-10-18T22:51:16Z"
+}

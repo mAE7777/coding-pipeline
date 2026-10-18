@@ -1,0 +1,13 @@
+{
+  "M1-F01": {
+    "summary": "an empty list prints nothing",
+    "first_round": 1,
+    "rounds_blocking": [
+      1
+    ],
+    "status": "open",
+    "last_evidence": "F01: (no output)",
+    "loop_back": "fix",
+    "fixed_when": "python3 app.py prints an empty-list line"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "status": "PASS",
+  "checks": [
+    {
+      "name": "gate.sh",
+      "status": "PASS",
+      "exit": 0,
+      "log": "/Users/owner/Projects/shopping-list/.evidence/gate/M1/r1/layer1-gate-sh.log"
+    },
+    {
+      "name": "milestone_lint",
+      "status": "PASS",
+      "exit": 0,
+      "log": "/Users/owner/Projects/shopping-list/.evidence/gate/M1/r1/layer1-milestone-lint.log"
+    },
+    {
+      "name": "intent_lock verify",
+      "status": "PASS",
+      "exit": 0,
+      "log": "/Users/owner/Projects/shopping-list/.evidence/gate/M1/r1/layer1-intent-lock-verify.log"
+    },
+    {
+      "name": "rulings",
+      "status": "PASS",
+      "exit": 0,
+      "log": "/Users/owner/Projects/shopping-list/.evidence/gate/M1/r1/layer1-rulings.log"
+    },
+    {
+      "name": "inbox",
+      "status": "PASS",
+      "exit": 0,
+      "log": "/Users/owner/Projects/shopping-list/.evidence/gate/M1/r1/layer1-inbox.log"
+    },
+    {
+      "name": "test suite",
+      "status": "PASS",
+      "exit": 0,
+      "log": "/Users/owner/Projects/shopping-list/.evidence/gate/M1/r1/layer1-test-suite.log"
+    },
+    {
+      "name": "tree unchanged",
+      "status": "PASS",
+      "exit": 0,
+      "log": "/Users/owner/Projects/shopping-list/.evidence/gate/M1/r1/layer1-tree-unchanged.log"
+    }
+  ]
+}

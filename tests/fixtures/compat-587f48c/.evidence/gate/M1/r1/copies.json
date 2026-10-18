@@ -1,0 +1,54 @@
+{
+  "source": "/Users/owner/Projects/shopping-list",
+  "fingerprint": "product:dc6708831c41886b",
+  "milestone": "M1",
+  "created": "20261018T225114Z",
+  "base": "/Users/owner/.gate-copies/1a1a91315cc9fd35",
+  "keys_source": "docs/project/gate.md",
+  "review": {
+    "path": "/Users/owner/.gate-copies/1a1a91315cc9fd35/review",
+    "method": "copy",
+    "product_files": 2,
+    "stripped": [
+      "(pruned 15 files outside the product file set)"
+    ],
+    "rewritten": [],
+    "rewrite_failures": [],
+    "unresolved_references": [],
+    "changed_since_fingerprint": []
+  },
+  "demo": {
+    "path": "/Users/owner/.gate-copies/1a1a91315cc9fd35/demo",
+    "method": "copy",
+    "product_files": 2,
+    "stripped": [
+      "(pruned 15 files outside the product file set)"
+    ],
+    "rewritten": [],
+    "rewrite_failures": [],
+    "unresolved_references": [],
+    "changed_since_fingerprint": []
+  },
+  "blind": {
+    "path": "/Users/owner/.gate-copies/1a1a91315cc9fd35/blind",
+    "method": "copy",
+    "product_files": 2,
+    "stripped": [
+      "(pruned 15 files outside the product file set)",
+      "test_app.py",
+      "AGENTS.md"
+    ],
+    "rewritten": [],
+    "rewrite_failures": [],
+    "unresolved_references": [],
+    "changed_since_fingerprint": []
+  },
+  "leftover_intent_files": [],
+  "leaks_in_documents": [],
+  "intent_phrases_in_code": [],
+  "build_record_ids": [],
+  "id_like_tokens": [],
+  "secrets_copied": [],
+  "problems": {},
+  "status": "PASS"
+}
