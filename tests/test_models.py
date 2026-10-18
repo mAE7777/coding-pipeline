@@ -177,6 +177,29 @@ class ValidationTest(HomeCase):
         self.assertIn("the --model flag", str(cm.exception))
 
 
+class CheckerRouteTest(HomeCase):
+    def test_a_checker_route_never_takes_session_or_inherit(self):
+        for entry, word in (({"model": "session"}, "model session"), ({"effort": "inherit"}, "effort inherit")):
+            self.override({"gate-judge": entry})
+            with self.assertRaises(models.ModelsError) as cm:
+                models.resolve("gate-judge")
+            self.assertIn("route gate-judge", str(cm.exception))
+            self.assertIn(word, str(cm.exception))
+            out = self.cli("check")
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("FAIL route gate-judge", out.stdout)
+            self.assertIn(word, out.stdout)
+        self.override({"explorer": {"model": "session", "effort": "inherit"}})
+        self.assertEqual(self.cli("check").returncode, 0, "a builder-side route keeps them")
+        table = json.loads((ROOT / "skills/_shared/models.json").read_text())
+        table["routes"]["code-verifier.demo"]["effort"] = "inherit"
+        bad = Path(self.tmp.name) / "bad.json"
+        bad.write_text(json.dumps(table))
+        out = self.cli("check", str(bad))
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("route code-verifier.demo", out.stdout)
+
+
 class ShadowTest(HomeCase):
     """The override's shadow section: a candidate setting run beside a route on real work (plan 7.3 step 4)."""
 

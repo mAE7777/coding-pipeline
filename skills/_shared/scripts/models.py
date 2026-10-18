@@ -20,6 +20,8 @@ Each route has a model and an effort, and may carry a note:
           "session": a builder-side route, spawned from the session; the skill text decides;
           or a full model ID from allowed_models (never an alias that can move).
   effort  low, medium, high, xhigh, max, or inherit (a builder-side route takes the session's).
+A checker route (an isolated run) never takes model session or effort inherit: check and every lookup refuse
+them there, since every run on such a route would end ERROR.
 "escalate" names the model and effort a gate retry moves to (gate_run.py), when the first attempt ended ERROR
 or INCONCLUSIVE on another model or a lower effort.
 
@@ -113,6 +115,13 @@ def entry_problems(route, entry, allowed, where, partial=False):
     if not isinstance(entry, dict):
         return [f"route {route} ({where}): must be an object with model and effort"]
     out = []
+    if route in CHECKER_ROUTES:
+        if entry.get("model") == "session":
+            out.append(f"route {route} ({where}): model session is for a builder-side route; a checker route runs "
+                       "isolated and needs default or a model ID")
+        if entry.get("effort") == "inherit":
+            out.append(f"route {route} ({where}): effort inherit is for a builder-side route; a checker route runs "
+                       f"isolated and needs an effort level ({', '.join(EFFORTS)})")
     extra = sorted(set(entry) - {"model", "effort", "note"})
     if extra:
         out.append(f"route {route} ({where}): unknown field(s) {', '.join(extra)}")
