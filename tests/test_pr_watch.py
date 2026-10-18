@@ -273,8 +273,8 @@ class DecisionTest(unittest.TestCase):
     def test_behind_a_required_review_and_another_block_are_named_merge_gates(self):
         cases = [({"mergeStateStatus": "BEHIND"}, [passing()], "behind-base"),
                  ({"mergeStateStatus": "BLOCKED", "reviewDecision": "REVIEW_REQUIRED"}, [passing()], "review-required"),
-                 ({"mergeStateStatus": "BLOCKED"}, [passing(), check("code-review-gate", "Code Review Gate", "PENDING")],
-                  "review-required"),
+                 ({"mergeStateStatus": "BLOCKED"},
+                  [passing(), check("code-review-gate", "Code Review Gate", "PENDING")], "review-required"),
                  ({"mergeStateStatus": "BLOCKED"}, [passing()], "merge-blocked")]
         for facts, checks, reason in cases:
             row = snapshot(FakeReader(facts=facts, fast_path={"kind": "checks", "checks": checks}), 1, "include")
@@ -1128,7 +1128,7 @@ def git(*args, cwd=None):
 def acceptance(did, milestone, fp, owner=True, title=None):
     source = f'Source: [owner 2026-10-01] "Yes, accept {milestone}. It works."' if owner else "Source: [proposed]"
     return (f"\n## {did} · 2026-10-01 · {title or 'Accept ' + milestone}\n"
-            f"Accept {milestone} · contract 0123456789abcdef · fingerprint {fp} · review "
+            f"Accept {milestone} \u00b7 contract 0123456789abcdef \u00b7 fingerprint {fp} \u00b7 review "
             f"reviews/{milestone}.md\n{source}\n")
 
 
@@ -1158,7 +1158,7 @@ def prove(project, home):
 
 def milestones(project, **statuses):
     (Path(project) / "docs/project/milestones.md").write_text("# Milestones\n" + "".join(
-        f"\n## {mid} · Part {mid}\nStatus: {status}\nPromise: x\n" for mid, status in statuses.items()),
+        f"\n## {mid} \u00b7 Part {mid}\nStatus: {status}\nPromise: x\n" for mid, status in statuses.items()),
         encoding="utf-8")
 
 
@@ -1196,12 +1196,13 @@ class AcceptedFingerprintTest(unittest.TestCase):
         self.assertIn("D-005 of M1 is not a proven owner ruling", self.refused())
 
     def test_an_acceptance_a_later_proven_entry_supersedes_is_refused(self):
-        reopen = ('\n## D-006 · 2026-10-02 · Reopen M1: the export loses rows\n'
+        reopen = ('\n## D-006 \u00b7 2026-10-02 \u00b7 Reopen M1: the export loses rows\n'
                   "Decision: M1 goes back to building.\nSupersedes: D-005\n"
                   'Source: [owner 2026-10-02] "Reopen M1, the export loses rows."\n')
         self.decisions(acceptance("D-005", "M1", "product:1111111111111111") + reopen)
         self.assertIn("superseded by D-006", self.refused())
-        proposed = reopen.replace('Source: [owner 2026-10-02] "Reopen M1, the export loses rows."', "Source: [proposed]")
+        proposed = reopen.replace('Source: [owner 2026-10-02] "Reopen M1, the export loses rows."',
+                                  "Source: [proposed]")
         self.decisions(acceptance("D-005", "M1", "product:1111111111111111") + proposed)
         self.assertEqual(pw.accepted_fingerprint(self.project, "M1")[0], "D-005", "a proposal supersedes nothing")
 
@@ -1215,7 +1216,7 @@ class AcceptedFingerprintTest(unittest.TestCase):
         self.assertEqual(pw.accepted_fingerprint(self.project, "M2")[0], "D-005", "read without case")
 
     def test_only_the_fixed_form_is_an_acceptance(self):
-        self.decisions('\n## D-007 · 2026-10-01 · Do not Accept M1 until the export is fixed\n'
+        self.decisions('\n## D-007 \u00b7 2026-10-01 \u00b7 Do not Accept M1 until the export is fixed\n'
                        "Decision: hold back the candidate with fingerprint product:1111111111111111.\n"
                        'Source: [owner 2026-10-01] "Do not accept M1 yet."\n')
         self.assertIn("no owner acceptance of M1", self.refused())

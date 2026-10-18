@@ -145,7 +145,8 @@ class TypecheckOnceTest(unittest.TestCase):
         os.utime(self.proj / "src/a.ts", (old, old))
         code, out = self.stop()
         result = json.loads(out)
-        self.assertNotIn("hookSpecificOutput", result, "nothing is known to be this turn's, so nothing goes to the model")
+        self.assertNotIn("hookSpecificOutput", result,
+                         "nothing is known to be this turn's, so nothing goes to the model")
         self.assertIn("first stop", result["systemMessage"])
         self.assertIn("src/a.ts(1,7): error TS2322", result["systemMessage"])
         self.assertTrue((Path(tempfile.gettempdir()) / f"typecheck-once-{self.session}").exists(), "stamp written")

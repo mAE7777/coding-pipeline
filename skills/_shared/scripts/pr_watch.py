@@ -83,7 +83,8 @@ Exit codes:
 
 land-check <pr> --project <dir> --milestone M<k>:
   Reads the owner's acceptance of M<k> in <dir>/docs/project/decisions.md: the most recent entry holding the
-  fixed form "Accept M<k> · contract <hash>" (as milestone_lint.py reads it) whose Source is the owner's, and the
+  fixed form "Accept M<k>", the record's middle dot, "contract <hash>" (milestone_lint.py's own reading of an
+  acceptance) whose Source is the owner's, and the
   "fingerprint <value>" it names. It counts only when rulings.py proves that Source, no later proven entry
   names it on a "Supersedes:" line, and docs/project/milestones.md shows M<k> with Status accepted; otherwise
   exit 2 with the reason. Then reads the PR head (gh pr view <pr> --json headRefOid,headRefName), fetches
@@ -1610,7 +1611,7 @@ FINGERPRINT = re.compile(r"\bfingerprint\s+`?([^\s`]+)`?")
 
 def accepted_fingerprint(project, milestone):
     """(decision id, fingerprint) of the owner's acceptance of the milestone, which counts only when it holds the
-    fixed form milestone_lint.py reads ("Accept M<k> · contract <hash>"), rulings.py proves its owner Source, no
+    fixed form milestone_lint.py reads ("Accept M<k> \u00b7 contract <hash>"), rulings.py proves its owner Source, no
     later proven entry names it on a Supersedes: line, and milestones.md shows the milestone accepted;
     LandCheckError with the reason otherwise."""
     import milestone_lint  # noqa: E402  (the record's own lint: one reading of an acceptance)
@@ -1626,8 +1627,8 @@ def accepted_fingerprint(project, milestone):
     if not owned:
         not_owner = [did for did in named if did not in owned]
         extra = f" ({', '.join(not_owner)} hold it, but their Source is not the owner's)" if not_owner else ""
-        raise LandCheckError(f"no owner acceptance of {milestone} in {path}: an entry holding 'Accept {milestone} · "
-                             f"contract <hash>' with 'Source: [owner <date>]'{extra}")
+        raise LandCheckError(f"no owner acceptance of {milestone} in {path}: an entry holding "
+                             f"'Accept {milestone} \u00b7 contract <hash>' with 'Source: [owner <date>]'{extra}")
     did = owned[-1]
     proven, why = entry_proven(root, did)
     if not proven:

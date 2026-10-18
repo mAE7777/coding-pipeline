@@ -299,7 +299,8 @@ class HeavyTailTest(HeavyTestBase):
         for key in ("time", "signature", "command", "error", "fingerprint"):
             self.assertIn(key, row)
         self.assertEqual(row["error"], "ValueError: bad total",
-                         "Jest's bare FAIL <file> header and the Traceback header name no failure, so they are passed over")
+                         "Jest's bare FAIL <file> header and the Traceback header name no failure, so they are "
+                         "passed over")
         self.assertTrue(row["fingerprint"].startswith("product:"))
         self.assertIn("noisy.py", row["command"])
         self.run_tail(code="0")
@@ -378,7 +379,7 @@ class HeavyTailTest(HeavyTestBase):
         self.run_script("print('FAIL src/a.test.ts (5.2 s)')\nprint('  \\u25cf Console')\n"
                         "print('  \\u25cf Parser \\u203a parses an empty file')\n"
                         "print('    expect(received).toBe(expected)')\nraise SystemExit(1)\n")
-        self.assertEqual(self.failures()[-1]["error"], "● Parser › parses an empty file")
+        self.assertEqual(self.failures()[-1]["error"], "\u25cf Parser \u203a parses an empty file")
 
     def test_digits_in_a_file_or_test_name_are_kept_and_counts_and_durations_are_not(self):
         import importlib.util
@@ -399,15 +400,15 @@ class HeavyTailTest(HeavyTestBase):
                  "src/auth.ts:12:7 - error TS2322: Type 'string' is not assignable to type 'number'.",
                  "  12:7  error  'token' is assigned a value but never used  no-unused-vars",
                  "error[E0425]: cannot find value `x` in this scope",
-                 "    ✕ adds two numbers (3 ms)",
-                 "✖ parses (1.2ms)",
-                 " × renders 2ms"]
+                 "    \u2715 adds two numbers (3 ms)",
+                 "\u2716 parses (1.2ms)",
+                 " \u00d7 renders 2ms"]
         script = "".join(f"print({line!r})\n" for line in lines) + "".join(
             f"print('filler {i}')\n" for i in range(5)) + "raise SystemExit(2)\n"
         out = self.run_script(script)
         for i, line in enumerate(lines, 1):
             self.assertIn(f"  {i}: {line}", out.stdout, "shown even though the tail does not reach it")
-        self.assertEqual(self.failures()[-1]["error"], "✕ adds two numbers (3 ms)",
+        self.assertEqual(self.failures()[-1]["error"], "\u2715 adds two numbers (3 ms)",
                          "the cross mark names the failing test, so it is the signature's line")
 
 

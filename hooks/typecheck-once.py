@@ -12,9 +12,9 @@ turn already continued once because of a Stop hook), the same errors go to the o
 only, so the hook can never keep a turn going in a loop. Errors in other files are summarized for the owner
 as a system message and never sent to the model. The session's first stop has no earlier stop to measure from,
 so every uncommitted .ts/.tsx file counts as changed and some may hold errors from before the session: it
-records the time and reports what tsc finds to the owner only, never to the model. When it cannot run (TypeScript not installed, the lock
-busy, a timeout), it says so as NOT_RUN in a system message instead of staying silent. An internal error is
-reported the same way; the stop always goes ahead.
+records the time and reports what tsc finds to the owner only, never to the model. When it cannot run
+(TypeScript not installed, the lock busy, a timeout), it says so as NOT_RUN in a system message instead of
+staying silent. An internal error is reported the same way; the stop always goes ahead.
 """
 import json
 import os
