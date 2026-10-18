@@ -221,7 +221,8 @@ class DecisionTest(unittest.TestCase):
         decision = pw.select_tier_major_stack_decision([ready_bottom, pending_upstack])
         self.assertEqual(decision["kind"], "waiting")
         self.assertEqual(decision["frontier"]["number"], 21)
-        self.assertEqual([c["name"] for c in decision["pending"]], ["upstack-build"])
+        self.assertEqual(decision["reason"]["kind"], "pending-checks")
+        self.assertEqual([c["name"] for c in decision["reason"]["pending"]], ["upstack-build"])
 
     def test_a_draft_waits_while_pending_then_hits_the_draft_gate(self):
         waiting = snapshot(FakeReader(facts={"isDraft": True}, fast_path={"kind": "checks", "checks": [pending()]}), 12)
@@ -259,6 +260,32 @@ class DecisionTest(unittest.TestCase):
         self.assertEqual(ready["pr"]["proof"]["ci"]["kind"], "ci-clean")
         merged = pw.classify_pr(snapshot(FakeReader(facts={"state": "MERGED", "mergedAt": "t"}), 1))
         self.assertEqual(merged, {"kind": "merged", "pr": {"kind": "merged-pr", "context": ctx(1), "mergedAt": "t"}})
+
+    def test_ready_only_when_github_agrees_the_pr_can_merge(self):
+        for state in ("CLEAN", "HAS_HOOKS", "UNSTABLE"):
+            self.assertEqual(pw.classify_pr(snapshot(FakeReader(facts={"mergeStateStatus": state}), 1))["kind"],
+                             "ready", state)
+        for facts in ({"mergeable": "UNKNOWN"}, {"mergeStateStatus": "UNKNOWN"},
+                      {"mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"}):
+            decision = pw.classify_pr(snapshot(FakeReader(facts=facts), 1))
+            self.assertEqual((decision["kind"], decision["reason"]["kind"]), ("waiting", "github-undecided"), facts)
+
+    def test_behind_a_required_review_and_another_block_are_named_merge_gates(self):
+        cases = [({"mergeStateStatus": "BEHIND"}, [passing()], "behind-base"),
+                 ({"mergeStateStatus": "BLOCKED", "reviewDecision": "REVIEW_REQUIRED"}, [passing()], "review-required"),
+                 ({"mergeStateStatus": "BLOCKED"}, [passing(), check("code-review-gate", "Code Review Gate", "PENDING")],
+                  "review-required"),
+                 ({"mergeStateStatus": "BLOCKED"}, [passing()], "merge-blocked")]
+        for facts, checks, reason in cases:
+            row = snapshot(FakeReader(facts=facts, fast_path={"kind": "checks", "checks": checks}), 1, "include")
+            decision = pw.classify_pr(row)
+            self.assertEqual((decision["kind"], decision["blocker"]["kind"], decision["blocker"]["reason"]),
+                             ("blocker", "merge-gate", reason), facts)
+            self.assertIn(f"BLOCKER: {reason}\npr=1\naction=",
+                          pw.render_pretty({"kind": "BLOCKER", "blocker": decision["blocker"]}))
+        waits = snapshot(FakeReader(facts={"mergeStateStatus": "BLOCKED", "reviewDecision": "REVIEW_REQUIRED"},
+                                    fast_path={"kind": "checks", "checks": [pending()]}), 1, "include")
+        self.assertEqual(pw.classify_pr(waits)["kind"], "waiting", "the checks settle first, then the gate blocks")
 
     def test_retry_floor_and_cap(self):
         self.assertEqual(pw.query_backoff_seconds(1, 1), 60)
@@ -379,6 +406,44 @@ class SimpleRunnerTest(unittest.TestCase):
         self.assertEqual((verdict["kind"], verdict["exitCode"], verdict["reason"]["kind"]),
                          ("TIMEOUT", 5, "pending-checks"))
         self.assertEqual(clock.sleeps, [10])
+
+    def test_github_undecided_is_read_again_not_ready(self):
+        class Reader(FakeReader):
+            reads = 0
+
+            def pull_request(self, context):
+                self.reads += 1
+                facts = super().pull_request(context)
+                return {**facts, "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"} if self.reads < 3 else facts
+
+        emitted, clock = [], FakeClock()
+        verdict = pw.run_simple(deps(Reader(), clock, emitted), [ctx(1)], "single", False, OPTIONS)
+        self.assertEqual([(e["kind"], e["reason"]["kind"]) for e in emitted],
+                         [("WAITING", "github-undecided")] * 2)
+        self.assertEqual((verdict["kind"], verdict["exitCode"], clock.sleeps), ("READY", 0, [10, 10]))
+        stuck = pw.run_simple(deps(FakeReader(facts={"mergeable": "UNKNOWN"}), FakeClock()), [ctx(1)], "single",
+                              False, {**OPTIONS, "timeout": 5})
+        self.assertEqual((stuck["kind"], stuck["exitCode"], stuck["reason"]["kind"]),
+                         ("TIMEOUT", 5, "github-undecided"))
+        self.assertIn("GitHub never decided", pw.render_pretty(stuck))
+
+    def test_status_only_reports_an_undecided_merge_as_waiting(self):
+        emitted = []
+        reader = FakeReader(facts={"mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN"})
+        verdict = pw.run_simple(deps(reader, emitted=emitted), [ctx(1)], "single", True, OPTIONS)
+        self.assertEqual((verdict["kind"], verdict["exitCode"]), ("STATUS", 0))
+        self.assertEqual([(e["kind"], e["terminal"], e["reason"]) for e in emitted],
+                         [("WAITING", False, {"kind": "github-undecided", "mergeable": "UNKNOWN",
+                                              "mergeStateStatus": "UNKNOWN"})])
+        self.assertIn("GitHub has not decided", pw.render_pretty(emitted[0]))
+        self.assertIn("| WAITING: GitHub has not decided |", pw.render_pretty(verdict))
+
+    def test_a_queued_frontier_github_has_not_decided_is_not_merge_ready(self):
+        state = pw.create_queue_state([ctx(70)], 0)
+        state, _ = pw.apply_queue_snapshot(state, snapshot(FakeReader(facts={"mergeStateStatus": "UNKNOWN"}), 70),
+                                           0, OPTIONS)
+        wait = pw.evaluate_queue(state, 0, OPTIONS)
+        self.assertEqual((wait["kind"], wait["reason"]["kind"]), ("waiting", "github-undecided"))
 
     def test_failed_reads_retry_with_backoff_then_exhaust_with_exit_7(self):
         class Reader(FakeReader):
@@ -977,7 +1042,9 @@ class MainTest(unittest.TestCase):
                  ({"threads": [{"id": "t", "firstComment": comment()}]}, 3, "review-threads"),
                  ({"fast_path": {"kind": "checks", "checks": [failed()]}}, 4, "failing-checks"),
                  ({"facts": {"isDraft": True}}, 6, "merge-gate"),
-                 ({"facts": {"state": "CLOSED"}}, 6, "merge-gate")]
+                 ({"facts": {"state": "CLOSED"}}, 6, "merge-gate"),
+                 ({"facts": {"mergeStateStatus": "BEHIND"}}, 6, "merge-gate"),
+                 ({"facts": {"mergeStateStatus": "BLOCKED", "reviewDecision": "REVIEW_REQUIRED"}}, 6, "merge-gate")]
         for kwargs, expected, kind in cases:
             code, out, _ = self.run_main(["--pr", "1"], FakeReader(**kwargs))
             self.assertEqual((code, out[-1]["exitCode"], out[-1]["blocker"]["kind"]), (expected, expected, kind))

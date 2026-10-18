@@ -41,24 +41,32 @@ Options:
                                code-review-gate: neither pending nor failed, so the watcher never waits on a human.
 
 What blocks, in order. One PR: merge conflicts, then unresolved review threads, then failing CI, then the merge
-gate (closed without merge, draft, changes requested), then pending checks (a wait), else READY. A stack is
-scanned tier by tier, bottom to top within a tier: a conflict anywhere outranks threads anywhere, and so on. A
-draft whose checks are still pending waits rather than blocks. CI is failing when a check failed, and rejected
-when none failed but GitHub refuses the merge: mergeStateStatus BLOCKED while the head commit's rollup is ERROR
-or FAILURE (a refusal hidden behind a green check list). Checks come from gh pr checks, or from the GraphQL
-rollup when that list is empty or unusable; both empty is a failed read. An enum value or shape GitHub sends
-that this script does not know fails closed: the read counts as a failed query. Queued mode reports its own
-frontier (the lowest unmerged PR): when it is blocker-free it waits for the merge queue, whatever is pending
-above it. Failed reads are retried after min(max(interval, 60) * 2^(failures - 1), 300) seconds.
+gate (closed without merge, draft, changes requested, behind its base, a required review or human gate check
+while GitHub says BLOCKED, or BLOCKED for another rule), then pending checks (a wait), then GitHub not having
+decided (mergeable or mergeStateStatus UNKNOWN: a wait, read again), else READY. READY means GitHub agrees the PR
+can merge: mergeable MERGEABLE and mergeStateStatus CLEAN, HAS_HOOKS, or UNSTABLE (DRAFT too with
+--allow-draft). A stack is scanned tier by tier, bottom to top within a tier: a conflict anywhere outranks
+threads anywhere, and so on. A draft, a PR behind its base, a required review, and another BLOCKED wait while
+their checks are still pending, then block, so the watcher never polls on a person. CI is failing when a check
+failed, and rejected when none failed but GitHub refuses the merge: mergeStateStatus BLOCKED while the head
+commit's rollup is ERROR or FAILURE (a refusal hidden behind a green check list). Checks come from gh pr checks,
+or from the GraphQL rollup when that list is empty or unusable; both empty is a failed read. An enum value or
+shape GitHub sends that this script does not know fails closed: the read counts as a failed query. Queued mode
+reports its own frontier (the lowest unmerged PR): when it is blocker-free and GitHub has decided it can merge,
+it waits for the merge queue, whatever is pending above it. Failed reads are retried after
+min(max(interval, 60) * 2^(failures - 1), 300) seconds.
 
 Events. Each line is one JSON object: schemaVersion (1), sequence (1, 2, ...), observedAt (UTC ISO time), mode
 (single, stack, or queued-stack), kind, terminal (true on the last line only, which also carries exitCode).
   Progress: QUEUE (queued mode: the frozen list), STATUS (stack and queued modes: every row; reason poll or
-  whole-stack-sweep), WAITING (frontier and reason: pending-checks with the pending checks, or merge-queue
-  with the unmerged count), ADVANCE (queued mode: a PR merged; the new frontier and how many remain), RETRY (a
-  read failed: failure, consecutiveFailures, retryInSeconds).
+  whole-stack-sweep), WAITING (frontier and reason: pending-checks with the pending checks, github-undecided
+  with mergeable and mergeStateStatus, or merge-queue with the unmerged count; --status-only prints a
+  github-undecided WAITING before its STATUS), ADVANCE (queued mode: a PR merged; the new frontier and how many
+  remain), RETRY (a read failed: failure, consecutiveFailures, retryInSeconds).
   Terminal: STATUS (--status-only), READY (single and stack modes), COMPLETE (queued mode: every PR merged),
-  BLOCKER (blocker.kind merge-conflicts, review-threads, failing-checks, merge-gate, or status-query), TIMEOUT.
+  BLOCKER (blocker.kind merge-conflicts, review-threads, failing-checks, merge-gate, or status-query; a
+  merge-gate's reason is closed-without-merge, draft-pr, changes-requested, behind-base, review-required, or
+  merge-blocked), TIMEOUT.
   Review threads carry firstComment, isReviewBot, and reviewBotPasses.
 
 Exit codes:
@@ -67,7 +75,8 @@ Exit codes:
   3   unresolved review threads
   4   failing checks, or GitHub refuses the merge over failing checks
   5   timeout
-  6   merge gate: closed without merge, draft, or changes requested
+  6   merge gate: closed without merge, draft, changes requested, behind its base, a required review, or
+      BLOCKED by GitHub for another rule
   7   GitHub status could not be read (the error budget ran out, or the error cannot be retried)
   64  bad usage
   1   an internal error in this script; the reason is on stderr
@@ -862,28 +871,70 @@ def _ci_blocker(row):
     return None
 
 
+READY_MERGE_STATES = ("CLEAN", "HAS_HOOKS", "UNSTABLE")  # GitHub's own "this can merge" (UNSTABLE: a check
+# that is not required failed or is pending)
+# Gates that wait while the PR's checks are pending, then block: the checks' outcome is still worth reporting.
+GATES_AFTER_CHECKS = ("draft-pr", "behind-base", "review-required", "merge-blocked")
+
+
 def _gate_reason(row, allow_draft):
     if row["kind"] == "merged":
         return None
     if row["kind"] == "closed":
         return "closed-without-merge"
-    if row["facts"]["isDraft"] and not allow_draft:
+    facts = row["facts"]
+    if (facts["isDraft"] or facts["mergeStateStatus"] == "DRAFT") and not allow_draft:
         return "draft-pr"
-    return "changes-requested" if row["facts"]["reviewDecision"] == "CHANGES_REQUESTED" else None
+    if facts["reviewDecision"] == "CHANGES_REQUESTED":
+        return "changes-requested"
+    if facts["mergeStateStatus"] == "BEHIND":
+        return "behind-base"
+    if facts["mergeStateStatus"] == "BLOCKED":  # a failing rollup behind it is the CI blocker, which comes first
+        human = facts["reviewDecision"] == "REVIEW_REQUIRED" or any(
+            c["kind"] == "code-review-gate" for c in row["ci"]["all"])
+        return "review-required" if human else "merge-blocked"
+    return None
 
 
 def _gate_blocker(row, allow_draft):
     reason = _gate_reason(row, allow_draft)
-    if reason is None or (reason == "draft-pr" and row["kind"] == "open" and row["ci"]["kind"] == "ci-pending"):
+    if reason is None or (reason in GATES_AFTER_CHECKS and row["kind"] == "open" and row["ci"]["kind"] == "ci-pending"):
         return None
     return {"kind": "merge-gate", "pr": row["context"], "reason": reason}
+
+
+def _undecided(row):
+    """The reason to read again when GitHub has not yet worked out whether the PR merges, else None."""
+    if row["kind"] != "open":
+        return None
+    facts = row["facts"]
+    if facts["mergeable"] == "UNKNOWN" or facts["mergeStateStatus"] == "UNKNOWN":
+        return {"kind": "github-undecided", "mergeable": facts["mergeable"],
+                "mergeStateStatus": facts["mergeStateStatus"]}
+    return None
+
+
+def _waiting(row):
+    """(the reason this open row is a wait, not yet a verdict) or None: pending checks first, then GitHub."""
+    if row["kind"] == "open" and row["ci"]["kind"] == "ci-pending":
+        return {"kind": "pending-checks", "pending": row["ci"]["pending"]}
+    return _undecided(row)
+
+
+def _github_agrees(row, allow_draft):
+    """GitHub says the PR can merge: mergeable MERGEABLE and a merge state of CLEAN, HAS_HOOKS, or UNSTABLE (or
+    DRAFT, for a draft --allow-draft lets through)."""
+    facts = row["facts"]
+    allowed = READY_MERGE_STATES + (("DRAFT",) if allow_draft else ())
+    return facts["mergeable"] == "MERGEABLE" and facts["mergeStateStatus"] in allowed
 
 
 def _ready_contribution(row, allow_draft):
     if row["kind"] == "merged":
         return {"kind": "merged-pr", "context": row["context"], "mergedAt": row["facts"]["mergedAt"]}
     if (row["kind"] != "open" or row["ci"]["kind"] != "ci-clean" or row["threads"]
-            or _conflict_blocker(row) is not None or _gate_reason(row, allow_draft) is not None):
+            or _conflict_blocker(row) is not None or _gate_reason(row, allow_draft) is not None
+            or not _github_agrees(row, allow_draft)):
         return None
     decision = row["facts"]["reviewDecision"]
     if decision == "CHANGES_REQUESTED":
@@ -898,8 +949,9 @@ def classify_pr(row, allow_draft=False):
     for blocker in (_conflict_blocker(row), _thread_blocker(row), _ci_blocker(row), _gate_blocker(row, allow_draft)):
         if blocker is not None:
             return {"kind": "blocker", "blocker": blocker}
-    if row["kind"] == "open" and row["ci"]["kind"] == "ci-pending":
-        return {"kind": "waiting", "frontier": row["context"], "pending": row["ci"]["pending"]}
+    reason = _waiting(row)
+    if reason is not None:
+        return {"kind": "waiting", "frontier": row["context"], "reason": reason}
     ready = _ready_contribution(row, allow_draft)
     if ready is None:
         raise RuntimeError("snapshot has no classified decision")
@@ -919,7 +971,12 @@ def select_tier_major_stack_decision(rows, allow_draft=False):
             return {"kind": "blocker", "blocker": blocker}
     for row in rows:
         if row["kind"] == "open" and row["ci"]["kind"] == "ci-pending":
-            return {"kind": "waiting", "frontier": row["context"], "pending": row["ci"]["pending"]}
+            return {"kind": "waiting", "frontier": row["context"],
+                    "reason": {"kind": "pending-checks", "pending": row["ci"]["pending"]}}
+    for row in rows:
+        reason = _undecided(row)
+        if reason is not None:
+            return {"kind": "waiting", "frontier": row["context"], "reason": reason}
     prs = [p for p in (_ready_contribution(row, allow_draft) for row in rows) if p is not None]
     if not prs or len(prs) != len(rows):
         raise RuntimeError("stack has no classified decision")
@@ -1017,6 +1074,12 @@ def run_simple(deps, contexts, mode, status_only, options):
         if not rows:
             raise RuntimeError("watch context cannot be empty")
         if status_only:
+            for row in rows:  # GitHub has not decided yet: say so, since the table alone would read as clear
+                reason = _undecided(row)
+                if reason is not None:
+                    deps.emit(stamp({"kind": "WAITING", "terminal": False, "frontier": row["context"],
+                                     "reason": reason}))
+                    break
             return ("terminal", stamp({"kind": "STATUS", "terminal": True, "exitCode": 0, "reason": "status-only",
                                        "rows": rows}))
         if mode == "queued-stack":
@@ -1034,10 +1097,9 @@ def run_simple(deps, contexts, mode, status_only, options):
             return ("terminal", stamp({"kind": "READY", "terminal": True, "exitCode": 0,
                                        "scope": {"kind": "stack", "prs": decision["prs"]}}, mode))
         deps.emit(stamp({"kind": "WAITING", "terminal": False, "frontier": decision["frontier"],
-                         "reason": {"kind": "pending-checks", "pending": decision["pending"]}}))
+                         "reason": decision["reason"]}))
         return ("sleep", options["interval"], lambda: stamp({
-            "kind": "TIMEOUT", "terminal": True, "exitCode": 5,
-            "reason": {"kind": "pending-checks", "pending": decision["pending"]}}))
+            "kind": "TIMEOUT", "terminal": True, "exitCode": 5, "reason": decision["reason"]}))
 
     return _poll_until_terminal(deps, options, stamp, step)
 
@@ -1114,12 +1176,16 @@ def evaluate_queue(state, now, options):
                 "unmergedCount": len(active)}
     row = active[0]
     pending = row["ci"]["pending"] if row["kind"] == "open" and row["ci"]["kind"] == "ci-pending" else None
-    if pending is None:
-        reason = {"kind": "merge-queue", "unmergedCount": len(active)}
-        key = f"queue:{frontier['number']}:{len(active)}"
-    else:
+    undecided = _undecided(row)
+    if pending is not None:
         reason = {"kind": "pending-checks", "pending": pending}
         key = f"pending:{frontier['number']}:{len(pending)}"
+    elif undecided is not None:  # merge-queue means merge-ready, so not before GitHub has decided
+        reason = undecided
+        key = f"undecided:{frontier['number']}"
+    else:
+        reason = {"kind": "merge-queue", "unmergedCount": len(active)}
+        key = f"queue:{frontier['number']}:{len(active)}"
     return {"kind": "waiting", "state": {**state, "frontier": frontier, "lastWaitKey": key}, "frontier": frontier,
             "reason": reason, "emit": state["lastWaitKey"] != key}
 
@@ -1230,7 +1296,13 @@ def _merge_cell(row):
         return "changes requested"
     if facts["mergeable"] == "CONFLICTING" or facts["mergeStateStatus"] in ("DIRTY", "CONFLICTING"):
         return "conflict"
-    return "clear"
+    if _undecided(row) is not None:
+        return "WAITING: GitHub has not decided"
+    if facts["mergeStateStatus"] == "BEHIND":
+        return "behind base"
+    if facts["mergeStateStatus"] == "BLOCKED":
+        return "review required" if _gate_reason(row, True) == "review-required" else "blocked by GitHub"
+    return "clear" if _github_agrees(row, True) else f"not mergeable ({facts['mergeStateStatus']})"
 
 
 def render_status_table(rows):
@@ -1280,6 +1352,11 @@ def _render_blocker(blocker):
         action = {"closed-without-merge": "restore or remove the closed PR from the queued stack",
                   "draft-pr": "mark the PR ready for review before waiting for the merge queue",
                   "changes-requested": "resolve the changes-requested review before waiting for the merge queue",
+                  "behind-base": "update the branch with its base (GitHub requires it up to date), then rearm",
+                  "review-required": "a required review or human gate waits on a person; ask for it, then rearm",
+                  "merge-blocked": "GitHub blocks the merge for a rule the watcher does not name (a required check "
+                                   "that never reported, a required deployment, signed commits); read the PR's "
+                                   "merge box, then rearm",
                   }[blocker["reason"]]
         return "\n".join([f"BLOCKER: {blocker['reason']}", f"pr={blocker['pr']['number']}", f"action={action}"])
     if kind == "status-query":
@@ -1301,6 +1378,9 @@ def render_pretty(verdict):
         reason = verdict["reason"]
         if reason["kind"] == "pending-checks":
             return f"WAITING: frontier=#{verdict['frontier']['number']}; {_plural(len(reason['pending']), 'check')} pending\n"
+        if reason["kind"] == "github-undecided":
+            return (f"WAITING: frontier=#{verdict['frontier']['number']}; GitHub has not decided whether it can merge "
+                    f"(mergeable={reason['mergeable']}, mergeStateStatus={reason['mergeStateStatus']})\n")
         return (f"WAITING: frontier=#{verdict['frontier']['number']} is blocker-free; waiting for merge queue "
                 f"({_plural(reason['unmergedCount'], 'PR')} unmerged)\n")
     if kind == "ADVANCE":
@@ -1330,6 +1410,8 @@ def render_pretty(verdict):
         reason = verdict["reason"]
         if reason["kind"] == "pending-checks":
             return "TIMEOUT: checks still pending\n"
+        if reason["kind"] == "github-undecided":
+            return "TIMEOUT: GitHub never decided whether the PR can merge\n"
         if reason["kind"] == "status-unavailable":
             return "TIMEOUT: GitHub status remained unavailable\n"
         return (f"TIMEOUT: queued stack still has {_plural(reason['unmergedCount'], 'PR')} unmerged; "
