@@ -610,9 +610,11 @@ class PackTest(unittest.TestCase):
                 self.assertEqual(delta.parent, ctx["project"] / fx.REFIX_ROUND)
                 self.assertEqual(Path(scope["since"]["snapshot"]), ctx["project"] / ".evidence/gate/M1/full-candidate")
                 self.assertTrue(text.startswith("# Re-verify pack: M1 (focused, since round 1)"))
-                findings = section_of(text, "Open findings to re-verify")
+                findings = section_of(text, "Findings to re-verify (every finding blocking since the last full "
+                                            "round, open or fixed)")
                 for f in scope["findings"]:
-                    self.assertIn(f"- {f['id']} [{f['class']}, {f['severity']}] {f['summary']}", findings)
+                    self.assertIn(f"- {f['id']} [{f['class']}, {f['severity']}] {f['summary']}\n  status: "
+                                  f"{f.get('status') or 'open'}", findings)
                     self.assertIn(f"fixed when: {f['fixed_when']}", findings)
                     self.assertIn(f"files: {', '.join(f['files'])}", findings)
                 self.assertEqual(ctx["patch"].read_text(), delta.read_text(), "the full delta sits beside the pack")
