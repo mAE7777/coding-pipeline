@@ -4,6 +4,7 @@ stand-ins that log their calls, so no real install runs."""
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -412,6 +413,62 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.sync().returncode, 2)
         self.assertEqual(self.sync("update", "--bogus").returncode, 2)
         self.assertEqual(self.sync("--help").returncode, 0)
+
+
+SLOW_CLAUDE = r'''#!/usr/bin/env python3
+import os, sys, time
+sys.stdin.read()
+time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
+print('{"type": "result", "result": "done", "num_turns": 1, "is_error": false}')
+'''
+
+
+class RunRegistryTest(unittest.TestCase):
+    """run_isolated.py registers itself while it runs and leaves when it ends, a stopped run included (gate_run.py
+    is covered by tests/test_compat_587f48c.py, which runs a whole round)."""
+
+    def start(self, d, sleep):
+        home, work, bindir = Path(d) / "home", Path(d) / "work", Path(d) / "bin"
+        for p in (home, work, bindir):
+            p.mkdir()
+        (bindir / "claude").write_text(SLOW_CLAUDE)
+        (bindir / "claude").chmod(0o755)
+        (Path(d) / "pack.md").write_text("pack")
+        env = {**os.environ, "HOME": str(home), "PATH": f"{bindir}:{os.environ['PATH']}", "FAKE_SLEEP": str(sleep),
+               "HEAVY_LOCK_DIR": str(Path(d) / "lock")}
+        proc = subprocess.Popen([sys.executable, str(ROOT / "skills/_shared/scripts/run_isolated.py"), "gate-judge",
+                                 "--dir", str(work), "--pack", str(Path(d) / "pack.md"), "--out", str(Path(d) / "ev"),
+                                 "--agent-file", str(ROOT / "agents/gate-judge.md")],
+                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return proc, home / ".claude/.pipeline-runs"
+
+    def wait_for(self, runs):
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            entries = list(runs.glob("*.json")) if runs.is_dir() else []
+            if entries:
+                return [json.loads(p.read_text()) for p in entries]
+            time.sleep(0.05)
+        return []
+
+    def test_a_run_is_registered_while_it_runs_and_removed_when_stopped(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc, runs = self.start(d, 60)
+            try:
+                entries = self.wait_for(runs)
+                self.assertEqual([(e["pid"], e["script"]) for e in entries], [(proc.pid, "run_isolated.py")])
+                self.assertTrue(entries[0]["started"])
+            finally:
+                proc.send_signal(signal.SIGTERM)
+                proc.wait(timeout=30)
+            self.assertEqual(list(runs.glob("*.json")), [], "a stopped run leaves the registry")
+
+    def test_a_finished_run_leaves_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc, runs = self.start(d, 0)
+            proc.wait(timeout=60)
+            self.assertTrue(runs.is_dir(), "it was registered")
+            self.assertEqual(list(runs.glob("*.json")), [])
 
 
 class PersonalFilesTest(unittest.TestCase):

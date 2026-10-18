@@ -1169,8 +1169,17 @@ if __name__ == "__main__":
     if "--help" in sys.argv[1:3] or sys.argv[1:] == ["-h"]:
         print(__doc__.strip())  # asked for, so not an error
         sys.exit(0)
+    try:  # the run registry tells /pipeline update to wait; it never fails a run
+        from pipeline_sync import register_run, unregister_run  # noqa: E402
+    except Exception:
+        register_run = unregister_run = lambda *a: None
+    for sig in (signal.SIGTERM, signal.SIGHUP):  # set before the entry exists: a stopped run always removes it
+        signal.signal(sig, lambda signum, frame: sys.exit(128 + signum))
+    args = sys.argv[1:]
+    entry = register_run("run_isolated.py", args[args.index("--project") + 1] if "--project" in args[:-1] else None)
     try:
         code = main(sys.argv[1:])
     finally:
         drop_run_dirs()  # a stopped run too (the stop handler exits through here)
+        unregister_run(entry)
     sys.exit(code)

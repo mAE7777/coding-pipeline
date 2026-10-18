@@ -868,4 +868,15 @@ if __name__ == "__main__":
     if "--help" in sys.argv[1:3] or sys.argv[1:] == ["-h"]:
         print(__doc__.strip())  # asked for, so not an error
         sys.exit(0)
-    sys.exit(main(sys.argv[1:]))
+    try:  # the run registry tells /pipeline update to wait; it never fails a round
+        from pipeline_sync import register_run, unregister_run  # noqa: E402
+    except Exception:
+        register_run = unregister_run = lambda *a: None
+    for sig in (signal.SIGTERM, signal.SIGHUP):  # until main sets its own: a stopped round removes its entry too
+        signal.signal(sig, lambda signum, frame: sys.exit(128 + signum))
+    entry = register_run("gate_run.py", sys.argv[1] if sys.argv[1:] and not sys.argv[1].startswith("-") else None)
+    try:
+        code = main(sys.argv[1:])
+    finally:
+        unregister_run(entry)
+    sys.exit(code)
