@@ -68,7 +68,7 @@ def current_milestone(state, milestones):
         return found[named.group(0)] + ("named in state.md's Milestone section",)
     for mid, name, body in found.values():
         status = re.search(r"^Status:\s*(\S+)", body, re.M)
-        if not status or status.group(1) not in DONE_STATES:
+        if not status or status.group(1).lower() not in DONE_STATES:  # milestone_lint reads it without case
             why = (f"state.md names {named.group(0)}, which milestones.md does not have; " if named else
                    "state.md names no milestone; ") + "this is the first one not accepted or dropped"
             return mid, name, body, why

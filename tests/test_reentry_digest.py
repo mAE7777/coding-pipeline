@@ -208,6 +208,12 @@ class DigestTest(unittest.TestCase):
         text = self.digest().stdout
         self.assertIn("## docs/project/milestones.md · M2 · Sync (state.md names no milestone", text)
 
+    def test_a_status_written_with_capitals_is_still_done(self):
+        (self.docs / "state.md").write_text(STATE.replace("M2 · phase: building", "none · phase: idle"))
+        (self.docs / "milestones.md").write_text(MILESTONES.replace("Status: accepted", "Status: Accepted"))
+        self.assertIn("Status: Accepted", (self.docs / "milestones.md").read_text())
+        self.assertIn("## docs/project/milestones.md · M2 · Sync (state.md names no milestone", self.digest().stdout)
+
     def test_missing_files_are_named_and_a_folder_inside_the_project_works(self):
         (self.docs / "intent.md").unlink()
         (self.docs / "decisions.md").unlink()
