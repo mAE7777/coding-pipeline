@@ -261,6 +261,8 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("install.py check fails", out.stdout)
         self.assertIn("FAIL   install", out.stdout)
+        self.assertIn(f"installed: {self.first[:7]} -> ", out.stdout)
+        self.assertIn("changed: skills dev", out.stdout)
         self.assertEqual(len(self.sync_record()["history"]), 1, "the files were installed: sessions are told")
 
     def test_refusals_without_a_manifest_or_a_git_repository(self):

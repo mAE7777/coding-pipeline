@@ -453,8 +453,7 @@ def _update(no_pull, result):
     return 0
 
 
-def print_update(code, result):
-    r = result
+def print_update(r):
     if r["result"] == "refused":
         print(f"update refused: {r['reason']}")
         print(f"What to do: {r['todo']}")
@@ -473,8 +472,11 @@ def print_update(code, result):
         print("Open sessions are told at their next prompt that the skill text they already read is out of date.")
     else:
         print(f"update failed: {r['reason']}")
-        if r.get("before") or r.get("after"):
-            print(f"revision: {short(r['before'])} installed before; repository at {short(r['after'])}")
+        if r.get("installed"):
+            print(f"installed: {short(r['before'])} -> {short(r['after'])}; changed: "
+                  f"{describe_changed(r['changed'] or {})}; open sessions are told at their next prompt")
+        elif r.get("before") or r.get("after"):
+            print(f"revision: {short(r['before'])} installed; the repository is at {short(r['after'])}")
         if r.get("output"):
             print(r["output"])
     for note in r.get("notes") or []:
@@ -593,7 +595,7 @@ def session_start():
             except OSError:
                 pass  # the prompt hook records it later
     cutoff = time.time() - SESSION_DAYS * 86400
-    for old in sessions_dir().glob("*.json") if sessions_dir().is_dir() else []:
+    for old in sessions_dir().iterdir() if sessions_dir().is_dir() else []:  # a stray temporary file too
         try:
             if old.stat().st_mtime < cutoff:
                 old.unlink()
@@ -710,7 +712,7 @@ def main(argv):
     if "--json" in argv:
         print(json.dumps(result, indent=1))
     else:
-        print_update(code, result)
+        print_update(result)
     return code
 
 
