@@ -5,7 +5,7 @@ Usage:
   render_pack.py <role> --project <dir> --out <file> [--milestone M<k>] [--pass 1|2|3]
                  [--mode demo|reverify|fidelity|extract] [--round <n>] [--copy <dir>] [--inputs <file> ...]
                  [--extra <heading>=<file> ...] [--docs <file> ...] [--with-record] [--previous <result.md>]
-                 [--layer1 <layer1.json>] [--scope <scope.json>]
+                 [--layer1 <layer1.json>] [--scope <scope.json>] [--replay-all]
 
 Roles and what their pack contains (nothing else reaches the checker):
   code-verifier    review mode: the milestone's section of milestones.md; the done examples it carries and
@@ -28,21 +28,28 @@ Roles and what their pack contains (nothing else reaches the checker):
                    checker read it). It is never written inside --copy: a pack whose patch would land there is
                    bad usage. No baseline: NOT PROVIDED.
                    reverify mode (--scope <scope.json>, the focused re-verify regate_scope.py classifies): the
-                   milestone's section; its carried done examples and named mechanism cards; the open findings
-                   to re-verify with their files and fixed_when (for a hotfix, the fix-log entries' title,
-                   symptom, and reproduction); the delta since the scope's earlier candidate (its delta_patch),
-                   inlined and written to <stem>.change.patch as in review mode; the --layer1 results; the
-                   labeled commands; the stack pack; the structure lens. Not the whole change since the
-                   baseline: the last full review covered it. A missing scope, one whose "scope" is not
-                   "focused", or one for another milestone exits 2.
+                   milestone's section; its carried done examples and named mechanism cards; every finding
+                   blocking since the last full round, open or fixed (each with its status, files, and
+                   fixed_when: a fixed one is checked again, since a later fix can undo it), and for a hotfix
+                   the fix-log entries' title, symptom, and reproduction; the re-verify delta (scope.json
+                   reverify: since the last full round's candidate, or for a hotfix since the accepted
+                   candidate), inlined and written to <stem>.change.patch as in review mode; the --layer1
+                   results; the labeled commands; the stack pack; the structure lens. Not the whole change
+                   since the baseline: the last full review covered it. A missing scope, one whose "scope" is
+                   not "focused", or one for another milestone exits 2.
                    demo mode: the milestone's demo ending, the labeled commands, the stack pack, and the
                    regression endings of the accepted or gate-passed milestones: all of them for the final
-                   milestone (the last one not dropped); otherwise an ending replays when its
-                   docs/project/reviews/M<j>.changed.txt (baseline.py changed --write, at its acceptance) is
-                   missing or unreadable, when a file changed since this milestone's baseline is on that list,
+                   milestone (the last one not dropped) and with --replay-all (gate_run.py --full, before a
+                   release); otherwise an ending replays when its docs/project/reviews/M<j>.changed.txt
+                   (baseline.py changed --write, at its acceptance) is missing or unreadable, when a file
+                   changed since this milestone's baseline is on that list, when a file on that list no longer
+                   exists (renamed or deleted since, so the link to the files its behavior lives in is lost),
                    when the change touches a dependency manifest, lockfile, migration, build or CI
                    configuration, or shared configuration (REPLAY_ALL), or when the change cannot be computed
-                   (no baseline). Each ending skipped is listed with the reason.
+                   (no baseline). Each ending skipped is listed with the reason. The record of which endings
+                   replay is written beside the pack: --out <dir>/<stem>.pack.md writes
+                   <dir>/<stem>.regression.json {milestone, replay_all (the flag), all_replayed, replayed
+                   [{milestone, why}], not_replayed [{milestone, why}]}, which gate_report.py reads.
   loyal-evaluator  pass 1: the "Persona (blind)" line and the labeled commands; pass 2: the Goal only; pass 3
                    (intent checks, after the blind passes): every done example, the milestone's done examples,
                    every must-not-lose item, and each mechanism card's probe, to confirm one by one.
@@ -265,11 +272,16 @@ def at(project, path):
     return Path(path) if Path(path).is_absolute() else project / path
 
 
-def patch_path(out):
-    """<dir>/<stem>.change.patch for --out <dir>/<stem>.pack.md (any other name: its stem)."""
+def beside(out, suffix):
+    """<dir>/<stem><suffix> for --out <dir>/<stem>.pack.md (any other name: its stem)."""
     out = Path(out).resolve()
     stem = out.name[:-len(".pack.md")] if out.name.endswith(".pack.md") else out.stem
-    return out.parent / f"{stem}.change.patch"
+    return out.parent / f"{stem}{suffix}"
+
+
+def patch_path(out):
+    """<dir>/<stem>.change.patch for --out <dir>/<stem>.pack.md."""
+    return beside(out, ".change.patch")
 
 
 def put_patch(pack, path, data):
@@ -407,18 +419,28 @@ def review_change(pack, project, mid, ms, patch):
                                   f"Baseline {ch['from']} (the {mid} start) -> now {ch['to']}:"))
 
 
+def reverify_delta(scope):
+    """The delta a focused re-verify reviews: scope.json's reverify block (for a hotfix, the change since the
+    accepted candidate), or for a scope written without one, its top-level since, changed_files, and delta_patch."""
+    rv = scope.get("reverify") if isinstance(scope.get("reverify"), dict) else scope
+    since = rv.get("since") if isinstance(rv.get("since"), dict) else {}
+    return rv, since
+
+
 def delta_change(pack, project, scope, ms, patch):
     """A focused re-verify's delta: the scope's changed files and its delta patch, as review_change lays it out."""
-    since = scope.get("since") if isinstance(scope.get("since"), dict) else {}
-    heading = f"Change since round {since.get('round', '?')}'s candidate"
-    src = scope.get("delta_patch")
+    rv, since = reverify_delta(scope)
+    hotfix = scope.get("kind") == "hotfix"
+    heading = (f"Change since the accepted candidate (round {since.get('round', '?')})" if hotfix else
+               f"Change since round {since.get('round', '?')}'s candidate")
+    src = rv.get("delta_patch")
     data = pack.raw(at(project, src)) if isinstance(src, str) and src else None
     if data is None:
         put_patch(pack, patch, None)
         pack.need(heading, None, f"the delta patch {src or '(scope.json names none)'} (scope.json delta_patch)")
         return
     put_patch(pack, patch, data)
-    listed = [f for f in scope.get("changed_files") or [] if isinstance(f, dict) and isinstance(f.get("path"), str)]
+    listed = [f for f in rv.get("changed_files") or [] if isinstance(f, dict) and isinstance(f.get("path"), str)]
     blocks = split_patch(data.decode("utf-8", errors="replace"), {f["path"] for f in listed})
     entries = []
     for f in listed + [{"path": p} for p in sorted(set(blocks) - {f["path"] for f in listed})]:
@@ -429,9 +451,14 @@ def delta_change(pack, project, scope, ms, patch):
             a, r = diff_counts(diff) if diff is not None else (None, None)
         entries.append({"path": f["path"], "status": f.get("status") or (b["status"] if b else "modified"),
                         "added": a, "removed": r, "diff": diff, "binary": bool(b and b["binary"])})
-    lead = (f"The delta from round {since.get('round', '?')}'s candidate ({since.get('fingerprint', '?')}) to this "
-            "one. The whole change since the milestone baseline was covered by the last full review and is not "
-            "repeated here.")
+    if hotfix:
+        lead = (f"The delta from the accepted candidate (round {since.get('round', '?')}, "
+                f"{since.get('fingerprint', '?')}) to this one: what the hotfix changed. What came before it was "
+                "covered by the last full review and the rounds since, and is not repeated here.")
+    else:
+        lead = (f"The delta from round {since.get('round', '?')}'s candidate ({since.get('fingerprint', '?')}) to "
+                "this one. The whole change since the milestone baseline was covered by the last full review and is "
+                "not repeated here.")
     if not entries:
         pack.add(heading, lead + " The delta patch holds no file.")
         return
@@ -498,26 +525,41 @@ def load_scope(project, opts, mid):
     return scope, None
 
 
-def to_reverify(scope):
-    """(heading, body, what is missing) for the findings or, for a hotfix, the fix-log entries to re-verify.
-    A fix entry's Change line (the builder's account of how the fix works) stays out: the delta shows it (D8)."""
-    if scope.get("kind") == "hotfix":
-        rows = []
-        for f in scope.get("fixes") or []:
-            if isinstance(f, dict):
-                rows.append(f"- {f.get('id', '?')} {f.get('title', '')}".rstrip() +
-                            "".join(f"\n  {k}: {f[k]}" for k in ("symptom", "reproduction") if f.get(k)))
-        return "The fix to re-verify (fix-log entries)", "\n".join(rows) or None, "the fix-log entries (scope.json fixes)"
+def finding_rows(scope):
+    """One block per finding the scope names: every finding blocking since the last full round, open or fixed."""
     rows = []
     for f in scope.get("findings") or []:
         if isinstance(f, dict):
             tags = ", ".join(str(f[k]) for k in ("class", "severity") if f.get(k))
             files = f.get("files") if isinstance(f.get("files"), list) else []
+            status = str(f.get("status") or "open")
+            if status == "fixed":
+                status += (f" in round {f['fixed_round']}" if f.get("fixed_round") else "") + \
+                    ": check it again, a later change can undo a fix"
             rows.append(f"- {f.get('id', '?')}" + (f" [{tags}]" if tags else "") + f" {f.get('summary', '')}".rstrip() +
+                        f"\n  status: {status}" +
                         (f"\n  where: {f['where']}" if f.get("where") else "") +
                         f"\n  files: {', '.join(map(str, files)) or 'none named'}" +
                         f"\n  fixed when: {f.get('fixed_when') or 'not stated'}")
-    return "Open findings to re-verify", "\n".join(rows) or None, "the open findings (scope.json findings)"
+    return rows
+
+
+def to_reverify(scope):
+    """[(heading, body, what is missing)] for the findings and, for a hotfix, the fix-log entries to re-verify.
+    A fix entry's Change line (the builder's account of how the fix works) stays out: the delta shows it (D8)."""
+    findings = ("Findings to re-verify (every finding blocking since the last full round, open or fixed)",
+                "\n".join(finding_rows(scope)) or None, "the findings (scope.json findings)")
+    if scope.get("kind") != "hotfix":
+        return [findings]
+    rows = []
+    for f in scope.get("fixes") or []:
+        if isinstance(f, dict):
+            rows.append(f"- {f.get('id', '?')} {f.get('title', '')}".rstrip() +
+                        "".join(f"\n  {k}: {f[k]}" for k in ("symptom", "reproduction") if f.get(k)))
+    out = [("The fix to re-verify (fix-log entries)", "\n".join(rows) or None, "the fix-log entries (scope.json fixes)")]
+    if findings[1]:
+        out.append(findings)  # a hotfix also re-checks the findings blocking since the last full round
+    return out
 
 
 def changed_list(pack, path):
@@ -530,13 +572,15 @@ def changed_list(pack, path):
     return None if text is None else {ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")}
 
 
-def regression_scope(pack, project, ms_text, mid):
+def regression_scope(pack, project, ms_text, mid, replay_all=False):
     """([(M<j>, its section, why it replays)], [(M<j>, why it does not)]) over the other accepted or
     gate-passed milestones (in a campaign, gate-passed ones await batched acceptance)."""
     others = [(m, t) for m, t in all_milestones(ms_text)
               if m != mid and (re.search(r"^Status:\s*accepted", t, flags=re.M) or "gate-passed [x]" in t)]
     if not others:
         return [], []
+    if replay_all:
+        return [(m, t, "--replay-all: a release replays every earlier ending") for m, t in others], []
     if not mid or is_final(ms_text, mid):
         return [(m, t, "this is the final milestone, which replays every earlier ending") for m, t in others], []
     ch = baseline_changes(project, mid)
@@ -560,10 +604,17 @@ def regression_scope(pack, project, ms_text, mid):
             keep.append((m, t, f"its list of changed files ({rel}) is missing or unreadable"))
             continue
         hit = sorted(listed & set(now))
+        gone = sorted(rel for rel in listed if not (project / rel).exists() and not (project / rel).is_symlink())
         if hit:
             keep.append((m, t, ", ".join(hit[:5]) + (f" and {len(hit) - 5} more" if len(hit) > 5 else "") +
                          f" changed since the {mid} baseline and {'is' if len(hit) == 1 else 'are'} among its "
                          f"{len(listed)} changed files"))
+        elif gone:
+            # Conservative: a file it changed was renamed or deleted since, so its behavior may now live in a file
+            # its list never named, and a change there would go unseen.
+            keep.append((m, t, ", ".join(gone[:5]) + (f" and {len(gone) - 5} more" if len(gone) > 5 else "") +
+                         f", among its {len(listed)} changed files, no longer exist{'s' if len(gone) == 1 else ''} "
+                         "(renamed or deleted since), so the link to where its behavior lives is lost"))
         else:
             skip.append((m, f"none of its {len(listed)} changed files changed since the {mid} baseline"))
     return keep, skip
@@ -604,7 +655,13 @@ def render(role, opts):
 
     if role == "code-verifier" and mode == "demo":
         pack.need("Demo ending under test", field_block(ms, "Demo ending:"), f"the {mid} demo ending")
-        keep, skip = regression_scope(pack, project, ms_text or "", mid)
+        keep, skip = regression_scope(pack, project, ms_text or "", mid, bool(opts.get("replay_all")))
+        record = {"milestone": mid, "replay_all": bool(opts.get("replay_all")), "all_replayed": not skip,
+                  "replayed": [{"milestone": m, "why": why} for m, _, why in keep],
+                  "not_replayed": [{"milestone": m, "why": why} for m, why in skip]}
+        out = beside(opts["out"], ".regression.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(record, indent=2), encoding="utf-8")
         pack.add("Regression demo endings (accepted or gate-passed milestones)",
                  "\n\n".join(f"### {m}\n(replayed: {why})\n{field_block(t, 'Demo ending:') or '(no demo ending)'}"
                              for m, t, why in keep) or ("none replayed (see below)" if skip else "none"))
@@ -620,14 +677,17 @@ def render(role, opts):
                   "the carried I-D examples (docs/project/intent.md)")
         pack.need("Mechanism cards this milestone exercises", named_cards(intent, ms) if have else None,
                   "the mechanism cards (docs/project/intent.md)")
-        pack.need(*to_reverify(scope))
+        for heading, body, what in to_reverify(scope):
+            pack.need(heading, body, what)
         delta_change(pack, project, scope, ms, patch)
         add_layer1(pack, project, opts)
         pack.need("Commands", labeled_commands(project), "AGENTS.md Commands section (labeled lines)")
         pack.add("Stack pack", stack_pack(project))
         add_lens(pack)
-        since = scope.get("since") if isinstance(scope.get("since"), dict) else {}
-        title = f"Re-verify pack: {mid} (focused, since round {since.get('round', '?')})"
+        since = reverify_delta(scope)[1]
+        title = (f"Re-verify pack: {mid} (focused hotfix, since the accepted candidate of round "
+                 f"{since.get('round', '?')})" if scope.get("kind") == "hotfix" else
+                 f"Re-verify pack: {mid} (focused, since round {since.get('round', '?')})")
     elif role == "code-verifier":
         pack.need("Milestone contract", ms, f"the {mid} section of docs/project/milestones.md")
         have = bool(ms and intent)
@@ -832,6 +892,9 @@ def main(argv):
             i += 1
         elif key == "--with-record":
             opts["with_record"] = True
+            i += 1
+        elif key == "--replay-all":
+            opts["replay_all"] = True
             i += 1
         elif key == "--previous" and i + 1 < len(rest):
             opts["previous"] = rest[i + 1]

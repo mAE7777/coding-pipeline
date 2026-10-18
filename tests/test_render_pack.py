@@ -508,8 +508,9 @@ class ReverifyTest(unittest.TestCase):
         self.assertIn("Promise: Two phones share one list.", text)
         self.assertIn("I-D1 When one phone adds milk", text)
         self.assertIn("Rejected imitation: polling", text)
-        findings = section_of(text, "Open findings to re-verify")
-        self.assertIn("- F-3 [correctness, blocking] a delete stays on one phone", findings)
+        findings = section_of(text, "Findings to re-verify (every finding blocking since the last full round, open "
+                                    "or fixed)")
+        self.assertIn("- F-3 [correctness, blocking] a delete stays on one phone\n  status: open", findings)
         self.assertIn("fixed when: a delete on A is gone on B within 5 seconds", findings)
         self.assertIn("files: src/a.py", findings)
         delta = section_of(text, "Change since round 2's candidate")
@@ -539,6 +540,40 @@ class ReverifyTest(unittest.TestCase):
         self.assertIn("symptom: B still shows milk", fix)
         self.assertIn("reproduction: python3 -m unittest tests.test_a", fix)
         self.assertNotIn("BUILDER-ACCOUNT", text, "the builder's account of the fix stays out (D8); the delta shows it")
+
+    def test_a_fixed_finding_is_checked_again(self):
+        fixed = {"id": "F-2", "status": "fixed", "fixed_round": 3, "summary": "a blank name is accepted",
+                 "class": "correctness", "severity": "high", "files": ["src/a.py"], "fixed_when": "a blank name exits 2"}
+        scope = self.scope(findings=[{**self.scope_doc_finding(), "status": "open"}, fixed])
+        code, text = self.render(scope)
+        self.assertEqual(code, 0, text)
+        findings = section_of(text, "Findings to re-verify (every finding blocking since the last full round, open "
+                                    "or fixed)")
+        self.assertIn("- F-2 [correctness, high] a blank name is accepted\n  status: fixed in round 3: check it "
+                      "again, a later change can undo a fix", findings)
+        self.assertIn("fixed when: a blank name exits 2", findings)
+
+    def scope_doc_finding(self):
+        return {"id": "F-3", "summary": "a delete stays on one phone", "class": "correctness", "severity": "blocking",
+                "files": ["src/a.py"], "where": "src/a.py:2", "fixed_when": "a delete on A is gone on B within 5 seconds"}
+
+    def test_a_hotfix_reviews_the_change_since_the_accepted_candidate(self):
+        hotfix = self.ev / "reverify-delta.patch"
+        hotfix.write_text(SCOPE_DELTA.split("diff --git a/tests/test_a.py")[0])
+        scope = self.scope(kind="hotfix", fixes=[{"id": "F-007", "title": "Delete did not sync"}], reverify={
+            "since": {"round": 4, "fingerprint": "product:fedcba9876543210", "snapshot": "/accepted"},
+            "changed_files": [{"path": "src/a.py", "status": "modified", "added": 1, "removed": 1}],
+            "changed_lines": 2, "delta_patch": str(hotfix)})
+        code, text = self.render(scope)
+        self.assertEqual(code, 0, text)
+        self.assertIn("Re-verify pack: M1 (focused hotfix, since the accepted candidate of round 4)", text)
+        delta = section_of(text, "Change since the accepted candidate (round 4)")
+        self.assertIn("1 file(s) changed", delta)
+        self.assertNotIn("tests/test_a.py", delta, "the hotfix's own delta, not the whole change since round 2")
+        self.assertEqual((self.ev / "code-verifier.change.patch").read_text(), hotfix.read_text())
+        self.assertIn("- F-3 [correctness, blocking]", section_of(
+            text, "Findings to re-verify (every finding blocking since the last full round, open or fixed)"),
+            "a hotfix re-checks the findings since the last full round too")
 
     def test_a_bad_scope_is_refused(self):
         for scope, why in ((self.scope("full.json", scope="full"), "not 'focused'"),
@@ -606,7 +641,7 @@ class DemoScopeTest(unittest.TestCase):
         self.root = project(self.tmp.name)
         (self.root / "docs/project/milestones.md").write_text(DEMO_MILESTONES)
         (self.root / "src").mkdir()
-        for name in ("a", "b", "c"):
+        for name in ("a", "b", "c", "login"):
             (self.root / f"src/{name}.py").write_text(f"{name} = 1\n")
         subprocess.run([sys.executable, str(BASELINE), "record", str(self.root), "M3"], capture_output=True, check=True)
         reviews = self.root / "docs/project/reviews"
@@ -620,10 +655,38 @@ class DemoScopeTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def demo(self):
-        code, text = run_pack(self.root, self.out, "--milestone", "M3", "--mode", "demo")
+    def demo(self, *flags):
+        code, text = run_pack(self.root, self.out, "--milestone", "M3", "--mode", "demo", *flags)
         self.assertEqual(code, 0, text)
         return text
+
+    def record(self):
+        return json.loads((self.out.parent / "code-verifier-demo.regression.json").read_text())
+
+    def test_replay_all_replays_every_ending_and_the_record_says_so(self):
+        text = self.demo()
+        self.assertEqual(self.record(), {"milestone": "M3", "replay_all": False, "all_replayed": False, "replayed": [],
+                                         "not_replayed": [
+            {"milestone": "M1", "why": "none of its 2 changed files changed since the M3 baseline"},
+            {"milestone": "M2", "why": "none of its 1 changed files changed since the M3 baseline"}]})
+        text = self.demo("--replay-all")
+        for m in ("M1", "M2"):
+            self.assertIn(f"### {m}\n(replayed: --replay-all: a release replays every earlier ending)", text)
+        self.assertIsNone(section_of(text, "Regression demo endings not replayed"))
+        rec = self.record()
+        self.assertEqual((rec["replay_all"], rec["all_replayed"], [r["milestone"] for r in rec["replayed"]],
+                          rec["not_replayed"]), (True, True, ["M1", "M2"], []))
+
+    def test_an_ending_whose_file_was_renamed_replays(self):
+        # M2 renamed M1's src/login.py before M3 started; M3 changes the renamed file, which no list names.
+        shutil.rmtree(self.root / ".evidence")
+        (self.root / "src/login.py").rename(self.root / "src/signin.py")
+        subprocess.run([sys.executable, str(BASELINE), "record", str(self.root), "M3"], capture_output=True, check=True)
+        (self.root / "src/signin.py").write_text("login = 2\n")
+        text = self.demo()
+        self.assertIn("### M1\n(replayed: src/login.py, among its 2 changed files, no longer exists (renamed or "
+                      "deleted since), so the link to where its behavior lives is lost)", text)
+        self.assertIn("- M2: not replayed", text)
 
     def test_an_ending_replays_when_the_change_touches_its_files_and_the_rest_are_listed(self):
         (self.root / "src/a.py").write_text("a = 2\n")
