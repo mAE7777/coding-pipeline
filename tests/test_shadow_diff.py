@@ -113,6 +113,19 @@ class CompareTest(unittest.TestCase):
         self.assertIn("M1.D2", keys(res["agreements"]))
         self.assertTrue(res["verdict"][0]["same"])
 
+    def test_the_re_verify_rows_are_compared(self):
+        primary = {"verdict": "FAIL", "findings": [], "reverify": [
+            {"id": "M1-F01", "status": "NOT_FIXED", "evidence": "add food -5 still exits 0"},
+            {"id": "M1-F02", "status": "FIXED", "evidence": "add food 0 accepted"}]}
+        shadow = {"verdict": "PASS", "findings": [], "reverify": [
+            {"id": "M1-F01", "status": "fixed", "evidence": "looks fine"},
+            {"id": "M1-F02", "status": "NOT_FIXED", "evidence": "rejected"}]}
+        res = sd.compare(primary, shadow, "code-verifier")
+        self.assertEqual([(i["group"], i["key"], i["primary"], i["shadow"]) for i in res["shadow_missed"]],
+                         [("reverify", "M1-F01", "NOT_FIXED", "FIXED")], "FIXED where the primary said NOT_FIXED")
+        self.assertEqual([(i["group"], i["key"]) for i in res["shadow_extra"]], [("reverify", "M1-F02")])
+        self.assertEqual(res["counts"]["misses"], 1)
+
     def test_other_roles(self):
         res = sd.compare({"claims": [{"id": "C1", "status": "REFUTED"}, {"id": "C2", "status": "CONFIRMED"}]},
                          {"claims": [{"id": "C1", "status": "CONFIRMED"}, {"id": "C2", "status": "CONFIRMED"}]},

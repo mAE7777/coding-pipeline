@@ -10,7 +10,9 @@ the main run (the personal override's shadow section, or --shadow; models.py). O
 
 compare reads each run's last fenced JSON block (gate_report.py's last_json) and compares, by role:
   code-verifier    done_examples and must_not_lose (by id), mechanisms (by name), wiring (by component),
-                   findings, and the verdict; a demo run's steps (by milestone and step)
+                   findings, and the verdict; a re-verify's reverify rows (by id; a row reports a defect unless
+                   FIXED, so a shadow that says FIXED where the primary said NOT_FIXED missed it); a demo run's
+                   steps (by milestone and step)
   gate-judge       intent_diff rows (by id), blocking and logged findings, the verdict, purpose.same_product
   cold-reader      earlier items (settled or not), divergences, fidelity items, contradictions, missing, and
                    the verdict
@@ -56,6 +58,7 @@ ROWS = {
     "code-verifier": (("done_examples", ("id",), {"HOLDS"}), ("must_not_lose", ("id",), {"HOLDS"}),
                       ("mechanisms", ("name",), {"HOLDS"}),
                       ("wiring", ("component",), {"PROVEN", "PARKED-UNREACHABLE"}),
+                      ("reverify", ("id",), {"FIXED"}),
                       ("steps", ("milestone", "step"), {"HOLDS"})),
     "gate-judge": (("intent_diff", ("id",), {"HOLDS"}),),
     "claim-verifier": (("claims", ("id",), {"CONFIRMED"}),),
