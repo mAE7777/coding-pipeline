@@ -1118,21 +1118,60 @@ def git(*args, cwd=None):
 def acceptance(did, milestone, fp, owner=True, title=None):
     source = f'Source: [owner 2026-10-01] "Yes, accept {milestone}. It works."' if owner else "Source: [proposed]"
     return (f"\n## {did} · 2026-10-01 · {title or 'Accept ' + milestone}\n"
-            f"Accept {milestone} · contract 0123456789abcdef · fingerprint {fp} · review reviews/{milestone}.md\n"
-            f"{source}\n")
+            f"Accept {milestone} · contract 0123456789abcdef · fingerprint {fp} · review "
+            f"reviews/{milestone}.md\n{source}\n")
+
+
+SID = "11111111-2222-3333-4444-555555555555"
+
+
+def prove(project, home):
+    """Record a rulings.py proof for every owner entry in the project's decisions.md, from a transcript in which
+    the owner typed each quoted sentence."""
+    import re
+    text = (Path(project) / "docs/project/decisions.md").read_text(encoding="utf-8")
+    pairs = []
+    for block in re.split(r"(?m)^(?=## D-)", text):
+        head, quote = re.match(r"## (D-\d+)", block), re.search(r'\[owner [\d-]+\] "([^"]+)"', block)
+        if head and quote:
+            pairs.append((head.group(1), quote.group(1)))
+    transcript = Path(home) / ".claude/projects/p" / f"{SID}.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text("".join(json.dumps({"type": "user", "uuid": f"u{i}", "timestamp": "t",
+                                              "message": {"content": quote}}) + "\n"
+                                  for i, (_, quote) in enumerate(pairs)), encoding="utf-8")
+    for did, quote in pairs:
+        subprocess.run([sys.executable, str(SCRIPTS / "rulings.py"), "record", str(project), "--id", did, "--quote",
+                        quote, "--session", SID], env={**os.environ, "HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1"},
+                       capture_output=True, text=True, check=True)
+
+
+def milestones(project, **statuses):
+    (Path(project) / "docs/project/milestones.md").write_text("# Milestones\n" + "".join(
+        f"\n## {mid} · Part {mid}\nStatus: {status}\nPromise: x\n" for mid, status in statuses.items()),
+        encoding="utf-8")
 
 
 class AcceptedFingerprintTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.project = Path(self.tmp.name)
+        self.project = Path(self.tmp.name) / "project"
+        self.home = Path(self.tmp.name) / "home"
         (self.project / "docs/project").mkdir(parents=True)
+        milestones(self.project, M1="accepted", M10="accepted", M2="building")
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def decisions(self, text):
-        (self.project / "docs/project/decisions.md").write_text("# Decisions\n" + text)
+    def decisions(self, text, proven=True):
+        (self.project / "docs/project/decisions.md").write_text("# Decisions\n" + text, encoding="utf-8")
+        if proven:
+            prove(self.project, self.home)
+
+    def refused(self, milestone="M1"):
+        with self.assertRaises(pw.LandCheckError) as caught:
+            pw.accepted_fingerprint(self.project, milestone)
+        return str(caught.exception)
 
     def test_the_latest_owner_acceptance_of_that_milestone(self):
         self.decisions(acceptance("D-003", "M1", "product:1111111111111111")
@@ -1141,6 +1180,35 @@ class AcceptedFingerprintTest(unittest.TestCase):
                        + acceptance("D-006", "M1", "product:3333333333333333", owner=False))
         self.assertEqual(pw.accepted_fingerprint(self.project, "M1"), ("D-005", "product:2222222222222222"))
         self.assertEqual(pw.accepted_fingerprint(self.project, "M10"), ("D-004", "product:aaaaaaaaaaaaaaaa"))
+
+    def test_an_owner_source_rulings_cannot_prove_is_refused(self):
+        self.decisions(acceptance("D-005", "M1", "product:1111111111111111"), proven=False)
+        self.assertIn("D-005 of M1 is not a proven owner ruling", self.refused())
+
+    def test_an_acceptance_a_later_proven_entry_supersedes_is_refused(self):
+        reopen = ('\n## D-006 · 2026-10-02 · Reopen M1: the export loses rows\n'
+                  "Decision: M1 goes back to building.\nSupersedes: D-005\n"
+                  'Source: [owner 2026-10-02] "Reopen M1, the export loses rows."\n')
+        self.decisions(acceptance("D-005", "M1", "product:1111111111111111") + reopen)
+        self.assertIn("superseded by D-006", self.refused())
+        proposed = reopen.replace('Source: [owner 2026-10-02] "Reopen M1, the export loses rows."', "Source: [proposed]")
+        self.decisions(acceptance("D-005", "M1", "product:1111111111111111") + proposed)
+        self.assertEqual(pw.accepted_fingerprint(self.project, "M1")[0], "D-005", "a proposal supersedes nothing")
+
+    def test_the_milestone_must_be_accepted_in_milestones_md(self):
+        self.decisions(acceptance("D-005", "M2", "product:1111111111111111"))
+        self.assertIn("milestones.md shows M2 with Status building, not accepted", self.refused("M2"))
+        self.decisions(acceptance("D-005", "M7", "product:1111111111111111"))
+        self.assertIn("shows M7 with no Status", self.refused("M7"))
+        milestones(self.project, M2="Accepted")
+        self.decisions(acceptance("D-005", "M2", "product:1111111111111111"))
+        self.assertEqual(pw.accepted_fingerprint(self.project, "M2")[0], "D-005", "read without case")
+
+    def test_only_the_fixed_form_is_an_acceptance(self):
+        self.decisions('\n## D-007 · 2026-10-01 · Do not Accept M1 until the export is fixed\n'
+                       "Decision: hold back the candidate with fingerprint product:1111111111111111.\n"
+                       'Source: [owner 2026-10-01] "Do not accept M1 yet."\n')
+        self.assertIn("no owner acceptance of M1", self.refused())
 
     def test_missing_proposed_or_unfingerprinted_acceptances_are_refused(self):
         with self.assertRaises(pw.LandCheckError):
@@ -1182,6 +1250,7 @@ class LandCheckTest(unittest.TestCase):
         # The owner accepted this working tree at the gate: the planning folder is not part of the product.
         (self.project / "docs/project").mkdir(parents=True)
         (self.project / "docs/project/state.md").write_text("# State\n")
+        milestones(self.project, M1="accepted", M2="accepted")
         self.accepted = fingerprint_mod.fingerprint(self.project, "product")[0]
         self.write_decisions(acceptance("D-005", "M1", self.accepted))
         git("checkout", "-q", "main", cwd=self.project)
@@ -1191,8 +1260,10 @@ class LandCheckTest(unittest.TestCase):
         self.patch.stop()
         self.tmp.cleanup()
 
-    def write_decisions(self, text):
+    def write_decisions(self, text, proven=True):
         (self.project / "docs/project/decisions.md").write_text("# Decisions\n" + text)
+        if proven:
+            prove(self.project, Path(self.tmp.name) / "home")
 
     def runner(self, oid, ref="feature", gh_code=0):
         def run(argv, cwd=None):
@@ -1283,6 +1354,14 @@ class LandCheckTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("no acceptance of M1", err)
 
+    def test_an_unproven_acceptance_stops_before_github(self):
+        self.write_decisions(acceptance("D-005", "M1", self.accepted), proven=False)
+        (self.project / ".evidence/rulings.jsonl").unlink(missing_ok=True)
+        code, out, err = self.land("12", "--project", str(self.project), "--milestone", "M1")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("D-005 of M1 is not a proven owner ruling", err)
+        self.assertEqual(self.gh_calls, [])
+
     def test_the_newest_acceptance_is_the_one_compared(self):
         self.write_decisions(acceptance("D-005", "M1", self.accepted)
                              + acceptance("D-009", "M1", "product:0000000000000000"))
@@ -1348,6 +1427,8 @@ class LandCheckTest(unittest.TestCase):
         accepted = fingerprint_mod.fingerprint(sub, "product")[0]
         self.assertNotEqual(accepted, fingerprint_mod.fingerprint(self.project, "product")[0])
         (sub / "docs/project/decisions.md").write_text("# Decisions\n" + acceptance("D-002", "M1", accepted))
+        milestones(sub, M1="accepted")
+        prove(sub, Path(self.tmp.name) / "home")
         git("checkout", "-q", "main", cwd=self.project)
         sub.mkdir(exist_ok=True)
         code, out, err = self.land("12", "--project", str(sub), "--milestone", "M1", run=self.runner(head))

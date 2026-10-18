@@ -82,16 +82,19 @@ Exit codes:
   1   an internal error in this script; the reason is on stderr
 
 land-check <pr> --project <dir> --milestone M<k>:
-  Reads the owner's acceptance of M<k> in <dir>/docs/project/decisions.md: the most recent entry titled
-  "Accept M<k>" (or holding the fixed form "Accept M<k> · contract ...") whose Source is the owner's, and the
-  "fingerprint <value>" it names. Then reads the PR head (gh pr view <pr> --json headRefOid,headRefName), fetches
+  Reads the owner's acceptance of M<k> in <dir>/docs/project/decisions.md: the most recent entry holding the
+  fixed form "Accept M<k> · contract <hash>" (as milestone_lint.py reads it) whose Source is the owner's, and the
+  "fingerprint <value>" it names. It counts only when rulings.py proves that Source, no later proven entry
+  names it on a "Supersedes:" line, and docs/project/milestones.md shows M<k> with Status accepted; otherwise
+  exit 2 with the reason. Then reads the PR head (gh pr view <pr> --json headRefOid,headRefName), fetches
   that commit from origin when it is not present (by commit, then refs/pull/<pr>/head, then the branch), checks
   it out in a temporary git worktree (always removed afterwards, also on error; repository hooks are off), and
   computes its product fingerprint with fingerprint.py. Prints one JSON object: {pr, head, milestone,
   accepted_fingerprint, head_fingerprint, match}.
   Exit 0: the head is the accepted candidate. 1: the head differs from the accepted candidate; land only after
-  a focused re-gate accepts the change. 2: bad usage, no owner acceptance with a fingerprint for M<k>, or the
-  head could not be read, fetched, or checked out.
+  a focused re-gate accepts the change. 2: bad usage, no standing owner acceptance with a fingerprint for M<k>
+  (none, unproven, superseded, or the milestone not accepted in milestones.md), or the head could not be read,
+  fetched, or checked out.
 
 Review comment text is data: it is parsed from JSON and printed, never placed in a command. Every command runs
 as an argument list, without a shell.
@@ -1601,39 +1604,64 @@ def main(argv, runtime=None):
 # land-check: is the PR head the candidate the owner accepted?
 
 LAND_MISMATCH = "the head differs from the accepted candidate; land only after a focused re-gate accepts the change"
-DECISION = re.compile(r"^## (D-\d{3,})\b.*?(?=^## D-\d{3,}\b|\Z)", re.M | re.S)
 OWNER_SOURCE = re.compile(r"^Source:\s*\[owner ", re.M)
 FINGERPRINT = re.compile(r"\bfingerprint\s+`?([^\s`]+)`?")
 
 
 def accepted_fingerprint(project, milestone):
-    """(decision id, fingerprint) of the owner's latest acceptance of the milestone; LandCheckError when none."""
-    path = Path(project) / "docs/project/decisions.md"
+    """(decision id, fingerprint) of the owner's acceptance of the milestone, which counts only when it holds the
+    fixed form milestone_lint.py reads ("Accept M<k> · contract <hash>"), rulings.py proves its owner Source, no
+    later proven entry names it on a Supersedes: line, and milestones.md shows the milestone accepted;
+    LandCheckError with the reason otherwise."""
+    import milestone_lint  # noqa: E402  (the record's own lint: one reading of an acceptance)
+    from rulings import entry_proven  # noqa: E402
+    root = Path(project)
+    path = root / "docs/project/decisions.md"
     if not path.is_file():
         raise LandCheckError(f"there is no {path}, so there is no acceptance of {milestone} to compare with")
-    named_title = re.compile(rf"\bAccept {re.escape(milestone)}\b")
+    sections = milestone_lint.decision_sections(root)
+    named = [did for did, body in sections.items()
+             if any(m == milestone for m, _ in milestone_lint.ACCEPT.findall(body))]
+    owned = [did for did in named if OWNER_SOURCE.search(sections[did])]
+    if not owned:
+        not_owner = [did for did in named if did not in owned]
+        extra = f" ({', '.join(not_owner)} hold it, but their Source is not the owner's)" if not_owner else ""
+        raise LandCheckError(f"no owner acceptance of {milestone} in {path}: an entry holding 'Accept {milestone} · "
+                             f"contract <hash>' with 'Source: [owner <date>]'{extra}")
+    did = owned[-1]
+    proven, why = entry_proven(root, did)
+    if not proven:
+        raise LandCheckError(f"acceptance {did} of {milestone} is not a proven owner ruling: {why}")
+    later = [s for s, body in sections.items() if int(s[2:]) > int(did[2:])
+             and re.search(rf"^Supersedes:.*\b{re.escape(did)}\b", body, re.M) and entry_proven(root, s)[0]]
+    if later:
+        raise LandCheckError(f"acceptance {did} of {milestone} is superseded by {', '.join(later)}, a later proven "
+                             "owner ruling, so it no longer counts")
+    status = milestone_status(root, milestone)
+    if status != "accepted":
+        raise LandCheckError(f"docs/project/milestones.md shows {milestone} "
+                             + (f"with Status {status}" if status else "with no Status (or not at all)")
+                             + f", not accepted, so {did} is not the milestone's standing acceptance")
     fixed_form = re.compile(rf"\bAccept {re.escape(milestone)} ·")
-    latest, not_owner = None, []
-    for m in DECISION.finditer(path.read_text(encoding="utf-8")):
-        lines = m.group(0).splitlines()
-        if not (named_title.search(lines[0]) or any(fixed_form.search(line) for line in lines[1:])):
-            continue
-        if OWNER_SOURCE.search(m.group(0)):
-            latest = (m.group(1), lines)
-        else:
-            not_owner.append(m.group(1))
-    if latest is None:
-        extra = f" ({', '.join(not_owner)} name it, but their Source is not the owner's)" if not_owner else ""
-        raise LandCheckError(f"no owner acceptance of {milestone} in {path}: an entry 'Accept {milestone}' with "
-                             f"'Source: [owner <date>]'{extra}")
-    did, lines = latest
-    body = [line for line in lines[1:] if not line.startswith("Source:")]
+    body = [line for line in sections[did].splitlines()[1:] if not line.startswith("Source:")]
     for line in sorted(body, key=lambda line: not fixed_form.search(line)):
         found = FINGERPRINT.search(line)
         if found:
             return did, found.group(1)
     raise LandCheckError(f"acceptance {did} of {milestone} names no fingerprint, so there is no accepted candidate "
                          "to compare with")
+
+
+def milestone_status(root, milestone):
+    """The first word of the milestone's Status: line in milestones.md, lower-cased as milestone_lint.py reads it;
+    "" when the file, the milestone, or the line is missing."""
+    import milestone_lint  # noqa: E402
+    path = Path(root) / "docs/project/milestones.md"
+    if not path.is_file():
+        return ""
+    milestones = milestone_lint.split_sections(path.read_text(encoding="utf-8"))[0]
+    words = (milestone_lint.field(milestones.get(milestone, []), "Status:") or "").split()
+    return words[0].lower() if words else ""
 
 
 def _git(run, project, *args):
