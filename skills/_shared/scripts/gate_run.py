@@ -7,28 +7,38 @@ Usage: gate_run.py <project> --milestone M<k> [--family auto|claude|codex] [--ag
 Start it in the background: a round takes longer than one shell call may last. Progress lines go to
 stdout and to <evidence>/progress.log; the result is <evidence>/verdict.json, with the round appended to
 docs/project/reviews/M<k>.md. Evidence: .evidence/gate/M<k>/r<n>/ (n = the next round number).
---full makes the round full whatever regate_scope.py would decide (for example before /deploy).
+--full makes the round full whatever regate_scope.py would decide, and its demo replays every earlier
+milestone's ending (render_pack.py --replay-all): run it before /deploy, which ships only a candidate whose
+passing round is release_ready in verdict.json (gate_report.py).
 
 Order:
-  0. freeze: the live product fingerprint must equal state.md's Candidate; one gate per project at a time.
+  0. freeze: the milestone's Status in milestones.md must be gate (the freeze sets it) or accepted (a re-gate
+     after a hotfix), else the round refuses (exit 1); the live product fingerprint must equal state.md's
+     Candidate; one gate per project at a time.
      The round's listing goes to candidate.txt, and regate_scope.py decide writes scope.json: round 1 is
-     always full; a later round is focused only when the change since the last full round (or, after a
-     hotfix, since the accepted candidate) is contained (see regate_scope.py). The progress log says which
-     kind of round runs and why. A full round keeps a snapshot of the candidate's product files in
-     .evidence/gate/M<k>/full-candidate/, the "since" of a later focused round.
+     always full; a later round is focused only when the whole change since the last full round (whose
+     evaluator results are carried) is contained, for a CHANGES fix and a hotfix alike (see regate_scope.py).
+     The progress log says which kind of round runs and why. A full round keeps a snapshot of the
+     candidate's product files in .evidence/gate/M<k>/full-candidate/, the "since" of a later focused round.
   1. copies: gate_copies.py make (review, demo, blind; a focused round removes the blind copy at once, since
      no evaluator runs in it); a FAIL skips every model review
   2. deterministic layer, written to layer1.json: gate.sh on the project, milestone_lint.py, intent_lock.py
      verify, rulings.py check, inbox.py check (no item dropped without a decision); then in the review copy,
-     each through the heavy lock: the labeled install (only when the copy holds no dependency folder:
-     gate_copies.py copies node_modules, .venv, venv, .yarn, Pods, and "Dependency folders" whole, so a
-     project installed in place needs none, and an install could rewrite the lockfile under review),
-     typecheck, lint, and build commands, the labeled test command, every "check:" of every earlier accepted
-     or gate-passed milestone in milestone order and then this milestone's own ("checkpoint M1.C2"; a check
-     that is prose, a manual probe, needs a running server, or exits 126 or 127 is SKIP and listed in
-     layer1.json's for_reviewer), the test file each wiring row of those milestones names (a missing test on a
-     proven or wired row is FAIL "wiring test missing"; running it is the test command's job), the "Gate
-     command" and "Design lint" from gate.md, and last "tree unchanged"; a FAIL skips every model review
+     each through the heavy lock: the labeled typecheck, lint, and build commands, the labeled test command,
+     every "check:" of every earlier accepted or gate-passed milestone in milestone order and then this
+     milestone's own ("checkpoint M1.C2"; a check that is prose (its words outside quotes, split on
+     punctuation, so a note in parentheses counts), a manual probe, needs a running server, is rejected by
+     `sh -n`, or exits 126 or 127 because its first word cannot be found, is SKIP and listed in layer1.json's
+     for_reviewer; a 126 or 127 from inside a runner that was found is FAIL), the test file each wiring row of
+     those milestones names and each contract test interfaces.md gives them (Contract test: <path> (owned by
+     M<j>)): PASS "exists", and listed in for_reviewer to run, or FAIL "wiring test missing" / "contract test
+     missing" (a wiring row only when proven or wired), the "Gate command" and "Design lint" from gate.md, then
+     "review copy unchanged" (the candidate's product files in the review copy hash as before layer 1: a lint
+     --fix or a lockfile rewrite would change what the reviewer reviews; build output outside them is ignored)
+     and last "tree unchanged" (the real project); a FAIL skips every model review. The labeled install never
+     runs (an install outside the checker's sandbox can rewrite the owner's environment): gate_copies.py copies
+     node_modules, .venv, venv, .yarn, Pods, and "Dependency folders" whole, and when the copy holds none the
+     install is SKIP and listed in for_reviewer, to run inside the reviewer's sandbox
   3. code-verifier on the review copy, with layer1.json in its pack, on the model family other than the
      builder's by default: a Claude Code builder gets --family auto (Codex when it can serve, else Claude, the
      switch recorded); a Codex builder (CODEX_THREAD_ID set, see session_env.py) gets Claude. --family
@@ -37,7 +47,7 @@ Order:
   4. loyal-evaluator on the blind copy, pass 1 (persona and commands), then pass 2 in the same session (the
      goal); a random canary token planted in the real project must never appear in its transcript. A
      focused round runs no evaluator: the last full round's results are CARRIED (scope.json names them).
-  5. the demo: code-verifier in demo mode on the untouched demo copy
+  5. the demo: code-verifier in demo mode on the untouched demo copy (with --full, every regression ending)
   6. gate-judge on a verdict folder holding copies of every result and capture (in a focused round, also
      carried-loyal-evaluator.result.md, carried-loyal-evaluator-pass2.result.md, and scope.json)
   7. gate_report.py computes the verdict; the copies are deleted (their manifest stays in the evidence). An
@@ -75,7 +85,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from fingerprint import fingerprint  # noqa: E402
+from fingerprint import file_hash, fingerprint  # noqa: E402
 from gate_copies import DEP_DIRS, clone, resolution_probe, rewrite_paths  # noqa: E402
 from gate_keys import commands, read_keys  # noqa: E402
 from languages import CODE  # noqa: E402
@@ -108,6 +118,13 @@ TOOLS = {"python", "python3", "pytest", "py.test", "node", "npm", "npx", "pnpm",
          "mix", "dart", "flutter", "zig", "cmake", "ctest", "ninja", "bazel", "grep", "test", "diff", "cmp", "jq",
          "ls", "cat", "wc", "sqlite3", "shellcheck", "true", "false"}
 SERVER = re.compile(r"localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]")
+QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+# The shell's own words: a first word that is one of these is always found, so its 127 came from inside.
+SHELL_WORDS = {"cd", "export", "source", ".", "[", "test", "true", "false", "echo", "printf", "set", "exec", "eval",
+               "command", "env", "exit", "unset", "type", ":", "time", "!", "if", "for", "while", "until", "case",
+               "(", "{", "builtin", "nice", "nohup", "timeout"}
+CONTRACT_TEST = re.compile(r"^Contract test:\s*`?([^`\s(]+)`?\s*\(owned by (M\d+)", re.M)  # as milestone_lint.py reads it
+REVIEW_RUNS = "the gate checked it exists; run it"
 SERVER_WORDS = {"serve", "server", "dev", "start", "watch", "--watch", "runserver", "uvicorn", "gunicorn", "nodemon"}
 
 
@@ -176,7 +193,7 @@ def run(cmd, cwd=None, timeout=None):
     try:
         # No step reads this runner's input: a check that waits for a keypress fails at once instead of hanging.
         CHILD = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE, text=True, start_new_session=True)
+                                 stderr=subprocess.PIPE, text=True, errors="replace", start_new_session=True)
     except FileNotFoundError as exc:
         return 127, str(exc)
     try:
@@ -237,6 +254,50 @@ def checkpoint_plan(ms_text, mid):
     return plan
 
 
+def bare_words(cmd):
+    """The words of cmd outside its quoted strings, split on whitespace and punctuation, lower-cased: a note such
+    as "(all green)" reads as the words it holds, while a quoted program text is never taken for prose."""
+    text = QUOTED.sub(" ", cmd)
+    return [w.rstrip(".").lower() for w in re.split(r"[\s,;:()!?\[\]{}]+", text) if w.rstrip(".")]
+
+
+def shell_rejects(cmd):
+    """What `sh -n` (parse, never run) says against cmd, or None when it parses."""
+    try:
+        r = subprocess.run(["/bin/sh", "-n", "-c", cmd], capture_output=True, text=True, errors="replace",
+                           stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode == 0:
+        return None
+    return ((r.stderr or "").strip().splitlines() or [f"sh -n exit {r.returncode}"])[-1][:160]
+
+
+def first_word(cmd):
+    """The command a shell line runs first (after any VAR=value assignments), or None."""
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return None
+    while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]):
+        tokens.pop(0)
+    return tokens[0] if tokens else None
+
+
+def command_found(cmd, cwd):
+    """True when the first word of cmd can be found: a shell word, a path that exists (relative to cwd), or a
+    program on PATH. Only when it cannot is an exit 126 or 127 "not a runnable command"."""
+    first = first_word(cmd)
+    if first is None:
+        return False
+    if first in SHELL_WORDS:
+        return True
+    if "/" in first:
+        path = Path(first).expanduser()
+        return (path if path.is_absolute() else Path(cwd) / path).exists()
+    return shutil.which(first) is not None
+
+
 def runnable(check, cmds):
     """(command, None) when a check: reads as a shell command the deterministic layer can run, else (None, why).
     Prose, a manual probe, an expectation beyond the exit status, or a check that needs a running server goes to
@@ -261,7 +322,7 @@ def runnable(check, cmds):
     except ValueError:
         return None, "it does not parse as a shell command"
     low = [t.lower() for t in tokens]
-    hits = [t for t in low if t in prose]
+    hits = [w for w in bare_words(cmd) if w in prose]
     if hits:
         return None, f"it reads as prose ({', '.join(hits[:4])})"
     if any(SERVER.search(t) for t in low) or set(low) & SERVER_WORDS or cmd in (cmds.get("run"), cmds.get("demo")):
@@ -272,19 +333,25 @@ def runnable(check, cmds):
     if i == len(tokens):
         return None, "it names no command"
     first = tokens[i]
-    if "/" in first or first in TOOLS:
-        return cmd, None
-    if shutil.which(first) and any(t.startswith("-") or "/" in t or t in ("&&", "||", "|", ";", ">")
-                                   for t in tokens[i + 1:]):
-        return cmd, None
-    return None, f"{first} is not a command the deterministic layer recognizes"
+    if not ("/" in first or first in TOOLS or
+            (shutil.which(first) and any(t.startswith("-") or "/" in t or t in ("&&", "||", "|", ";", ">")
+                                         for t in tokens[i + 1:]))):
+        return None, f"{first} is not a command the deterministic layer recognizes"
+    rejected = shell_rejects(cmd)
+    if rejected:
+        return None, f"the shell rejects it as a command (sh -n: {rejected})"
+    return cmd, None
 
 
 def test_paths(cell):
-    """The paths a wiring row's Test cell names (a pytest node id or file:line reduced to the file)."""
+    """The paths a wiring row's Test cell names (a pytest node id or file:line reduced to the file): a backticked
+    path whole (it may hold spaces), and the rest of the cell split on commas, each part without a trailing
+    parenthesized note."""
+    raws = [s.strip() for s in re.findall(r"`([^`]+)`", cell)]
+    raws += [re.sub(r"\s*\([^()]*\)$", "", s.strip()) for s in re.sub(r"`[^`]*`", ",", cell).split(",")]
     out = []
-    for raw in re.split(r"[,;\s]+", cell.replace("`", " ")):
-        t = re.sub(r"::.*$", "", raw.strip("'\"()[]").rstrip(".:"))
+    for raw in raws:
+        t = re.sub(r"::.*$", "", raw.strip().strip("'\"()[]").rstrip(".:"))
         t = re.sub(r":\d+(?::\d+)?$", "", t).split("#", 1)[0]
         while t.startswith("./"):
             t = t[2:]
@@ -312,9 +379,20 @@ def wiring_plan(ms_text, mid):
     return plan
 
 
+def contract_plan(project, ms_text, mid):
+    """(owner, path) for each contract test interfaces.md gives the milestones layer 1 covers."""
+    p = Path(project) / "docs/project/interfaces.md"
+    if not p.is_file():
+        return []
+    covered = [m for m, _ in layer1_milestones(ms_text, mid)]
+    rows = CONTRACT_TEST.findall(p.read_text(encoding="utf-8", errors="replace"))
+    return [(owner, path) for m in covered for path, owner in rows if owner == m]
+
+
 def install_needed(review, keys):
     """(needed, why): gate_copies.py copies the dependency folders whole (paths rewritten), so the copy needs an
-    install only when it holds none; an install over copied dependencies could rewrite the lockfile under review."""
+    install only when it holds none. Layer 1 never runs the install itself (outside the checker's sandbox it can
+    rewrite the owner's environment); when one is needed the reviewer runs it inside its sandbox."""
     names = {d.rstrip("/") for d in (*DEP_DIRS, *(keys.get("Dependency folders") or []))}
     held, level = [], [review]
     for _ in range(3):  # the copy's root, and a workspace's packages one or two folders down
@@ -361,7 +439,9 @@ def layer1(r, review, keys):
         r.say(f"  {status:<5} {name}" + (f" ({said})" if said else f" exit {code}"))
         return status
 
-    before, _ = fingerprint(r.project, "product")
+    before, rows = fingerprint(r.project, "product")
+    candidate_rows = [rel for rel, h in rows if h != "deleted"]
+    copy_before = {rel: file_hash(review / rel) for rel in candidate_rows}
     gate_sh = HERE.parent / "gate.sh"
     code, out = heavy(f"bash {shlex.quote(str(gate_sh))} {shlex.quote(str(r.project))}", r.project)
     record("gate.sh", code, out)
@@ -377,10 +457,14 @@ def layer1(r, review, keys):
             continue  # a project without this label has nothing to run here
         if label == "install":
             needed, why = install_needed(review, keys)
-            extra_out["install"] = {"ran": needed, "reason": why}
+            extra_out["install"] = {"ran": False, "reason": why}
             if not needed:
                 r.say(f"  -     install not run: {why}")
                 continue
+            skip = "the copy has no dependencies; the reviewer installs inside its sandbox"
+            record(label, None, f"{cmd}\n", skip_reason=skip, command=cmd)
+            for_reviewer.append({"milestone": r.mid, "id": "install", "what": cmd, "why": skip})
+            continue
         record(label, *heavy(cmd, review), command=cmd)
     if cmds.get("test"):
         record("test suite", *heavy(cmds["test"], review))
@@ -393,31 +477,48 @@ def layer1(r, review, keys):
         cmd, why = runnable(text, cmds)
         if cmd:
             code, out = heavy(cmd, review)
-            if code not in (126, 127):
-                record(name, code, out, milestone=m, command=cmd)
+            if code not in (126, 127) or command_found(cmd, review):
+                record(name, code, out, milestone=m, command=cmd)  # a 127 from inside a found runner is its own
                 continue
-            why = f"exit {code}: the shell could not run it as a command"
+            why = f"exit {code}: its first word ({first_word(cmd)}) cannot be found, so it is not a command here"
         record(name, None, text, skip_reason=f"not a runnable command: {why}", milestone=m, check=text)
         for_reviewer.append({"milestone": m, "id": cid, "what": text, "why": why})
     for m, component, row_status, paths in wiring_plan(ms_text, r.mid):
         for p in paths:
             name = f"wiring test {m} {component}" + (f" ({p})" if len(paths) > 1 else "")
             if (review / p).exists():
-                if cmds.get("test"):
-                    record(name, 0, f"{p} exists; covered by the test suite command\n",
-                           detail="covered by the test suite command", milestone=m, test=p)
-                else:
-                    record(name, None, "", skip_reason=f"{p} exists, but AGENTS.md has no test command that runs it",
-                           milestone=m, test=p)
+                # The gate checks it exists; whether the test suite command reaches it is not known, so the
+                # reviewer runs it.
+                record(name, 0, f"{p} exists\n", detail="exists", milestone=m, test=p)
+                for_reviewer.append({"milestone": m, "id": f"wiring {component}", "what": f"run the test {p}",
+                                     "why": REVIEW_RUNS, "test": p})
             elif row_status in ("proven", "wired"):
                 record(name, 1, f"wiring test missing: {p} is not in the review copy, yet the row is {row_status}\n",
                        detail=f"wiring test missing: {p}", milestone=m, test=p)
             else:
                 record(name, None, "", skip_reason=f"{p} is not there yet; the row is {row_status}, not proven or "
                        "wired", milestone=m, test=p)
+    for owner, p in contract_plan(r.project, ms_text, r.mid):
+        name = f"contract test {owner} ({p})"
+        if (review / p).exists():
+            record(name, 0, f"{p} exists\n", detail="exists", milestone=owner, test=p)
+            for_reviewer.append({"milestone": owner, "id": "contract test", "what": f"run the contract test {p}",
+                                 "why": REVIEW_RUNS, "test": p})
+        else:
+            record(name, 1, f"contract test missing: {p} (interfaces.md, owned by {owner}) is not in the review copy\n",
+                   detail=f"contract test missing: {p}", milestone=owner, test=p)
     for label in ("Gate command", "Design lint"):
         if keys.get(label):
             record(label, *heavy(keys[label], review))
+    changed = [rel for rel in candidate_rows if file_hash(review / rel) != copy_before[rel]]
+    if changed:
+        named = ", ".join(changed[:10]) + (f" and {len(changed) - 10} more" if len(changed) > 10 else "")
+        record("review copy unchanged", 1, f"review copy changed: {named}. A command of the deterministic layer "
+               "rewrote the candidate's files in the review copy (a lint --fix, a formatter, a lockfile rewrite, a "
+               "test writing into the tree), so the copy the reviewer would read is no longer the frozen candidate\n",
+               detail=f"review copy changed: {named}")
+    else:
+        record("review copy unchanged", 0, f"the {len(candidate_rows)} candidate files hash as before layer 1\n")
     after, _ = fingerprint(r.project, "product")
     if after != before:
         record("tree unchanged", 1, f"the product files changed while the deterministic layer ran ({before} -> {after}): "
@@ -554,7 +655,7 @@ def decide_scope(r, force_full):
     scope = regate_scope.load(out) if code == 0 else None
     if not isinstance(scope, dict) or scope.get("scope") not in ("focused", "full"):
         scope = {"scope": "full", "milestone": r.mid, "kind": None, "since": None, "changed_files": [],
-                 "changed_lines": 0, "delta_patch": None, "findings": [], "fixes": [], "carried": {},
+                 "changed_lines": 0, "delta_patch": None, "reverify": None, "findings": [], "fixes": [], "carried": {},
                  "reasons": [f"regate_scope.py could not decide (exit {code}: {text.strip()[-200:]}), so the round "
                              "is full"]}
         out.write_text(json.dumps(scope, indent=2))
@@ -576,6 +677,15 @@ def main(argv):
         return 2
     mid = opts["--milestone"]
     intent_only = "--intent-only" in argv
+    if not intent_only:
+        sections = dict(regate_scope.milestones(project))
+        status = regate_scope.status_of(sections[mid]) if mid in sections else None
+        if status not in ("gate", "accepted"):
+            print(f"gate_run: {mid} " + (f"has Status {status or '(none)'}" if mid in sections else
+                                         "is not in docs/project/milestones.md") +
+                  "; a gate round runs only at Status gate (the freeze sets it) or accepted (a re-gate after a "
+                  "hotfix)", file=sys.stderr)
+            return 1
     lock = project / ".evidence/gate/round.running"
     fp, rows = fingerprint(project, "product")
     cand = candidate(project)
@@ -695,7 +805,8 @@ def main(argv):
             demo = Path(copies["demo"]["path"])
             if not intent_only:
                 r.say("demo:")
-                isolated(r, "code-verifier", demo, ["--project", str(project), "--milestone", mid, "--mode", "demo"],
+                isolated(r, "code-verifier", demo, ["--project", str(project), "--milestone", mid, "--mode", "demo"]
+                         + (["--replay-all"] if "--full" in argv else []),
                          extra=["--canary", token], mode="demo", route="code-verifier.demo")
             verdict_dir = Path(base) / "verdict"
             verdict_dir.mkdir()

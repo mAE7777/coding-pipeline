@@ -1,11 +1,13 @@
 """End-to-end test of gate_run.py with a stand-in `claude` (a test fixture, never product code)."""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills/_shared/scripts"
@@ -257,6 +259,9 @@ class GateRunTest(unittest.TestCase):
         return root
 
     def freeze(self, root):
+        """What /dev freeze does: the Candidate in state.md, and the milestone's Status back to gate after CHANGES."""
+        ms = root / "docs/project/milestones.md"
+        ms.write_text(ms.read_text().replace("Status: changes", "Status: gate", 1))
         fp = subprocess.run([sys.executable, str(SCRIPTS / "fingerprint.py"), str(root)], capture_output=True,
                             text=True).stdout.split()[0]
         (root / "docs/project/state.md").write_text(f"# State\n\n## Understanding\nAdd and show.\n\n## Candidate\n{fp}\n")
@@ -322,6 +327,26 @@ class GateRunTest(unittest.TestCase):
         out, verdict, ev = self.gate(root)
         self.assertEqual(verdict["verdict"], "CHANGES", out.stdout[-1500:])
         self.assertFalse((ev / "code-verifier.summary.json").exists(), "no model review after a deterministic FAIL")
+
+    def test_a_round_starts_only_at_status_gate_or_accepted(self):
+        root = self.prepare()
+        ms = root / "docs/project/milestones.md"
+        for status in ("planned", "building", "changes"):
+            ms.write_text(MILESTONES.replace("Status: gate", f"Status: {status}"))
+            out, verdict, ev = self.gate(root)
+            self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+            self.assertIn(f"M1 has Status {status}; a gate round runs only at Status gate", out.stderr)
+            self.assertIsNone(ev, "no round folder for a refused round")
+        out, _, _ = self.gate(root, flags=("--milestone", "M7"))
+        self.assertIn("M7 is not in docs/project/milestones.md", out.stderr)
+        env = {**self.env, "FAKE_MODE": "clean"}
+        out = subprocess.run([sys.executable, str(SCRIPTS / "gate_run.py"), str(root), "--milestone", "M1",
+                              "--intent-only", "--agents-dir", str(ROOT / "agents")],
+                             capture_output=True, text=True, env=env, timeout=600)
+        self.assertEqual(out.returncode, 0, "an intent check runs at any status: " + out.stderr[-500:])
+        ms.write_text(MILESTONES.replace("Status: gate", "Status: accepted"))
+        out, verdict, ev = self.gate(root)
+        self.assertIsNotNone(verdict, "accepted: a re-gate after a hotfix " + out.stderr[-500:])
 
     def test_not_frozen_refuses(self):
         root = self.prepare()
@@ -519,6 +544,10 @@ class GateRunTest(unittest.TestCase):
         scope = json.loads((ev / "scope.json").read_text())
         self.assertEqual((scope["scope"], scope["reasons"]), ("full", ["--full was given"]), scope)
         self.assertTrue((ev / "loyal-evaluator.summary.json").exists())
+        self.assertTrue(json.loads((ev / "code-verifier-demo.regression.json").read_text())["replay_all"],
+                        "--full replays every regression ending")
+        self.assertEqual((verdict["verdict"], verdict["replayed_all"], verdict["release_ready"]),
+                         ("ACCEPT-READY", True, True), out.stdout[-1500:])
 
     # ---- layer 1 ---------------------------------------------------------------------------------------------
     def test_layer1_runs_checkpoint_checks_and_hands_prose_to_the_reviewer(self):
@@ -530,7 +559,8 @@ class GateRunTest(unittest.TestCase):
         self.assertEqual(checks["checkpoint M1.C2"]["status"], "SKIP")
         self.assertIn("not a runnable command", checks["checkpoint M1.C2"]["reason"])
         self.assertEqual((checks["checkpoint M1.C3"]["status"], checks["checkpoint M1.C3"]["exit"]), ("FAIL", 4))
-        self.assertEqual([(i["milestone"], i["id"]) for i in layer1["for_reviewer"]], [("M1", "M1.C2")])
+        self.assertEqual([(i["milestone"], i["id"]) for i in layer1["for_reviewer"]],
+                         [("M1", "M1.C2"), ("M1", "wiring add command")])
         self.assertEqual(layer1["for_reviewer"][0]["what"], "add a then b, see a before b")
         names = [c["name"] for c in layer1["checks"]]
         self.assertLess(names.index("test suite"), names.index("checkpoint M1.C1"))
@@ -548,9 +578,10 @@ class GateRunTest(unittest.TestCase):
         self.assertEqual(verdict["verdict"], "CHANGES", out.stdout[-1500:])
         self.assertTrue(any("wiring test missing: tests/test_add.py" in r for r in verdict["reasons"]), verdict)
 
-    def test_build_labels_run_in_order_and_install_only_when_the_copy_lacks_dependencies(self):
+    def test_build_labels_run_in_order_and_the_install_goes_to_the_reviewer(self):
         root = self.prepare()
-        (root / "AGENTS.md").write_text("# Map\n\n## Commands\ninstall: python3 -c \"print('installed')\"\n"
+        marker = Path(self.tmp.name) / "installed"
+        (root / "AGENTS.md").write_text(f"# Map\n\n## Commands\ninstall: touch {marker}\n"
                                         "build: python3 -c \"print('built')\"\nlint: python3 -c \"print('linted')\"\n"
                                         "test: python3 -c \"print('tests ok')\"\nrun: python3 app.py\n")
         out, verdict, ev = self.gate(root)
@@ -558,7 +589,13 @@ class GateRunTest(unittest.TestCase):
         names = [c["name"] for c in layer1["checks"]]
         self.assertEqual([n for n in names if n in ("install", "typecheck", "lint", "build", "test suite")],
                          ["install", "lint", "build", "test suite"], "no typecheck label, nothing run for it")
-        self.assertTrue(layer1["install"]["ran"])
+        install = next(c for c in layer1["checks"] if c["name"] == "install")
+        self.assertEqual((install["status"], install["reason"]),
+                         ("SKIP", "the copy has no dependencies; the reviewer installs inside its sandbox"))
+        self.assertFalse(marker.exists(), "layer 1 never runs the install")
+        self.assertFalse(layer1["install"]["ran"])
+        self.assertIn(("M1", "install", f"touch {marker}"),
+                      [(i["milestone"], i["id"], i["what"]) for i in layer1["for_reviewer"]])
         (root / "node_modules").mkdir()
         (root / "node_modules/x.js").write_text("module.exports = 1\n")
         out, verdict, ev = self.gate(root)
@@ -566,6 +603,115 @@ class GateRunTest(unittest.TestCase):
         self.assertNotIn("install", [c["name"] for c in layer1["checks"]])
         self.assertFalse(layer1["install"]["ran"])
         self.assertIn("node_modules", layer1["install"]["reason"])
+
+
+class Layer1RunTest(unittest.TestCase):
+    """layer1() on a small project and its review copy, without a model run."""
+
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import gate_run
+        self.g = gate_run
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.env = mock.patch.dict(os.environ, {"HEAVY_LOCK_DIR": str(d / "lock")})
+        self.env.start()
+        for k in ("HEAVY_LOCK_HELD", "HEAVY_OWNER"):
+            os.environ.pop(k, None)
+        self.p = d / "proj"
+        (self.p / "docs/project").mkdir(parents=True)
+        (self.p / "src").mkdir()
+        (self.p / "src/app.py").write_text("x=1   \n")
+        (self.p / "test_app.py").write_text("assert True\n")
+        self.ev = d / "ev"
+        self.ev.mkdir()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def layer1(self, commands, checkpoints="- none", wiring="| add | t | s | v | f | test_app.py | proven |",
+               interfaces=None):
+        (self.p / "AGENTS.md").write_text("# Agents\n\n## Commands\n" + commands)
+        (self.p / "docs/project/milestones.md").write_text(
+            f"# Milestones\n\n## M1 \u00b7 store\nStatus: gate\nCheckpoints:\n{checkpoints}\n\nWiring:\n"
+            "| Component | Producer | Consumer | Visible | Failure | Test | Status |\n|---|---|---|---|---|---|---|\n"
+            f"{wiring}\n")
+        if interfaces:
+            (self.p / "docs/project/interfaces.md").write_text(interfaces)
+        review = Path(self.tmp.name) / "review"
+        shutil.rmtree(review, ignore_errors=True)
+        shutil.copytree(self.p, review)
+        ev = self.ev
+
+        class R:
+            project, mid = self.p, "M1"
+
+            def __init__(self):
+                self.ev = ev
+
+            def say(self, msg):
+                pass
+        self.g.layer1(R(), review, {})
+        doc = json.loads((self.ev / "layer1.json").read_text())
+        return {c["name"]: c for c in doc["checks"]}, doc["for_reviewer"], review
+
+    def test_a_command_that_rewrites_the_review_copy_fails(self):
+        (self.p / "fixlint.py").write_text(
+            "import pathlib\nf = pathlib.Path('src/app.py')\nf.write_text(f.read_text().rstrip() + '\\n')\n"
+            "pathlib.Path('dist').mkdir(exist_ok=True)\npathlib.Path('dist/out.js').write_text('built')\n")
+        checks, _, review = self.layer1("- lint: python3 fixlint.py --fix\n- test: python3 -c 0\n")
+        self.assertEqual(checks["lint"]["status"], "PASS")
+        self.assertEqual((checks["review copy unchanged"]["status"], checks["review copy unchanged"]["detail"]),
+                         ("FAIL", "review copy changed: src/app.py"), "build output (dist/) is ignored")
+        self.assertEqual(checks["tree unchanged"]["status"], "PASS", "the real project was not touched")
+        checks, _, _ = self.layer1("- lint: python3 -c 0\n- test: python3 -c 0\n")
+        self.assertEqual(checks["review copy unchanged"]["status"], "PASS")
+
+    def test_checkpoints_skip_only_what_cannot_run_as_a_command(self):
+        (self.p / "run_e2e.sh").write_text("no-such-tool-anywhere test\n")
+        checks, todo, _ = self.layer1("- test: python3 -c 0\n", checkpoints=(
+            "- M1.C1 a \u00b7 why here: x \u00b7 check: python3 -c 'import sys; sys.exit(0)' (all green)\n"
+            "- M1.C2 b \u00b7 why here: x \u00b7 check: `python3 -c \"print(1)\" (fast)`\n"
+            "- M1.C3 c \u00b7 why here: x \u00b7 check: `bash run_e2e.sh`\n"
+            "- M1.C4 d \u00b7 why here: x \u00b7 check: `./scripts/not-there.sh`\n"
+            "- M1.C5 e \u00b7 why here: x \u00b7 check: python3 -c 'import sys; sys.exit(0)'"))
+        c = {k[len("checkpoint "):]: v for k, v in checks.items() if k.startswith("checkpoint ")}
+        self.assertEqual((c["M1.C1"]["status"], c["M1.C1"]["reason"]),
+                         ("SKIP", "not a runnable command: it reads as prose (all, green)"))
+        self.assertEqual(c["M1.C2"]["status"], "SKIP")
+        self.assertIn("the shell rejects it as a command (sh -n:", c["M1.C2"]["reason"])
+        self.assertEqual((c["M1.C3"]["status"], c["M1.C3"]["exit"]), ("FAIL", 127), "a tool missing inside a runner")
+        self.assertEqual(c["M1.C4"]["status"], "SKIP")
+        self.assertIn("its first word (./scripts/not-there.sh) cannot be found", c["M1.C4"]["reason"])
+        self.assertEqual(c["M1.C5"]["status"], "PASS", "quoted program text is never prose")
+        self.assertEqual([i["id"] for i in todo if i["id"].startswith("M1.C")], ["M1.C1", "M1.C2", "M1.C4"])
+
+    def test_wiring_and_contract_tests_are_checked_to_exist_and_handed_to_the_reviewer(self):
+        (self.p / "tests/contract").mkdir(parents=True)
+        (self.p / "tests/contract/test_store port.py").write_text("assert True\n")
+        interfaces = ("# Interfaces\n## Ports\n### Store\nContract test: `tests/contract/test_store.py` (owned by M1)\n"
+                      "### Other\nContract test: tests/contract/test_other.py (owned by M2)\n")
+        checks, todo, _ = self.layer1("- test: python3 -c 0\n", interfaces=interfaces, wiring=(
+            "| add | t | s | v | f | `tests/contract/test_store port.py`, test_app.py (unit) | proven |"))
+        self.assertEqual(checks["wiring test M1 add (tests/contract/test_store port.py)"]["detail"], "exists")
+        self.assertEqual(checks["wiring test M1 add (test_app.py)"]["status"], "PASS")
+        self.assertEqual((checks["contract test M1 (tests/contract/test_store.py)"]["status"],
+                          checks["contract test M1 (tests/contract/test_store.py)"]["detail"]),
+                         ("FAIL", "contract test missing: tests/contract/test_store.py"))
+        self.assertNotIn("contract test M2 (tests/contract/test_other.py)", checks, "M2 is not a milestone layer 1 covers")
+        self.assertEqual([(i["id"], i["test"], i["why"]) for i in todo],
+                         [("wiring add", "tests/contract/test_store port.py", "the gate checked it exists; run it"),
+                          ("wiring add", "test_app.py", "the gate checked it exists; run it")])
+        (self.p / "tests/contract/test_store.py").write_text("assert True\n")
+        checks, todo, _ = self.layer1("- test: python3 -c 0\n", interfaces=interfaces)
+        self.assertEqual(checks["contract test M1 (tests/contract/test_store.py)"]["detail"], "exists")
+        self.assertIn(("M1", "contract test", "tests/contract/test_store.py"),
+                      [(i["milestone"], i["id"], i["test"]) for i in todo])
+
+    def test_output_that_is_not_utf8_is_read_with_replacements(self):
+        code, out = self.g.run(["/bin/sh", "-c", "printf 'caf\\351\\n'; exit 1"])
+        self.assertEqual((code, out), (1, "caf\ufffd\n"))
 
 
 class Layer1PlanTest(unittest.TestCase):
@@ -588,6 +734,13 @@ class Layer1PlanTest(unittest.TestCase):
         self.assertEqual([c[1] for c in self.g.checkpoint_plan(text, "M4")], ["M1.C1", "M3.C1", "M4.C1"])
         self.assertEqual(self.g.wiring_plan(text, "M4"), [("M4", "add", "wired", ["tests/test_add.py"])])
         self.assertEqual(self.g.checkpoint_plan(text, "M9"), [])
+
+    def test_a_backticked_test_path_is_taken_whole_and_plain_cells_split_on_commas(self):
+        self.assertEqual(self.g.test_paths("`tests/ui flows/test_add.py`"), ["tests/ui flows/test_add.py"])
+        self.assertEqual(self.g.test_paths("tests/test_a.py, tests/test_b.py::test_x (unit), n/a"),
+                         ["tests/test_a.py", "tests/test_b.py"])
+        self.assertEqual(self.g.test_paths("`e2e/add flow.spec.ts`, tests/test_a.py:12"),
+                         ["e2e/add flow.spec.ts", "tests/test_a.py"])
 
     def test_commands_run_and_prose_goes_to_the_reviewer(self):
         cmds = {"run": "python3 app.py", "demo": "npm run demo"}
