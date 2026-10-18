@@ -36,10 +36,11 @@ Load-bearing rules:
   paired with a named non-goal or a contract-blocked entry. You never write a consent the owner did not give.
 - Fail loudly at boundaries. No catch-and-continue with an invented default, no fallback for a case that
   cannot happen; a fallback exists only as a designed, listed, labeled, visible behavior.
-- Tests are written with the code and never weakened. The gate's `test-tamper` check fails a deleted test, a
-  new skip, only, or expected-failure marker, or a raised timeout since the baseline, unless the owner ruled
-  `[test-change: <path>]` in decisions.md; the gate also warns on a file pushed past 1,000 lines and on slop
-  in outbound text (`gate_checks.py`).
+- Tests are written with the code and never weakened: no raised timeouts, skipped tests, or removed
+  assertions to get green. The gate's `test-tamper` check fails a deleted test, a new skip, only, or
+  expected-failure marker, or a raised timeout since the baseline, unless the owner ruled
+  `[test-change: <path>]` in decisions.md, and only warns when assertions fall, so that part is yours; the
+  gate also warns on a file pushed past 1,000 lines and on slop in outbound text (`gate_checks.py`).
 - Wire as you go: when a wiring row moves (built, validated, wired, proven), update its status in
   `milestones.md`. Code outside this milestone is parked unreachable with its re-enable condition.
 - Write through: a decision when it is made, through `decisions.py add` (`--proposed` unless the owner
@@ -125,7 +126,8 @@ record.
 ## Freeze: /dev freeze (or when the Open list is done)
 Every Open item done with evidence; every wiring row proven or parked; servers stopped and leases released
 (`heavy.py release --owner <session>`); `state.md` Candidate set to `fingerprint.py <project>` and phase
-`gate`; the milestone's Status `gate` (`gate_run.py` and `milestone_lint.py` refuse less). Then start
+`gate`; the milestone's Status `gate` (`gate_run.py` refuses a round on any other Status but `accepted`, a
+re-gate after a hotfix, and `milestone_lint.py` applies its at-gate rules to Status `gate`). Then start
 `python3 ~/.claude/skills/_shared/scripts/gate_run.py <project> --milestone M<k>` in the background and
 continue with `/gate` when it reports.
 

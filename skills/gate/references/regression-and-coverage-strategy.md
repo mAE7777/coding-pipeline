@@ -8,11 +8,11 @@ Every command you run here (a test, a simulator, a probe script) goes through th
 
 ## Section 1: Read Layer 1 First, Then Run Only What It Did Not
 
-Read `layer1.json` in your pack before anything else. The gate's deterministic layer already ran the labeled install, typecheck, lint, build, and test suite, and every checkpoint check of this and every earlier milestone, and checked the test paths the wiring rows name. Do not run them again: a re-run costs a slot on the machine lock and proves nothing the gate has not. You run only after layer 1 passed; a SKIP there carries its reason.
+Read `layer1.json` in your pack before anything else. The gate's deterministic layer already ran the labeled typecheck, lint, build, and test suite, and every runnable checkpoint check of this and every earlier milestone, and checked that the wiring-row and contract test paths exist. Do not run what it ran again: a re-run costs a slot on the machine lock and proves nothing the gate has not. You run only after layer 1 passed; a SKIP there carries its reason.
 
 What you run:
 
-1. **The items layer 1 lists under "Not run by the gate"**, in milestone order (M1's, then M2's, and so on).
+1. **The items layer 1 lists under "Not run by the gate"**, in milestone order (M1's, then M2's, and so on): the wiring-row and contract tests (layer 1 only checked that they exist), any checkpoint check it could not run, and the install when the copy has no dependencies.
 2. **What probes this milestone's contract**: its done examples, the carried done examples, the must-not-lose items it touches, and its wiring rows (Section 2 maps them).
 3. **Cross-milestone interaction checks**: new checks that M{k} does not break earlier milestones (Section 3 has the patterns and the missed-integration checklist).
 

@@ -464,8 +464,17 @@ elif [ -e .git ]; then
       -e 'decisions\.py|reentry_digest|regate_scope|shadow_diff\.py|pr_watch\.py|craft_sync|\.pipeline-models|\.pipeline-shadow' \
       2>/dev/null | head -5 | tr '\n' ' ')
   fi
+  MT=""
+  if [ -n "$TRACKED" ]; then
+    # Model and coding-agent names: a WARN, since a product built on a model may name it in its own decisions.
+    MT=$(printf '%s\n' "$TRACKED" | tr '\n' '\0' | xargs -0 grep -liE \
+      -e 'claude-(opus|sonnet|haiku|fable|mythos)|claude code|(^|[^a-z])codex([^a-z]|$)|(^|[^a-z])gpt-[0-9]' \
+      2>/dev/null | head -5 | tr '\n' ' ')
+  fi
   if [ -n "${PT// /}" ]; then
     report FAIL pipeline-traces "tooling names in committed build-record files (keep them in local-only files): $PT"
+  elif [ -n "${MT// /}" ]; then
+    report WARN pipeline-traces "committed build-record files name a model or coding agent (files that name them stay local, unless the product itself is built on that model): $MT"
   else
     report PASS pipeline-traces "committed build-record files carry no tooling names"
   fi

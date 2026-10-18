@@ -32,7 +32,9 @@ can enforce is enforced by a script or a hook rather than asked for in prose.
    from files, so isolation never depends on prompt text or on the builder's wording.
 4. **Nothing silent.** Every non-success has a name and a count; every built part is wired and proven, or
    parked and unreachable; every fact carries its source and date; evidence from another fingerprint is STALE,
-   unless a script proves the change since that fingerprint lies outside what the evidence covered.
+   unless a script shows the change since that fingerprint is contained (regate_scope.py: only the files the
+   open findings name, or tests; small; nothing intent-bearing) and the judge finds it cannot change what that
+   evidence observed.
 5. **Enough context, within the owner's budget.** Every load-bearing point is read and checked; a detail that
    decides nothing stays one lookup away in the verbatim sources rather than being read again and again. Every
    loop (audits, cold reads, the fix loop) ends when a pass finds nothing material, never at a count; a count
@@ -108,4 +110,5 @@ Commits, READMEs, changelogs, and shipped text read as written by a human develo
 traces, no skill or agent names, and no spaced em-dashes. The writing standard is `craft/writing/unslop.md`
 and `craft/writing/technical-writing.md`; `gate.sh` prose-lint WARNs on what it can see. Committed planning
 files use neutral labels (`[owner <date>]`, `[proposed]`, `[research <ref> <grade>]`, `[environment <date>]`);
-`gate.sh` pipeline-traces FAILs a committed record file that names a pipeline tool.
+files that name models and tools stay local. `gate.sh` pipeline-traces FAILs a committed record file that names
+a pipeline tool and WARNs on one that names a model or a coding agent.

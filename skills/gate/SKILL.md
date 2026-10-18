@@ -33,19 +33,26 @@ Scripts: `~/.claude/skills/_shared/scripts/`.
 
 ## What a round runs
 - **Scope.** Round 1 is full. `gate_run.py` decides each later round with `regate_scope.py decide` (the
-  reasons are in the round's `scope.json`). A round is focused only when all of these hold:
-  - every file changed since the last candidate is named in an open blocking finding (its `files`), or in a
-    hotfix's fix-log entry, or is a test file;
-  - the change is under about 150 lines;
+  reasons are in the round's `scope.json`). A round is focused only when all of these hold, measured over the
+  whole change since the last full round:
+  - every changed file is named in a finding that blocked since then (its `files`), or in a fix-log entry
+    since the acceptance (a hotfix), or is a test file;
+  - the change is under about 150 lines, every changed file readable as text;
   - no changed file is intent-bearing (gate.md's Intent-bearing paths), a dependency manifest, a lockfile,
-    or a migration.
-  Otherwise the round is full. The final milestone is always full; `gate_run.py --full` forces a full round.
-- **A focused round** runs the full deterministic layer, the code-verifier re-verifying the open findings
-  (each one's `fixed_when`) on the delta, the demo, and the judge. The blind evaluator's result is carried
-  from the last full round, labeled CARRIED with the fingerprint it ran on.
-- **The deterministic layer** (`layer1.json`) runs gate.sh, the record checks, the labeled install,
-  typecheck, lint, build, and test suite, every earlier and current checkpoint check, and checks the test
-  paths the wiring rows name. The reviewer reads `layer1.json` and does not run them again.
+    a migration, or build or CI configuration.
+  Otherwise the round is full. The final milestone's build rounds are always full (a hotfix round after its
+  acceptance may be focused). `gate_run.py --full` forces a full round that replays every earlier milestone's
+  demo ending; a round that did, or a focused hotfix round after an acceptance that did, is release ready
+  (`release_ready` in `verdict.json`, which /deploy requires).
+- **A focused round** runs the full deterministic layer, the code-verifier re-verifying every finding that
+  blocked since the last full round (each one's `fixed_when`, so an undone fix is caught) on the delta, the
+  demo, and the judge. The blind evaluator's result is carried from the last full round, labeled CARRIED
+  with the fingerprint it ran on.
+- **The deterministic layer** (`layer1.json`) runs gate.sh, the record checks, the labeled typecheck, lint,
+  build, and test suite, every runnable earlier and current checkpoint check, checks that the wiring-row and
+  contract test paths exist, and fails when a command changed the review copy. The reviewer reads
+  `layer1.json`, does not run those again, and runs what it lists under "Not run by the gate" (the wiring and
+  contract tests among them).
 - **gate.sh's change checks** (`gate_checks.py`, against the milestone's baseline): `test-tamper` FAILs a
   deleted test, a new skip, only, or expected-failure marker, or a raised timeout, unless the owner ruled
   `[test-change: <path>]` in decisions.md; `file-growth` WARNs on a code file pushed past 1,000 lines;
@@ -88,7 +95,7 @@ milestone's table, document consistency, docs and changelog, accessibility and p
 
 ## Status: /gate status
 The latest round per milestone from `docs/project/reviews/`, the open findings from the ledgers, and
-whether a round is running (`.evidence/gate/M<k>.running`).
+whether a round is running (`.evidence/gate/round.running`).
 
 ## The protocols the checkers use
 `references/interface-baseline.md` (every user interface: the floor under any style, and the clarity pass),

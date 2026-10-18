@@ -86,7 +86,8 @@ class GateShTest(unittest.TestCase):
                                                 "The extension talks to Claude Code through a subagent.\n")
             subprocess.run(["git", "-C", d, "add", "docs/project/interfaces.md"], check=True, env=GIT_ENV)
             out = gate(d)
-            self.assertIn("PASS   pipeline-traces", out.stdout, "product routes and product words are not tooling")
+            self.assertNotIn("FAIL   pipeline-traces", out.stdout, "product routes and product words are not tooling")
+            self.assertIn("WARN   pipeline-traces", out.stdout, "naming the model or agent a product is built on warns")
             (docs / "decisions.md").write_text("## D-002\nAccepted after /gate M1 and /plan adopt.\n")
             out = gate(d)
             self.assertIn("FAIL   pipeline-traces", out.stdout)
@@ -123,6 +124,13 @@ class GateShTest(unittest.TestCase):
             (docs / "decisions.md").write_text("## D-004\nThe ledger's tables live in models.py and its routing "
                                                "in models.json; the decisions page lists every decision.\n")
             self.assertIn("PASS   pipeline-traces", gate(d).stdout, "ordinary product names pass")
+            # a model or coding-agent name is a WARN: such files stay local, unless the product is built on it
+            for named in ("Reviewed by Codex.", "Drafted in Claude Code.", "The judge ran on claude-opus-5-5.",
+                          "Compared against GPT-5 output."):
+                (docs / "decisions.md").write_text(f"## D-005\n{named}\n")
+                self.assertIn("WARN   pipeline-traces", gate(d).stdout, named)
+            (docs / "decisions.md").write_text("## D-006\nThe codexes and the gpt column of the import stay.\n")
+            self.assertIn("PASS   pipeline-traces", gate(d).stdout, "words that merely contain the names pass")
 
     def test_a_record_file_git_ignores_is_named(self):
         import tempfile

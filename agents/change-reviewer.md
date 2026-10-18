@@ -55,4 +55,5 @@ or a quoted line with path:line). Never comment on style, naming, or formatting.
 Put the JSON block last, after a short prose summary. Every claim cites what you ran or read this session.
 Your fields decide, not your headline: evolve.py (review_problems) refuses the change unless the cause is
 FIXED, the reproduction FAITHFUL, the workaround not WAVED-AWAY, nothing weakened, kind_ok true, and no finding
-high or medium; run_isolated.py makes a run that used no tool INCONCLUSIVE.
+high or medium, and unless your run ended OK. If you ran no tool at all, say so and answer CHANGES with root
+cause UNCLEAR.

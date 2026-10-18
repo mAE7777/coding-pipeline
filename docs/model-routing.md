@@ -81,7 +81,7 @@ least 30 item-trials per side; the column gives the count at `--runs 5`.
 | `cold-reader.extract` | cold-reader-extract-planted (9) | 45 | cold-reader-extract-clean | |
 | `cold-reader.fidelity` | cold-reader-fidelity-planted (4) | 20 | cold-reader-fidelity-clean | no candidate |
 | `cold-reader.refidelity` | none: the fidelity fixtures render without `--previous`, so they serve `cold-reader.fidelity` | 0 | none | a planted and a clean re-audit fixture |
-| `claim-verifier` | claim-verifier (3, live web), claim-verifier-misquote (5, saved sources) | 40 | claim-verifier-clean (saved sources) | |
+| `claim-verifier` | claim-verifier (3, live web), claim-verifier-misquote (5, saved sources) | 40 | claim-verifier-clean (saved sources) | real /scout runs fetch from the web (an empty `--dir auto`), so weigh the live-web fixture's result on its own before promoting; the saved-source fixtures measure quote comparison, not fetching |
 | `change-reviewer` | change-reviewer-planted (3) | 15 | change-reviewer-clean | no candidate |
 | `explorer`, `scout-map` | probe-explorer-recall (8) | 40 | none (a probe) | the forked `/scout map` skill itself |
 | `explain` | probe-explain-grounding (4) | 20: short; `--runs 8` gives 32 | none (a probe) | the forked `/explain` skill itself |

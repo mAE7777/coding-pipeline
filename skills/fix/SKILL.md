@@ -44,9 +44,11 @@ whose overrides win. A fix in shared code also gets `~/.claude/skills/craft/revi
 6. **Hand back.** For a gate finding: say which finding is fixed and what shows it (its `fixed_when`), freeze
    again (`/dev freeze`), and run `/gate`. `regate_scope.py` decides the next round: focused when the change
    stays inside the findings' files, is under about 150 lines, and touches nothing intent-bearing; otherwise
-   full. For a hotfix after acceptance: freeze, `/gate M<k>` again (a focused round when every changed file is
-   on the fix-log entry's Change line), the owner's `/gate accept M<k>` of the new candidate, then `/deploy`;
-   the fix joins the next milestone's regression demo.
+   full. For a hotfix after acceptance: set `state.md` Candidate to `fingerprint.py <project>` and leave the
+   Status `accepted` (never `/dev freeze`, which reopens the milestone), run `/gate M<k>` again (a focused
+   hotfix round when every changed file is on a fix-log entry's Change line or is a test, under about 150
+   lines, nothing intent-bearing; otherwise full), then the owner's `/gate accept M<k>` of the new candidate,
+   then `/deploy`; the fix joins the next milestone's regression demo.
 
 ## Flaky tests
 Never skip a flaky test silently or raise its timeout to hide it. Find the cause (shared state, timing,

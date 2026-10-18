@@ -3,7 +3,8 @@
 Before any coding workflow, read `project_policy.py status <project> --json` from the shared scripts.
 The explicit project choice takes precedence over adoption, owner locks, saved state, handoffs, campaigns,
 venture overlays and a conductor's dispatch. No choice means OFF. Only the owner's explicit on/off
-instruction changes it, through `project_policy.py`; invoking another skill never enables management.
+instruction changes it: they type `/pipeline on` or `/pipeline off` (which runs `project_policy.py`); invoking
+another skill never enables management.
 
 When OFF, perform the user's requested work with their existing documents, design, code and tests.
 Do not require adoption, plan conversion, a cold read, lock playback, intent verification, record repair,

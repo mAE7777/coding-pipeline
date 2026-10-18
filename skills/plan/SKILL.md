@@ -45,7 +45,8 @@ Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/
    decisions, state, gate}.md` and `AGENTS.md` (labeled `## Commands`: install, build, test, run, demo;
    `CLAUDE.md` holds `@AGENTS.md`). Keep the local-only files out of commits with
    `python3 ~/.claude/skills/_shared/scripts/local_only.py <project>`, the only way in, since file tools cannot
-   edit inside `.git` (the owner may choose to commit `AGENTS.md`). Copy the owner's standing requirements
+   edit inside `.git` (the owner may choose to commit `AGENTS.md` after deleting its "Running them in a session" section, which
+   names the pipeline's tools; `gate.sh` pipeline-traces fails a committed file that does). Copy the owner's standing requirements
    into the brief and intent (languages, appearance, and the rest) from
    `~/.claude/skills/_shared/references/owner-standing.md` when it exists; otherwise ask.
 4. **Milestones**: the cut rules, checkpoints, and wiring table in `references/milestones.md`;

@@ -19,9 +19,11 @@ The failure you exist to catch: a build that passes its own tests while its load
 familiar imitation of what was specified, or while its failure paths quietly degrade. Look there first and
 hardest.
 
-A "Deterministic layer" section, when the pack has one, is what the gate already ran in this copy (install,
-typecheck, lint, build, the test suite, the checkpoint checks, the wiring tests) and the results. Never run
-those again: run what probes the contract, and each item it lists under "Not run by the gate".
+A "Deterministic layer" section, when the pack has one, is what the gate already ran in this copy (typecheck,
+lint, build, the test suite, the runnable checkpoint checks) and the results, plus the wiring and contract test
+paths it found present. Never run what it ran again. Run what probes the contract, and each item it lists
+under "Not run by the gate": the wiring-row tests and contract tests (it checked only that they exist), any
+checkpoint check it could not run, and the install when the copy has no dependencies.
 
 - **Each done example**, by running it: a normal input and a refutation-shaped input (edge or abusive) that
   must produce different output, both traces recorded. A function that ignores its input and returns a
@@ -38,8 +40,8 @@ those again: run what probes the contract, and each item it lists under "Not run
   parked item unreachable by direct URL, API, and worker. The inventory's routes, model calls, and events
   that no row accounts for are UNWIRED (built, unreachable), UNCONSUMED (produced, nothing consumes it), or
   PHANTOM (a visible state or claim with no producing cause) until you show otherwise.
-- **Interfaces**: the named shapes and failure semantics hold. (Each contract test named for this milestone
-  is the gate's: milestone_lint.py fails a missing one, and layer 1 runs it.)
+- **Interfaces**: the named shapes and failure semantics hold. Each contract test named for this milestone exists
+  (milestone_lint.py fails a missing one) and passes: run it (it is on the "Not run by the gate" list).
 - **The change** ("Change since the milestone started"): read every changed file's diff, in the full patch the
   section names (read-only, outside your copy) for any file marked not inlined or partly inlined. A changed
   file the contract does not explain is worth a look.
@@ -122,6 +124,7 @@ finding (a low structure finding aside) makes the verdict FAIL.
 {"mode": "reverify",
  "verdict": "PASS | FAIL | INCONCLUSIVE",
  "done_examples": [], "mechanisms": [], "must_not_lose": [], "wiring": [],
+ "security": {"auth": "...", "injection": "...", "untrusted_input": "...", "secrets": "...", "boundary_validation": "..."},
  "findings": [{"id": "F01", "class": "...", "severity": "high | medium | low", "confidence": "...",
                "summary": "...", "evidence": "command and verbatim output", "where": "path:line"}],
  "reverify": [{"id": "M1-F01 | F-003", "status": "FIXED | NOT_FIXED", "evidence": "command and a verbatim output fragment"}],

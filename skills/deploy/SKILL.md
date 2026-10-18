@@ -24,7 +24,10 @@ Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/
    proven acceptance entry), and the tree being shipped is the accepted candidate: `fingerprint.py <project>`
    equals the fingerprint in the last shipped milestone's acceptance entry (`milestone_lint.py` also checks that
    entry against the gate round that passed). A difference means code changed after acceptance: run the gate
-   again, or ship only with the owner's named waiver. An earlier ship, of a milestone not yet accepted or with open blocking findings,
+   again, or ship only with the owner's named waiver. The round that passed on that candidate says it is
+   release ready (`"release_ready": true` in its `verdict.json`, the Release line in the review record): it
+   replayed every earlier milestone's demo ending, or it is a focused hotfix round after an acceptance that
+   did. Otherwise run `gate_run.py <project> --milestone M<k> --full` first. An earlier ship, of a milestone not yet accepted or with open blocking findings,
    needs the owner's named waiver, recorded as a decision in their words. In a venture project the private
    overlay adds helm's launch conditions.
 2. **Through a pull request**, when the milestone ships as one: `/craft pr <open | check | babysit | ship>`

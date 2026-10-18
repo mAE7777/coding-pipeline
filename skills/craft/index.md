@@ -1,6 +1,6 @@
 # Craft index
 
-The pipeline constitution (`skills/_shared/references/pipeline-constitution.md`) and the active skill's human gates win every conflict with any file in this folder.
+The pipeline constitution (`../_shared/references/pipeline-constitution.md`) and the active skill's human gates win every conflict with any file in this folder.
 
 Read this file once per milestone or fix session. Open a leaf only when its trigger fires. Paths are relative to this folder.
 
