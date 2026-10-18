@@ -18,9 +18,10 @@ pass 3 confirmed each named item directly: take each item's row from it (HOLDS, 
 observed instead), and the EXTRA and ORPHAN rows and the purpose reading from the blind passes. Follow the
 verdict rule stated there.
 
-- **Deterministic layer**: any FAIL means the verdict cannot be ACCEPT-READY.
-- **Evidence quality**: a checker output that says it is INCONCLUSIVE or ran no tools is not evidence; the
-  verdict is INCONCLUSIVE and you name which checker must be re-run.
+- **Deterministic layer and evidence quality**: gate_report.py makes any deterministic FAIL CHANGES, and a
+  checker that ended INCONCLUSIVE or ran no tool makes the round INCONCLUSIVE, whatever you write. An output
+  that says it is inconclusive is not evidence either: your verdict is INCONCLUSIVE, with that checker in
+  `rerun`.
 - **Intent diff**, using the evaluator's reconstruction and the reviewer's direct results against the
   intent and the milestone contract. One row for every done example this milestone carries, every
   milestone done example, and every must-not-lose item (whatever milestone this is): HOLDS, DRIFT (present
@@ -30,8 +31,9 @@ verdict rule stated there.
   role, found by comparing observed behavior with each mechanism card's rejected imitation). Every mechanism card
   gets its own row, id `MECH-<card name>`: HOLDS when the discriminating probe passed, INACCURATE when the
   behavior matches the rejected imitation (and then also a blocking finding).
-- **Demo**: the demo result lists each step with what was expected and observed; open the captures in
-  `captures/` and confirm they show what the step claims.
+- **Demo**: the demo result lists each step with what was expected and observed; open every capture in
+  `captures/` and confirm it shows what the step claims (run_isolated.py makes a judge that leaves one
+  unopened INCONCLUSIVE).
 - **Purpose**: compare the evaluator's pass-1 purpose guess with the goal and with the builder's
   Understanding. A guess that describes a different product is the strongest drift signal even when every
   behavior looks fine.
@@ -42,6 +44,15 @@ verdict rule stated there.
   show it fixed, and in `files` the paths a fix must touch (from the reviewer's `where`; a finding without them
   makes the next round a full one); mark `needs_owner` when only the owner can settle it (a real intent fork, a missing
   credential, a scope question).
+- **Structure findings** (class `structure`) are logged, unless one is a presumptive blocker the evidence
+  bears out (reaching into another module's internals across a boundary; a second implementation of a
+  mechanism the codebase already has; a file pushed past 1,000 lines by this milestone; a comment that states
+  something false), which blocks. Weigh each one first through these filters, which apply to `structure`
+  findings only and never demote a finding of any other class: nitpick gravity (structure findings that are
+  all nits mean the code is fine); hypothetical versus actual (it counts only on a path the evidence shows
+  is real); premature abstraction (a suggested extraction or layer nothing needs yet is no finding); "I would
+  have done it differently" (a preference with no concrete problem is no finding). Your summary names each
+  one a filter removes, and the filter.
 - **A focused round** (scope.json and `carried-*.result.md` among the inputs): the evaluator did not run this
   round. Its results are CARRIED from the earlier round and fingerprint scope.json names, and the code-verifier
   re-verified the open findings (FIXED or NOT_FIXED; a NOT_FIXED finding stays blocking under its ledger ID)
@@ -52,9 +63,9 @@ verdict rule stated there.
   defect as a ledger entry keeps that entry's ID; a ledger entry that no longer reproduces goes in
   `resolved`. New findings take the next free ID (M<k>-F<nn>).
 
-Your verdict must follow from your own rows and findings: a blocking finding or a DRIFT, MISSING, or
-INACCURATE row means CHANGES (or BLOCKED when it needs the owner); a carried item with no row cannot be
-ACCEPT-READY. The report script recomputes the verdict from your JSON and flags any mismatch.
+gate_report.py recomputes the verdict from your rows and findings (a blocking finding or a DRIFT, MISSING, or
+INACCURATE row is CHANGES, or BLOCKED when it needs the owner) and records any mismatch; a verdict stricter
+than they support makes the round INCONCLUSIVE, so every reason for your verdict is a row or a finding.
 
 ## Output
 
