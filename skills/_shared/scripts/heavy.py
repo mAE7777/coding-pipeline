@@ -38,14 +38,19 @@ Bounded output (run --tail <n>). The command's whole output (standard output and
 <project>/.evidence/logs/<UTC time>-<command slug>.log, where the project is the nearest folder at or above the
 working folder holding docs/project/, else the working folder. What is printed is only: the exit code and the
 log's path, up to 40 lines that look like a failure (FAIL, FAILED, Error, error:, ERROR, Traceback, panic:, the
-cross mark, AssertionError, expected ... received; a line the tail shows is not repeated), and the last <n>
-lines. Without --tail the command's output passes through unchanged, as it always has (gate_run.py and other
-scripts read it).
+Jest, Node, and vitest cross marks and Jest's bullet before a failing test, AssertionError, expected ...
+received, tsc's error TS<n>, ESLint's <line>:<col> error, cargo's error[E<n>]; a line the tail shows is not
+repeated), and the last <n> lines. Without --tail the command's output passes through unchanged, as it always
+has (gate_run.py and other scripts read it).
 Failure signatures. When a --tail run exits non-zero inside a project (a folder holding docs/project/), a
 record goes to <project>/.evidence/failures.jsonl: the time, the signature (sha1 of the normalized command and
-the first failing line, normalized by removing numbers, hex ids, absolute paths, and timestamps; the last
-output line when none looks like a failure), the command, that first failing line, and the product
-fingerprint (fingerprint.py). When one signature has failed on three or more different product fingerprints
+the line that names the failure), the command, that line, and the product fingerprint (fingerprint.py). The
+line is the first that names a failing test (pytest's FAILED x::t, Jest's bullet, a cross mark, Go's --- FAIL:),
+else the first pytest "E   ..." line, else the first failing line that is not a banner (=== FAILURES ===), a
+header naming only a file (Jest's FAIL <file>), or a bare Traceback header; the last output line when none looks
+like a failure. Normalizing removes timestamps, absolute paths, hex ids and addresses, durations, and numbers
+that stand alone (counts, line and column numbers); digits inside a file or test name stay.
+When one signature has failed on three or more different product fingerprints
 (the first failure and two attempted fixes), the run also prints:
   This failure has survived 2 fixes (signature <8 chars>): write down the premise both fixes assumed and test
   it before another fix.
@@ -70,9 +75,17 @@ NOLOCK = 77
 FAILING_SHOWN = 40
 FAILURES_KEPT = 500
 LINE_CAP = 300  # a printed line longer than this is cut: one minified bundle line must not flood the output
-FAILING = re.compile(r"\bFAIL|Error\b|error:|\bERROR\b|Traceback|panic:|\u2717|AssertionError|"
+FAILING = re.compile(r"\bFAIL|Error\b|error:|\bERROR\b|Traceback|panic:|[\u2715\u2716\u2717\u2718]|AssertionError|"
+                     r"\berror\s+TS\d+|\berror\[E\d+\]|^\s*\d+:\d+\s+error\b|^\s*\u00d7\s|"
+                     r"^\s*\u25cf\s+(?!Console\b)\S|"
                      r"(?i:\bexpected\b.*\breceived\b)|^\s*(Expected|Received):")
 GENERIC = re.compile(r"^\s*Traceback \(most recent call last\):\s*$")  # says a failure follows, not which one
+BANNER = re.compile(r"^\s*=+ .* =+\s*$")  # pytest's "=== FAILURES ===": the same on every failing run
+HEADER = re.compile(r"^\s*FAIL(\s+\S+)?(\s+\(?\d+(\.\d+)?\s*m?s\)?)?\s*$")  # "FAIL <file>": names a file only
+NAMES_TEST = re.compile(r"^\s*FAILED\s+\S+::\S+|^\s*--- FAIL: \S|^\s*\u25cf\s+(?!Console\b)\S|"
+                        r"^\s*[\u2715\u2716\u2717\u2718\u00d7]\s+(?!failing tests:)\S")
+PYTEST_E = re.compile(r"^E\s+\S")
+DURATION = re.compile(r"\b\d+(\.\d+)?\s?(ms|s|sec|secs|seconds?|min|mins|minutes?|h|us|ns|\u00b5s)\b")
 
 
 class LockUnavailable(Exception):
@@ -318,7 +331,7 @@ def bounded(command, opts, env):
         return code
     with open(log, "wb") as out:
         code, _ = run_group(command, env=env, timeout=opts["timeout"], output=out)
-    total, failing, tail = read_log(log, opts["tail"])
+    total, failing, tail, named = read_log(log, opts["tail"])
     print(f"heavy.py: exit {code} · {total} line(s) of output · full log: {log}")
     earlier = [(n, line) for n, line in failing if n <= total - len(tail)]
     if earlier:
@@ -333,7 +346,7 @@ def bounded(command, opts, env):
             print(cut(line))
     if code != 0 and inside:
         try:
-            notice = record_failure(project, command, code, failing, tail, log)
+            notice = record_failure(project, command, code, failing, tail, log, named)
         except Exception as exc:  # the summary is already out; say the record failed, never hide it
             notice = (f"heavy.py: the failure could not be recorded in .evidence/failures.jsonl "
                       f"({exc.__class__.__name__}: {exc})")
@@ -378,46 +391,65 @@ def new_log(project, command):
 
 
 def read_log(log, tail_lines):
-    """(number of lines, [(line number, line)] of the first failing lines, [the last tail_lines lines])."""
-    failing, tail, total = [], collections.deque(maxlen=tail_lines or None), 0
+    """(number of lines, [(line number, line)] of the first failing lines, [the last tail_lines lines], the first
+    line that names a failing test or None). The test-naming line is looked for in the whole log: pytest prints
+    its FAILED lines last, after the failing lines shown may have run out."""
+    failing, tail, total, named = [], collections.deque(maxlen=tail_lines or None), 0, None
     with open(log, encoding="utf-8", errors="replace") as f:
         for raw in f:
             total += 1
             line = raw.rstrip("\r\n")
             if len(failing) < FAILING_SHOWN and FAILING.search(line):
                 failing.append((total, line))
+            if named is None and NAMES_TEST.search(line):
+                named = line
             if tail_lines:
                 tail.append(line)
-    return total, failing, list(tail)
+    return total, failing, list(tail), named
 
 
 def normalize(text):
-    """The text with what changes from run to run taken out: timestamps, absolute paths, hex ids, and numbers."""
+    """The text with what changes from run to run taken out: timestamps, absolute paths, hex ids and addresses,
+    durations, and the numbers that stand alone (counts, line and column numbers, process ids). Digits inside a
+    name stay (other30.ts, test_v2, TS2322, E0425), and a pytest node id (tests/x.py::test_y[1-2]) stays whole."""
     text = re.sub(r"\d{4}-\d{2}-\d{2}([T ]\d{1,2}:\d{2}(:\d{2})?([.,]\d+)?)?(Z|[+-]\d{2}:?\d{2})?", " ", text)
     text = re.sub(r"\b\d{1,2}:\d{2}:\d{2}([.,]\d+)?\b", " ", text)
+    text = re.sub(r"\b\d{8}T\d{4,6}Z?\b", " ", text)
     text = re.sub(r"(?<![\w.~-])(/[^\s/:'\"()\[\]{},;]+)+/?|\b[A-Za-z]:\\[^\s'\"]+", " ", text)
-    text = re.sub(r"\b0x[0-9a-fA-F]+\b|\b(?=[0-9a-fA-F-]*\d)[0-9a-fA-F]{6,}(-[0-9a-fA-F]{4,})*\b", " ", text)
-    text = re.sub(r"\d+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    parts = re.split(r"(\S+::\S+)", text)
+    for i in range(0, len(parts), 2):  # the even parts lie outside node ids
+        part = re.sub(r"\b0x[0-9a-fA-F]+\b|\b(?=[0-9a-fA-F-]*\d)[0-9a-fA-F]{6,}(-[0-9a-fA-F]{4,})*\b", " ", parts[i])
+        part = DURATION.sub(" ", part)
+        parts[i] = re.sub(r"[\w.-]+", lambda m: " " if re.search(r"\d", m.group())
+                          and not re.search(r"[^\W\d]", m.group()) else m.group(), part)
+    return re.sub(r"\s+", " ", "".join(parts)).strip()
 
 
-def first_failing(failing, tail):
-    """The first line that looks like a failure and names it (a bare "Traceback ..." header names nothing), else
-    the first failing line at all, else the last line with any text."""
-    for _, line in failing:
-        if not GENERIC.match(line):
+def first_failing(failing, tail, named=None):
+    """The line that best names the failure: the first that names a failing test (pytest's FAILED x::t, Jest's
+    bullet, a cross mark, Go's --- FAIL:), else the first pytest "E   ..." line, else the first failing line that
+    is not a banner (=== FAILURES ===), a header that names only a file (Jest's FAIL <file>), or a bare
+    "Traceback ..." line, else the first failing line at all, else the last line with any text."""
+    if named:
+        return named.strip()
+    lines = [line for _, line in failing]
+    for line in lines:
+        if PYTEST_E.match(line):
             return line.strip()
-    if failing:
-        return failing[0][1].strip()
+    for line in lines:
+        if not (BANNER.match(line) or HEADER.match(line) or GENERIC.match(line)):
+            return line.strip()
+    if lines:
+        return lines[0].strip()
     return next((line.strip() for line in reversed(tail) if line.strip()), "")
 
 
-def record_failure(project, command, code, failing, tail, log):
+def record_failure(project, command, code, failing, tail, log, named=None):
     """Append this failure to the project's signature history; the notice to print when the same failure has now
     failed on three or more product fingerprints, else None."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from fingerprint import fingerprint  # noqa: E402
-    error = first_failing(failing, tail)
+    error = first_failing(failing, tail, named)
     signature = hashlib.sha1((normalize(" ".join(command)) + "\n" + normalize(error)).encode()).hexdigest()
     product, _ = fingerprint(project, "product")
     row = {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

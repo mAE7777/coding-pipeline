@@ -298,7 +298,8 @@ class HeavyTailTest(HeavyTestBase):
         row = rows[0]
         for key in ("time", "signature", "command", "error", "fingerprint"):
             self.assertIn(key, row)
-        self.assertEqual(row["error"], "FAIL src/early.test.ts", "the first line that names a failure")
+        self.assertEqual(row["error"], "ValueError: bad total",
+                         "Jest's bare FAIL <file> header and the Traceback header name no failure, so they are passed over")
         self.assertTrue(row["fingerprint"].startswith("product:"))
         self.assertIn("noisy.py", row["command"])
         self.run_tail(code="0")
@@ -327,7 +328,7 @@ class HeavyTailTest(HeavyTestBase):
         self.assertIn(f"This failure has survived 2 fixes (signature {sig}): write down the premise both fixes "
                       "assumed and test it before another fix.", third.stdout)
         other = self.run_tail(err="KeyError: 'total'")
-        self.assertIn("survived", other.stdout, "the first line naming a failure is the same early FAIL line")
+        self.assertNotIn("survived", other.stdout, "a different error is a different failure")
         (self.proj / "noisy.py").write_text(NOISY.replace("FAIL src/early.test.ts", "all fine"))
         self.assertNotIn("survived", self.run_tail(err="KeyError: 'total'").stdout, "a different failure starts over")
 
@@ -341,6 +342,73 @@ class HeavyTailTest(HeavyTestBase):
         self.assertEqual(len(rows), 500)
         self.assertEqual(rows[0]["signature"], "old101")
         self.assertIn("noisy.py", rows[-1]["command"])
+
+    def run_script(self, text, name="out.py"):
+        (self.proj / name).write_text(text)
+        cmd = [PY, str(HEAVY), "run", "--owner", "A", "--tail", "2", "--", PY, name]
+        return subprocess.run(cmd, capture_output=True, text=True, env=self.env, cwd=self.proj)
+
+    def test_three_different_pytest_failures_are_three_signatures_not_a_failure_that_survived(self):
+        session = ("print('=' * 29 + ' test session starts ' + '=' * 29)\n"
+                   "print('=' * 35 + ' FAILURES ' + '=' * 35)\n"
+                   "print('_' * 20 + ' {t} ' + '_' * 20)\n"
+                   "print('E       AssertionError: assert 1 == 2')\n"
+                   "print('tests/test_app.py:7: AssertionError')\n"
+                   "print('=' * 27 + ' short test summary info ' + '=' * 27)\n"
+                   "print('FAILED tests/test_app.py::{t} - AssertionError: assert 1 == 2')\n"
+                   "print('=' * 25 + ' 1 failed, 2 passed in 0.0{n}s ' + '=' * 25)\n"
+                   "raise SystemExit(1)\n")
+        outs = []
+        for n, test in enumerate(("test_parse_empty", "test_parse_unicode", "test_render_header")):
+            (self.proj / "app.py").write_text(f"x = {n}\n")  # a new product state each time
+            outs.append(self.run_script(session.format(t=test, n=n)))
+        rows = self.failures()
+        self.assertEqual([r["error"] for r in rows],
+                         [f"FAILED tests/test_app.py::{t} - AssertionError: assert 1 == 2"
+                          for t in ("test_parse_empty", "test_parse_unicode", "test_render_header")])
+        self.assertEqual(len({r["signature"] for r in rows}), 3)
+        self.assertNotIn("survived", outs[-1].stdout)
+
+    def test_without_a_summary_the_pytest_e_line_beats_the_banner(self):
+        self.run_script("print('=' * 10 + ' FAILURES ' + '=' * 10)\nprint('>       raise ValueError(x)')\n"
+                        "print('E       KeyError: total')\nraise SystemExit(1)\n")
+        self.assertEqual(self.failures()[-1]["error"], "E       KeyError: total")
+
+    def test_jest_file_header_is_passed_over_for_the_failing_test_name(self):
+        self.run_script("print('FAIL src/a.test.ts (5.2 s)')\nprint('  \\u25cf Console')\n"
+                        "print('  \\u25cf Parser \\u203a parses an empty file')\n"
+                        "print('    expect(received).toBe(expected)')\nraise SystemExit(1)\n")
+        self.assertEqual(self.failures()[-1]["error"], "● Parser › parses an empty file")
+
+    def test_digits_in_a_file_or_test_name_are_kept_and_counts_and_durations_are_not(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("heavy_mod", HEAVY)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        n = mod.normalize
+        self.assertNotEqual(n("src/other30.ts(1,1): error TS6133"), n("src/other31.ts(1,1): error TS6133"))
+        self.assertNotEqual(n("error TS2322: x"), n("error TS6133: x"))
+        self.assertNotEqual(n("FAILED t.py::test_x[1-2] - E"), n("FAILED t.py::test_x[3-4] - E"))
+        self.assertNotEqual(n("FAILED t.py::test_v2"), n("FAILED t.py::test_v3"))
+        self.assertEqual(n("src/a.ts(12,7): 1 failed in 0.02s pid 4711 at 0x7ffe12"),
+                         n("src/a.ts(40,3): 9 failed in 13.5s pid 99 at 0x10a3b2"))
+        self.assertEqual(n("a.test.js:12:5 (3 ms)"), n("a.test.js:80:1 (250 ms)"))
+
+    def test_compiler_and_linter_errors_and_cross_marks_are_failing_lines(self):
+        lines = ["src/auth.ts(12,7): error TS2322: Type 'string' is not assignable to type 'number'.",
+                 "src/auth.ts:12:7 - error TS2322: Type 'string' is not assignable to type 'number'.",
+                 "  12:7  error  'token' is assigned a value but never used  no-unused-vars",
+                 "error[E0425]: cannot find value `x` in this scope",
+                 "    ✕ adds two numbers (3 ms)",
+                 "✖ parses (1.2ms)",
+                 " × renders 2ms"]
+        script = "".join(f"print({line!r})\n" for line in lines) + "".join(
+            f"print('filler {i}')\n" for i in range(5)) + "raise SystemExit(2)\n"
+        out = self.run_script(script)
+        for i, line in enumerate(lines, 1):
+            self.assertIn(f"  {i}: {line}", out.stdout, "shown even though the tail does not reach it")
+        self.assertEqual(self.failures()[-1]["error"], "✕ adds two numbers (3 ms)",
+                         "the cross mark names the failing test, so it is the signature's line")
 
 
 def guard(payload, env=None, cwd=None):
