@@ -27,6 +27,14 @@ number of problems the expectation reported (a runner status other than OK is on
 no verdict of its own (no summary, no verdict block, or escalated) missed everything, so it counts one plus
 every problem its expectation finds in an empty verdict. evolve.py pools these counts (repro:route).
 
+A fixture with a "base" (a folder beside it) starts from that folder, the product as the milestone found it, and
+its own folder is copied over it; a review fixture's milestone baseline is recorded in between, so its pack shows
+the fixture's own change since the milestone started (without a base the baseline is the fixture as it is: no
+change). A re-verify fixture ("mode": "reverify") names its focused round's scope.json ("scope", a file in the
+fixture, as regate_scope.py writes it): the harness points the scope's delta_patch and since.snapshot at the run's
+copy of the project (absolute paths, as a gate round's are) and renders with --mode reverify --scope <that file>
+({scope} in its render arguments); it runs on the code-verifier.reverify route, under the code-verifier.* stem.
+
 A probe fixture (role "probe") measures how a model follows a pipeline text rather than how a checker judges:
 its pack embeds files of the pipeline under test with {repo:<path>} (read from this repository, so each
 version is measured with its own text and the same question), and its agent file is named by the fixture's
@@ -68,6 +76,47 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+def reviews(spec):
+    """True for a code-verifier review fixture (not demo, not re-verify): its pack shows the change since the
+    milestone baseline."""
+    return spec["role"] == "code-verifier" and spec.get("mode") not in ("demo", "reverify")
+
+
+def point_scope(spec, project):
+    """A re-verify fixture's scope.json with delta_patch and since.snapshot made absolute paths in this copy of the
+    project (a gate round's scope names its own evidence folder); returns the scope file's path."""
+    path = project / spec["scope"]
+    scope = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(scope.get("delta_patch"), str) and not Path(scope["delta_patch"]).is_absolute():
+        scope["delta_patch"] = str(project / scope["delta_patch"])
+    since = scope.get("since")
+    if isinstance(since, dict) and isinstance(since.get("snapshot"), str) and not Path(since["snapshot"]).is_absolute():
+        since["snapshot"] = str(project / since["snapshot"])
+    path.write_text(json.dumps(scope, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
+def make_project(spec, work):
+    """The run's copy of the fixture's project, at <work>/project: its base first when it names one, then its own
+    folder over it; a review fixture's milestone baseline recorded after the base (or, without one, after the
+    copy), and a re-verify fixture's scope pointed at this copy."""
+    project = Path(work) / "project"
+    mid = spec.get("milestone", "M1")
+    record = [sys.executable, str(SCRIPTS / "baseline.py"), "record", str(project), mid]
+    if spec.get("base"):
+        shutil.copytree(FIX / spec["base"], project)
+        if reviews(spec):
+            run(record)
+        shutil.copytree(FIX / spec["folder"], project, dirs_exist_ok=True)
+    else:
+        shutil.copytree(FIX / spec["folder"], project)
+        if reviews(spec):
+            run(record)
+    if spec.get("scope"):
+        point_scope(spec, project)
+    return project
+
+
 def prepare(spec, project, work):
     """Return (checker dir, render args, extra run args)."""
     kind = spec["dir"]
@@ -91,7 +140,9 @@ def prepare(spec, project, work):
 def render_args(spec, project, workdir):
     """The render_pack.py arguments (after the role) of a fixture without a pack of its own."""
     render = ["--project", str(project), *spec.get("render", [])]
-    return [a.replace("{copy}", str(workdir)).replace("{project}", str(project)) for a in render]
+    scope = str(project / spec["scope"]) if spec.get("scope") else "{scope}"
+    return [a.replace("{copy}", str(workdir)).replace("{project}", str(project)).replace("{scope}", scope)
+            for a in render]
 
 
 def embedded_pack(spec, project):
@@ -175,18 +226,14 @@ def record(name, spec, n, ev, problems, judged, summary, result_text=""):
 
 def run_one(name, spec, n, installed, effort, model=None):
     work = WORK / f"{name}-{n}-{int(time.time() * 1000) % 10**9}"
-    shutil.copytree(FIX / spec["folder"], work / "project")
-    project = work / "project"
     ev = REPO / ".evidence/fixtures" / name / f"run-{n}"
     if ev.exists():
         shutil.rmtree(ev)
     ev.mkdir(parents=True)
     no_browser = spec.get("browser") and browser_missing()
     if no_browser:  # a run that cannot drive the page is a miss, never a paid run
-        shutil.rmtree(work, ignore_errors=True)
         return record(name, spec, n, ev, [no_browser], False, None)
-    if spec["role"] == "code-verifier" and spec.get("mode") != "demo":
-        run([sys.executable, str(SCRIPTS / "baseline.py"), "record", str(project), spec.get("milestone", "M1")])
+    project = make_project(spec, work)
     try:
         workdir, _ = prepare(spec, project, work)
     except RuntimeError as exc:
@@ -290,4 +337,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    if "--help" in sys.argv[1:] or sys.argv[1:] == ["-h"]:
+        print(__doc__.strip())  # asked for, so not an error; never a run of every fixture
+        sys.exit(0)
     sys.exit(main(sys.argv[1:]))
