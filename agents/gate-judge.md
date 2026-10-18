@@ -51,8 +51,9 @@ verdict rule stated there.
   findings only and never demote a finding of any other class: nitpick gravity (structure findings that are
   all nits mean the code is fine); hypothetical versus actual (it counts only on a path the evidence shows
   is real); premature abstraction (a suggested extraction or layer nothing needs yet is no finding); "I would
-  have done it differently" (a preference with no concrete problem is no finding). Your summary names each
-  one a filter removes, and the filter.
+  have done it differently" (a preference with no concrete problem is no finding). A structure finding a filter
+  removes still goes under `logged`, its summary naming the reviewer's ID and the filter, so no finding
+  vanishes between the reviewer and the verdict (gate_report.py checks it).
 - **A focused round** (scope.json and `carried-*.result.md` among the inputs): the evaluator did not run this
   round. Its results are CARRIED from the earlier round and fingerprint scope.json names, and the code-verifier
   re-verified the open findings (FIXED or NOT_FIXED; a NOT_FIXED finding stays blocking under its ledger ID)

@@ -226,6 +226,16 @@ class GateReportTest(unittest.TestCase):
         judge = {**CLEAN, "logged": [{"id": "M1-F01", "summary": "F09 handoff numbers on every row", "evidence": "q"}]}
         self.assertEqual(self.report(2, self.evidence(2, judge, review=review))["verdict"], "ACCEPT-READY")
 
+    def test_a_presumptive_blocker_structure_finding_must_be_triaged_and_a_low_one_need_not(self):
+        review = {**REVIEW_PASS, "findings": [{"id": "F04", "class": "structure", "severity": "medium",
+                                               "summary": "second implementation of money.format_amount"}]}
+        self.assertEqual(self.report(1, self.evidence(1, CLEAN, review=review))["verdict"], "INCONCLUSIVE")
+        judge = {**CLEAN, "logged": [{"id": "M1-F01", "summary": "F04 duplicate format_amount", "evidence": "q"}]}
+        self.assertEqual(self.report(2, self.evidence(2, judge, review=review))["verdict"], "ACCEPT-READY")
+        low = {**REVIEW_PASS, "findings": [{"id": "F05", "class": "structure", "severity": "low",
+                                            "summary": "a helper name could be clearer"}]}
+        self.assertEqual(self.report(3, self.evidence(3, CLEAN, review=low))["verdict"], "ACCEPT-READY")
+
     def test_malformed_or_missing_evidence_is_inconclusive_and_clears_the_tick(self):
         self.report(1, self.evidence(1, CLEAN))
         self.assertIn("gate-passed [x]", (self.root / "docs/project/milestones.md").read_text())

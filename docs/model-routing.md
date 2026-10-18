@@ -70,8 +70,8 @@ least 30 item-trials per side; the column gives the count at `--runs 5`.
 
 | Route | Planted fixtures (items per run) | Item-trials at `--runs 5` | Clean controls | Still missing |
 |---|---|---|---|---|
-| `code-verifier.review` | code-verifier-planted (4) | 20: short; `--runs 8` gives 32 | code-verifier-clean | the structure-planted, structure-clean, and diff-outside-excerpt fixtures of plan 8 |
-| `code-verifier.reverify` | none yet | 0 | none yet | refix-works, refix-fails, refix-breaks-other (plan 8) |
+| `code-verifier.review` | code-verifier-planted (4), code-verifier-review-structure-planted (3), code-verifier-review-outside-excerpt (1) | 40, with the prefix list `code-verifier-review,code-verifier-planted,code-verifier-clean` (the new prefix alone gives 20) | code-verifier-clean, code-verifier-review-structure-clean | outside-excerpt depends on DIFF_BUDGET and the pack's priority order; its pack test fails if either changes |
+| `code-verifier.reverify` | code-verifier-reverify-refix-fails (3), code-verifier-reverify-refix-breaks-other (4) | 35 | code-verifier-reverify-refix-works | |
 | `code-verifier.demo` | code-verifier-demo-planted (2), code-verifier-demo-web-planted (2), code-verifier-demo-silent-step (2) | 30 | code-verifier-demo-clean, code-verifier-demo-web-clean | none; the web pair needs Playwright (below) |
 | `gate-judge` | gate-judge-planted (3), gate-judge-story-demo (2), gate-judge-story-review (2) | 35 | gate-judge-clean | none: the capture-read check exists (`--require-read 'captures/*'`) |
 | `loyal-evaluator` | loyal-evaluator-drift (3) | 15 | loyal-evaluator-true (escape-attempt is kind other) | two subtle-drift fixtures, only if the experiment runs |

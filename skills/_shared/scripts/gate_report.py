@@ -122,9 +122,10 @@ def carried_ids(project, mid):
 
 INTENT_CHECKERS = ("loyal-evaluator", "loyal-evaluator-pass2", "loyal-evaluator-pass3", "gate-judge")
 # Finding classes the judge must triage (block or log) at any severity but low; clarity is usually logged, but it
-# may never vanish between the reviewer and the verdict.
+# may never vanish between the reviewer and the verdict. A structure finding above low is one of the reviewer's
+# presumptive blockers, so the judge rules on it too (block it, or log it with the lead-judgment filter it fails).
 REVIEW_BLOCKING = {"correctness", "requirement", "security", "wiring", "silent-degradation", "quality-substitution",
-                   "placeholder-unconsented", "interface", "clarity"}
+                   "placeholder-unconsented", "interface", "clarity", "structure"}
 BROKEN_WIRING = {"UNWIRED", "UNCONSUMED", "PHANTOM"}
 
 
