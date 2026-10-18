@@ -359,6 +359,13 @@ class ReloadGateTest(Base):
         self.call(GATE, "track", tool_name="Bash", tool_input={"command": run})
         self.assertEqual(self.decision(self.call(GATE, "guard", **write)), "allow")
 
+    def test_the_digest_counts_as_the_last_command_of_its_pipeline_or_after_a_separator(self):
+        write = {"tool_input": {"file_path": str(self.proj / "app.py")}}
+        for cmd in (f"git status | cat; python3 {DIGEST} {self.proj}", f"cat x | python3 {DIGEST} {self.proj}"):
+            self.call(GATE, "arm")
+            self.call(GATE, "track", tool_name="Bash", tool_input={"command": cmd})
+            self.assertEqual(self.decision(self.call(GATE, "guard", **write)), "allow", cmd)
+
     def test_the_digest_from_a_subfolder_with_a_relative_path_counts(self):
         sub = self.proj / "src"
         sub.mkdir()
@@ -377,6 +384,7 @@ class ReloadGateTest(Base):
         self.call(GATE, "arm")
         write = {"tool_input": {"file_path": str(self.proj / "app.py")}}
         for cmd in (f"python3 {DIGEST} {self.proj} >/dev/null", f"python3 {DIGEST} {self.proj} | wc -l",
+                    f"python3 {DIGEST} {self.proj} | head -1", f"python3 {DIGEST} {self.proj} | grep Milestone",
                     f"python3 {DIGEST} {other}", f"python3 {copy / 'reentry_digest.py'} {self.proj}",
                     f"python3 {DIGEST} {self.proj} extra", f"python3 {DIGEST} --all"):
             self.call(GATE, "track", tool_name="Bash", tool_input={"command": cmd})

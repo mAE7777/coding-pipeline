@@ -51,6 +51,12 @@ class TypecheckOnceTest(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+        (Path(tempfile.gettempdir()) / f"typecheck-once-{self.session}").unlink(missing_ok=True)
+
+    def begin(self):
+        """The session's first stop, on a clean tree: it records the time and says nothing."""
+        code, out = self.stop()
+        self.assertEqual((code, out.strip()), (0, ""))
 
     def stop(self, cwd=None, env=None, **extra):
         payload = {"cwd": str(cwd or self.proj), "session_id": self.session, "hook_event_name": "Stop", **extra}
@@ -66,6 +72,7 @@ class TypecheckOnceTest(unittest.TestCase):
         self.assertEqual((code, out.strip(), self.calls()), (0, "", 0))
 
     def test_errors_in_changed_files_go_to_the_model_and_the_rest_to_the_owner(self):
+        self.begin()
         time.sleep(1.1)
         (self.proj / "src/a.ts").write_text("const x: number = 'a';\n")
         code, out = self.stop()
@@ -85,6 +92,7 @@ class TypecheckOnceTest(unittest.TestCase):
         self.assertEqual(self.calls(), 1, "no new change since the last run: no second tsc")
 
     def test_a_turn_that_already_continued_for_a_stop_hook_only_tells_the_owner(self):
+        self.begin()
         time.sleep(1.1)
         (self.proj / "src/a.ts").write_text("const x: number = 'a';\n")
         code, out = self.stop(stop_hook_active=True)
@@ -94,6 +102,7 @@ class TypecheckOnceTest(unittest.TestCase):
         self.assertIn("not sent to the model again", result["systemMessage"])
 
     def test_errors_only_in_other_files_are_a_summary_for_the_owner(self):
+        self.begin()
         time.sleep(1.1)
         (self.proj / "src/b.ts").write_text("export const y = 2;\n")
         code, out = self.stop()
@@ -110,6 +119,7 @@ class TypecheckOnceTest(unittest.TestCase):
         self.assertIn("Typecheck NOT_RUN: tsc could not run", result["systemMessage"])
 
     def test_a_subfolder_session_still_typechecks(self):
+        self.begin()
         time.sleep(1.1)
         (self.proj / "src/a.ts").write_text("const x: number = 'b';\n")
         code, out = self.stop(cwd=self.proj / "src")
@@ -119,9 +129,28 @@ class TypecheckOnceTest(unittest.TestCase):
         import shutil
         shutil.rmtree(self.proj / ".git")
         code, out = self.stop()
-        self.assertIn("src/a.ts", json.loads(out)["hookSpecificOutput"]["additionalContext"],
-                      "first run outside git sees the changed file")
+        self.assertIn("src/a.ts", json.loads(out)["systemMessage"], "first run outside git sees every file")
         self.assertEqual(self.calls(), 1)
+        time.sleep(1.1)
+        (self.proj / "src/a.ts").write_text("const x: number = 'd';\n")
+        code, out = self.stop()
+        self.assertIn("src/a.ts", json.loads(out)["hookSpecificOutput"]["additionalContext"],
+                      "a file changed after the first stop is this turn's work")
+        self.assertNotIn("untouched.ts", json.loads(out)["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(self.calls(), 2)
+
+    def test_the_first_stop_reports_errors_already_there_to_the_owner_only(self):
+        (self.proj / "src/a.ts").write_text("const x: number = 'old';\n")  # left uncommitted before the session
+        old = time.time() - 86400
+        os.utime(self.proj / "src/a.ts", (old, old))
+        code, out = self.stop()
+        result = json.loads(out)
+        self.assertNotIn("hookSpecificOutput", result, "nothing is known to be this turn's, so nothing goes to the model")
+        self.assertIn("first stop", result["systemMessage"])
+        self.assertIn("src/a.ts(1,7): error TS2322", result["systemMessage"])
+        self.assertTrue((Path(tempfile.gettempdir()) / f"typecheck-once-{self.session}").exists(), "stamp written")
+        code, out = self.stop()
+        self.assertEqual((out.strip(), self.calls()), ("", 1), "the next stop measures from the first one")
 
     def leftovers(self):
         hook = ROOT / "hooks/verify-pipeline-completion.sh"
@@ -155,6 +184,13 @@ class TypecheckOnceTest(unittest.TestCase):
         self.assertIn("5:debugger", self.leftovers()["systemMessage"], "a staged line is still this work")
         (self.proj / "src/new.spec.ts").write_text("console.log('a test may log')\n")
         self.assertNotIn("new.spec.ts", self.leftovers()["systemMessage"])
+
+    def test_debug_leftovers_are_found_whatever_the_diff_prefix_config(self):
+        (self.proj / "src/a.ts").write_text("const x: number = 1;\nconsole.log('debug')\n")
+        for key in ("diff.mnemonicPrefix", "diff.noprefix"):
+            subprocess.run(["git", "-C", str(self.proj), "config", key, "true"], check=True)
+            self.assertIn("2:console.log('debug')", self.leftovers().get("systemMessage", ""), key)
+            subprocess.run(["git", "-C", str(self.proj), "config", "--unset", key], check=True)
 
     def test_not_a_ts_project_no_op(self):
         (self.proj / "tsconfig.json").unlink()

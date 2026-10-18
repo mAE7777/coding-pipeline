@@ -10,7 +10,9 @@ Errors that fall in the files changed this turn go to the model as the Stop hook
 fixes them; the owner sees a one-line note that they were sent. When the payload says stop_hook_active (the
 turn already continued once because of a Stop hook), the same errors go to the owner as a system message
 only, so the hook can never keep a turn going in a loop. Errors in other files are summarized for the owner
-as a system message and never sent to the model. When it cannot run (TypeScript not installed, the lock
+as a system message and never sent to the model. The session's first stop has no earlier stop to measure from,
+so every uncommitted .ts/.tsx file counts as changed and some may hold errors from before the session: it
+records the time and reports what tsc finds to the owner only, never to the model. When it cannot run (TypeScript not installed, the lock
 busy, a timeout), it says so as NOT_RUN in a system message instead of staying silent. An internal error is
 reported the same way; the stop always goes ahead.
 """
@@ -76,11 +78,15 @@ def main():
         return 0
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", data.get("session_id") or "unknown")
     stamp = Path(tempfile.gettempdir()) / f"typecheck-once-{safe}"
-    since = stamp.stat().st_mtime if stamp.exists() else 0
+    first = not stamp.exists()
+    since = 0 if first else stamp.stat().st_mtime
+    started = time.time()
+    if first:  # from now on "changed this turn" is measured from this stop
+        stamp.touch()
+        os.utime(stamp, (started, started))
     files = changed_ts(cwd, since)
     if not files:
         return 0
-    started = time.time()
     try:
         proc = subprocess.run([sys.executable, str(HEAVY_PY), "run", "--wait", "20", "--timeout", "170",
                                "--owner", data.get("session_id") or "typecheck", "--",
@@ -100,17 +106,25 @@ def main():
     found = [l for l in output.splitlines() if "error TS" in l]
     mine = [l for l in found if any(f in l for f in files)]
     elsewhere = [l for l in found if l not in mine]
-    return report(mine, elsewhere, bool(data.get("stop_hook_active")))
+    return report(mine, elsewhere, bool(data.get("stop_hook_active")), first)
 
 
 def listing(errors, limit):
     return "\n".join(errors[:limit]) + (f"\n(+{len(errors) - limit} more)" if len(errors) > limit else "")
 
 
-def report(mine, elsewhere, already_continued):
-    """Errors in files changed this turn go to the model (unless a Stop hook already continued this turn); the
-    owner gets a system message for everything else, and a note of what was sent."""
+def report(mine, elsewhere, already_continued, first=False):
+    """Errors in files changed this turn go to the model (unless a Stop hook already continued this turn, or this
+    is the session's first stop); the owner gets a system message for everything else, and a note of what was
+    sent."""
     out, notes = {}, []
+    if first and (mine or elsewhere):
+        found = mine + elsewhere
+        print(json.dumps({"systemMessage": (
+            f"Typecheck: {len(found)} error(s) in the working tree at this session's first stop (not sent to the "
+            "model: with no earlier stop, an uncommitted file may hold errors from before this session):\n"
+            + listing(found, 10))}))
+        return 0
     if mine and not already_continued:
         out["hookSpecificOutput"] = {"hookEventName": "Stop", "additionalContext": (
             "TypeScript errors in files changed this turn (tsc --noEmit, run once at the end of the turn):\n"

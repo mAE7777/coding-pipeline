@@ -6,7 +6,8 @@ Three modes, one per hook event:
   reload-gate.py track  PostToolUse, matcher "Read|Bash": record which required files were read (the Read
                         tool, or a read-only shell command that prints the file: cat, head, tail, less, more,
                         bat, nl, or sed -n; ls, grep, or wc naming it does not show its content). Running the
-                        pipeline's own `reentry_digest.py <project>` on this project, with its output shown,
+                        pipeline's own `reentry_digest.py <project>` on this project, with its output shown
+                        and as the last command of its pipeline (`| head -1` would show one line of it),
                         counts as reading all three: it prints the parts of each that a re-entry needs
   reload-gate.py guard  PreToolUse, matcher "Write|Edit|MultiEdit|NotebookEdit|Bash" (Codex: "apply_patch|Bash",
                         the patch's file headers give the targets): while any required
@@ -645,9 +646,12 @@ def track(data):
     if data.get("tool_name") == "Bash":
         command = tool_input.get("command", "")
         if read_only(command, root=root, cwd=data.get("cwd")):
-            for seg in [s for line in pipelines(command) for k, s in enumerate(line) if shown(line, k)]:
+            for line, k, seg in [(line, k, s) for line in pipelines(command) for k, s in enumerate(line)
+                                 if shown(line, k)]:
                 if digest_reads(seg, root, data.get("cwd")):
-                    targets += record["needs"]
+                    # the digest counts only when nothing after it in the pipeline can cut it short (| head -1)
+                    if k == len(line) - 1:
+                        targets += record["needs"]
                     continue
                 if not prints(seg):
                     continue

@@ -30,6 +30,9 @@ SKIP = re.compile(r"\.test\.|\.spec\.|__tests__/|\.config\.|\.d\.ts$|\.json$|\.m
 CODE = (".ts", ".tsx", ".js", ".jsx")
 LEFTOVER = re.compile(r"console\.(log|debug)|debugger")
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+# The prefixes are named, so diff.noprefix or diff.mnemonicPrefix in the owner's git config cannot change the
+# "+++ b/<path>" lines read here; no color and no external diff tool, for the same reason.
+DIFF = ("-U0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/")
 
 
 def git(top, *args):
@@ -46,9 +49,8 @@ def added_lines(top):
     """{path relative to the repository: [(line number, text)]} for every line added in the working tree."""
     added = {}
     has_head = git(top, "rev-parse", "--verify", "-q", "HEAD") is not None
-    diffs = [git(top, "diff", "-U0", "--no-color", "--no-ext-diff", "HEAD")] if has_head else \
-        [git(top, "diff", "-U0", "--no-color", "--no-ext-diff", "--cached"),
-         git(top, "diff", "-U0", "--no-color", "--no-ext-diff")]
+    diffs = [git(top, "diff", *DIFF, "HEAD")] if has_head else [git(top, "diff", *DIFF, "--cached"),
+                                                                 git(top, "diff", *DIFF)]
     for diff in diffs:
         path, line = None, 0
         for raw in (diff or "").splitlines():
