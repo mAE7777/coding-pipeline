@@ -79,6 +79,16 @@ def round_running(root):
     return held[1] if len(held) >= 2 and alive(held[0]) else None
 
 
+def candidate(root):
+    """state.md's Candidate fingerprint (what /dev freeze set), or None."""
+    try:
+        text = (root / "docs/project/state.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    m = re.search(r"^## Candidate\s*\n+\s*(\S+)", text, re.M)
+    return m.group(1) if m and not m.group(1).startswith("<") else None
+
+
 def milestones(root):
     ms = root / "docs/project/milestones.md"
     out = []
@@ -262,6 +272,11 @@ def next_steps(s, root):
         if v and v["verdict"] == "INCONCLUSIVE" and m["status"] == "gate":
             return out + [step("builder", f"clear what made {mid} round {v['round']} inconclusive, then rerun "
                                           f"/gate {mid}", "; ".join(v["reasons"])[:300])]
+        refrozen = m["status"] == "gate" and v and v["verdict"] == "CHANGES" and \
+            candidate(root) not in (None, v.get("fingerprint"))
+        if refrozen:
+            return out + [step("builder", f"/gate {mid}", f"{mid} was fixed and frozen again after round {v['round']}'s "
+                                                          "CHANGES; the next round decides focused or full")]
         if m["status"] == "changes" or (v and v["verdict"] == "CHANGES"):
             return out + [step("builder", f"fix {mid} round {v['round'] if v else '?'}'s blocking findings (/fix, or "
                                           f"/dev resume for a larger change), then /dev freeze",

@@ -134,6 +134,19 @@ class ProjectStatusTest(unittest.TestCase):
         self.verdict("M1", 4, "BLOCKED", ["needs the owner: M1-F05"])
         self.assertEqual(self.first()[0], "owner")
 
+    def test_a_milestone_fixed_and_frozen_again_goes_back_to_the_gate(self):
+        self.record(s1="gate")
+        d = self.root / ".evidence/gate/M1/r1"
+        d.mkdir(parents=True)
+        (d / "verdict.json").write_text(json.dumps({"round": 1, "verdict": "CHANGES", "fingerprint": "product:aaa",
+                                                    "reasons": ["blocking: M1-F01 the total is wrong"]}))
+        state = self.root / "docs/project/state.md"
+        state.write_text(state.read_text() + "\n## Candidate\nproduct:aaa\n")
+        self.assertIn("round 1's blocking findings", self.first()[1], "frozen on the same candidate: still to fix")
+        state.write_text(state.read_text().replace("product:aaa", "product:bbb"))
+        who, action = self.first()
+        self.assertEqual((who, action), ("builder", "/gate M1"), "a new candidate after CHANGES runs the next round")
+
     def test_a_blocker_goes_to_the_owner(self):
         self.record(blockers="the payment keys · owner · add them to the vault")
         who, action = self.first()
