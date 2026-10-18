@@ -171,7 +171,7 @@
       "upstream": "skills/poteto-mode/playbooks/babysit.md",
       "commit": "99743e9",
       "sha256": "e261c1ff5581e0f8fc6c686f34de4b535f87473e77beabea7dd8323021214610",
-      "local_edit": "gh is the only forge (Origin and Graphite text dropped); the watcher is pr_watch.py; /loop is Claude Code's; Bugbot generalized to a review bot (also in the mode examples); fixes go through /fix for a focused re-gate; Autopilot owner text dropped; rubric changes go through /evolve"
+      "local_edit": "gh is the only forge (Origin and Graphite text dropped); the watcher is pr_watch.py; /loop is Claude Code's; Bugbot generalized to a review bot (also in the mode examples); fixes go through /fix for a focused re-gate; Autopilot owner text dropped; rubric changes go through /evolve; the watcher's github-undecided wait and its behind-base, review-required, and merge-blocked merge-gate blockers named"
     },
     {
       "local": "methods/pr/opening-a-pr.md",

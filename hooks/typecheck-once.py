@@ -94,12 +94,13 @@ def main():
                               cwd=cwd, capture_output=True, text=True, timeout=240)
     except subprocess.TimeoutExpired:
         return say("Typecheck NOT_RUN: the lock wrapper did not return in 240s.")
-    stamp.touch()
-    os.utime(stamp, (started, started))
+    # A run that never happened (the lock busy, tsc stopped) keeps the stamp, so the next stop checks these files.
     if proc.returncode == 75:
         return say("Typecheck NOT_RUN: another heavy job holds the lock; the next stop tries again.")
     if proc.returncode == 124:
-        return say("Typecheck NOT_RUN: tsc took longer than 170s and was stopped.")
+        return say("Typecheck NOT_RUN: tsc took longer than 170s and was stopped; the next stop tries again.")
+    stamp.touch()
+    os.utime(stamp, (started, started))
     output = proc.stdout + proc.stderr
     if proc.returncode != 0 and "error TS" not in output:
         return say(f"Typecheck NOT_RUN: tsc could not run ({output.strip().splitlines()[-1][:120] if output.strip() else 'no output'}).")

@@ -15,6 +15,9 @@ HOOK = ROOT / "hooks/typecheck-once.py"
 
 FAKE_NPX = """#!/bin/bash
 echo "called" >> "$FAKE_LOG"
+if [ "$FAKE_MODE" = busy ]; then
+  exit 75
+fi
 if [ "$FAKE_MODE" = broken ]; then
   echo "npm ERR! could not determine executable to run"
   exit 1
@@ -117,6 +120,15 @@ class TypecheckOnceTest(unittest.TestCase):
         result = json.loads(out)
         self.assertEqual(list(result), ["systemMessage"])
         self.assertIn("Typecheck NOT_RUN: tsc could not run", result["systemMessage"])
+
+    def test_a_check_that_never_ran_is_tried_again_on_the_same_files(self):
+        self.begin()
+        time.sleep(1.1)
+        (self.proj / "src/a.ts").write_text("const x: number = 'c';\n")
+        code, out = self.stop(env={"FAKE_MODE": "busy"})
+        self.assertIn("the next stop tries again", json.loads(out)["systemMessage"])
+        code, out = self.stop()  # nothing changed since, but the busy stop never checked a.ts
+        self.assertIn("src/a.ts", json.loads(out)["hookSpecificOutput"]["additionalContext"])
 
     def test_a_subfolder_session_still_typechecks(self):
         self.begin()
