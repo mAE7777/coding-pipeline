@@ -54,7 +54,7 @@ early; [lost-decision] losing decisions across compaction, sessions, and tools.
 ## Totals
 
 At 587f48c the ledger had 365 rows: 274 Must, 69 Default, 22 Conditional; 212 keep, 50 pointer, 74 dedupe, 26
-strengthen, 3 propose-delete. At f5d3853 it has 456 rows: 332 Must, 96 Default, 28 Conditional; 300 keep, 50 pointer
+strengthen, 3 propose-delete. Now it has 460 rows: 336 Must, 96 Default, 28 Conditional; 304 keep, 50 pointer
 (47 done), 81 dedupe (55 done), 22 strengthen, 3 propose-delete. No row was removed, and no Must rule is LOST:
 every rule the text pass dropped from a skill or an agent keeps its row, which names the home it went to.
 
@@ -75,8 +75,8 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 |---|---|---|---|---|---|---|---|---|---|---|
 | Constitution | 41 | 46 | 35 | 11 | 0 | 37 | 1 (1 done) | 6 (6 done) | 2 | 0 |
 | Shared workflow contract | 13 | 15 | 12 | 2 | 1 | 14 | 0 | 1 | 0 | 0 |
-| /pipeline | 6 | 7 | 6 | 1 | 0 | 5 | 0 | 2 (1 done) | 0 | 0 |
-| /next | 12 | 13 | 8 | 4 | 1 | 10 | 0 | 3 (3 done) | 0 | 0 |
+| /pipeline | 6 | 10 | 9 | 1 | 0 | 8 | 0 | 2 (1 done) | 0 | 0 |
+| /next | 12 | 14 | 9 | 4 | 1 | 11 | 0 | 3 (3 done) | 0 | 0 |
 | /capture | 19 | 20 | 14 | 4 | 2 | 9 | 5 (5 done) | 6 (6 done) | 0 | 0 |
 | /scout | 14 | 15 | 8 | 5 | 2 | 10 | 1 (1 done) | 3 (2 done) | 1 | 0 |
 | /plan | 24 | 26 | 21 | 3 | 2 | 12 | 5 (4 done) | 6 (5 done) | 3 | 0 |
@@ -98,7 +98,7 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | cold-reader | 9 | 12 | 9 | 3 | 0 | 12 | 0 | 0 | 0 | 0 |
 | claim-verifier | 5 | 6 | 4 | 2 | 0 | 6 | 0 | 0 | 0 | 0 |
 | change-reviewer | 12 | 12 | 10 | 2 | 0 | 11 | 1 (1 done) | 0 | 0 | 0 |
-| **All** | **365** | **456** | **332** | **96** | **28** | **300** | **50 (47 done)** | **81 (55 done)** | **22** | **3** |
+| **All** | **365** | **460** | **336** | **96** | **28** | **304** | **50 (47 done)** | **81 (55 done)** | **22** | **3** |
 
 ## Constitution (skills/_shared/references/pipeline-constitution.md)
 
@@ -182,6 +182,9 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | pipeline-05 | L17: Turning ON does not itself start adoption or change project intent. | Must | Switching on silently starts a large adoption. | project_policy.py:set_mode writes only the policy file and conditions a generated AGENTS.md agreement (L151-184) | test_generated_agreement_is_conditioned_without_deleting_design | keep |
 | pipeline-06 | L18: This control does not run project_status.py record or dispatch a next step. | Default | The control command starts a workflow step. | prose only | none | keep |
 | pipeline-07 | L3, L5: /pipeline is typed by the owner (disable-model-invocation: true). | Must | The model switches a project's workflow on or off by itself. | the frontmatter's disable-model-invocation: true (L5) keeps the skill out of the model's listing; static_checks.py:invocable leaves it out of the always-loaded total (L108-110, L134-135) | test_a_skill_only_the_owner_types_is_left_out | keep |
+| pipeline-08 | L25-31: /pipeline update installs the latest version, or refuses with the reason. | Must | A half-done pipeline edit, or a version changed under a running gate round, reaches the owner's sessions. | pipeline_sync.py update refuses without a manifest or a git repository, with uncommitted tracked changes or untracked files under skills/, agents/, or hooks/, and while a registered gate round or checker run is alive (live_runs); it fast-forwards only a branch strictly behind its upstream, then runs install.py apply, settings_patch.py --apply, and install.py check | test_a_dirty_tree_is_refused, test_a_live_run_is_refused_and_dead_entries_are_pruned, test_a_diverged_branch_is_reported_and_not_merged, test_a_failing_check_after_the_install_fails_the_update | keep |
+| pipeline-09 | L32-35: after an update, the skill text already in the conversation is re-read before the work goes on. | Must | A session keeps following the old text of a skill it invoked before the update. | pipeline_sync.py prompt (a UserPromptSubmit hook) tells every open session once per change, naming the changed skills; session-start records the session's installed revision and names commits not yet installed | test_prompt_gives_the_notice_once_per_change_fast_and_without_git, test_session_start_records_the_revision_and_names_commits_not_installed | keep |
+| pipeline-10 | (pipeline_sync.py) the update hooks never block or fail a prompt or a session start. | Must | A broken state file or a slow git call stops the owner's work. | pipeline_sync.py prompt reads files only and exits 0 on any error; settings_patch.py gives it a 5 s timeout | test_corrupt_state_files_never_raise | keep |
 
 ## /next (skills/next/SKILL.md)
 
@@ -200,6 +203,7 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | next-11 | L50: Every step ends with project_status.py record, which prints the next step (project-control.md, End). | Must | [lost-decision] | project_status.py:record (L303-350); that each skill calls it is prose only | test_every_step_is_recorded_with_what_comes_next | dedupe (done): one line naming project-control.md End; home control-15 |
 | next-12 | L51: In Codex the skills are $next, $dev, and so on. | Conditional | Wrong command syntax in Codex. | prose only | none | keep |
 | next-13 | L32-33: When the status says the last 3 steps repeated without changing the record, that is an owner step: say what is looping and what was tried. | Must | [early-done] /next auto repeats a step that changes nothing, spending turns until someone notices. | project_status.py:loop_step (L141-156: the last 3 journal entries name one skill and argument and carry one record fingerprint, and the record still has it) puts the owner step first in status (L196-198); record writes the record fingerprint on every journal line (L315-331) | test_three_steps_that_repeat_without_moving_the_record_stop_for_the_owner, test_a_moving_record_or_a_different_step_is_not_a_loop, test_journal_lines_without_a_fingerprint_never_count | keep |
+| next-14 | (project_status.py) a milestone frozen again on a new candidate after a CHANGES round goes to /gate. | Must | /next sends a fixed milestone back to /fix, and /next auto loops until the loop breaker stops it. | project_status.py next_steps: Status gate with a Candidate other than the CHANGES round's fingerprint gives /gate M<k> | test_a_milestone_fixed_and_frozen_again_goes_back_to_the_gate | keep |
 
 ## /capture (skills/capture/SKILL.md)
 
