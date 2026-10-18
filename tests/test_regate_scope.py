@@ -118,9 +118,13 @@ class RegateScopeTest(unittest.TestCase):
         self.assertEqual(scope["changed_files"], [{"path": "app.py", "status": "modified", "added": 4, "removed": 0}])
         self.assertEqual(scope["changed_lines"], 4)
         self.assertIn("+def show():", Path(scope["delta_patch"]).read_text())
-        self.assertEqual(scope["findings"], [{"id": "M1-F01", "summary": "M1-F01 defect", "class": "correctness",
+        self.assertEqual(scope["findings"], [{"id": "M1-F01", "status": "open", "fixed_round": None,
+                                              "summary": "M1-F01 defect", "class": "correctness",
                                               "severity": "high", "files": ["app.py"], "where": "app.py:1",
                                               "fixed_when": "python3 app.py prints it"}])
+        self.assertEqual(scope["reverify"], {"since": scope["since"], "changed_files": scope["changed_files"],
+                                             "changed_lines": 4, "delta_patch": scope["delta_patch"]},
+                         "a changes round re-verifies the whole change since the last full round")
         self.assertEqual(sorted(scope["carried"]), ["loyal-evaluator", "loyal-evaluator-pass2"])
         carried = scope["carried"]["loyal-evaluator"]
         self.assertEqual((carried["round"], carried["fingerprint"]), (1, fp))
@@ -173,11 +177,121 @@ class RegateScopeTest(unittest.TestCase):
         self.assertEqual((scope["scope"], scope["kind"]), ("focused", "hotfix"), scope["reasons"])
         self.assertEqual([f["id"] for f in scope["fixes"]], ["F-002"], "only entries since the acceptance")
         self.assertEqual(scope["fixes"][0]["change"], "app.py: append before saving, the smallest change")
-        self.assertEqual(scope["since"]["snapshot"], str(self.base / "accepted-candidate"))
+        self.assertEqual(scope["since"]["snapshot"], str(self.base / "full-candidate"),
+                         "the rules measure from the round whose evaluator results are carried")
+        self.assertEqual(scope["reverify"]["since"]["snapshot"], str(self.base / "accepted-candidate"))
         (self.p / "lib.py").write_text("def helper():\n    return 3\n")
         self.assertFull(self.decide(), "lib.py", "a fix-log Change line")
         log.write_text("# Fix log\n\n## F-001 \u00b7 2026-09-30 \u00b7 an older fix\nChange: app.py\n")
         self.assertFull(self.decide(), "the fix log has no entry since")
+
+    def accept(self, rnd, date="2026-10-01", ms=MS):
+        """The candidate now passed in round rnd (its accepted-candidate snapshot) and the owner accepted it."""
+        fp, rows = fingerprint(self.p, "product")
+        ok, line = regate_scope.keep_snapshot(self.p, "M1", "accepted", rnd, fp, rows)
+        self.assertTrue(ok, line)
+        (self.p / "docs/project/milestones.md").write_text(ms.replace("Status: changes", "Status: accepted", 1))
+        (self.p / "docs/project/decisions.md").write_text(
+            f"# Decisions\n\n## D-002 · {date} · Accept M1\n"
+            f"Decision: Accept M1 · contract 0123456789abcdef · fingerprint {fp} · review reviews/M1.md\n"
+            f'Source: [owner {date}] "yes, accept it"\n')
+        return fp
+
+    def fix_log(self, *entries):
+        (self.p / "docs/project/fix-log.md").write_text("# Fix log\n\n" + "".join(
+            f"## {fid} · {date} · a fix\nSymptom: s\nReproduction: r\nChange: {change}\n\n"
+            for fid, date, change in entries))
+
+    def test_a_finding_fixed_in_a_focused_round_is_re_verified_in_every_later_one(self):
+        self.full_round(blocking=(("M1-F01", ["app.py"]),))
+        (self.p / "app.py").write_text(APP + "# F01 fixed\n")
+        self.focused_round(2, blocking=(("M1-F02", ["app.py"]),))
+        path = self.p / "docs/project/reviews/M1.findings.json"
+        ledger = json.loads(path.read_text())
+        ledger["M1-F01"].update(status="fixed", fixed_round=2)
+        path.write_text(json.dumps(ledger))
+        (self.p / "app.py").write_text(APP)  # the fix for F02 undoes F01's fix: no change since r1 at all
+        scope = self.decide(3)
+        self.assertEqual(scope["scope"], "focused", scope["reasons"])
+        self.assertEqual(scope["changed_files"], [])
+        self.assertEqual([(f["id"], f["status"], f["fixed_round"]) for f in scope["findings"]],
+                         [("M1-F01", "fixed", 2), ("M1-F02", "open", None)],
+                         "every finding blocking since the carried round, fixed ones included")
+
+    def test_hotfix_rules_measure_the_whole_change_since_the_last_full_round(self):
+        self.full_round(blocking=(("M1-F01", ["app.py"]),))
+        (self.p / "app.py").write_text(APP + "".join(f"# fix line {i}\n" for i in range(80)))
+        self.focused_round(2, verdict="ACCEPT-READY")
+        self.accept(2)
+        self.fix_log(("F-001", "2026-10-02", "lib.py"))
+        (self.p / "lib.py").write_text("def helper():\n    return 1\n" + "".join(f"# hotfix {i}\n" for i in range(60)))
+        scope = self.decide(3)
+        self.assertEqual((scope["scope"], scope["kind"]), ("focused", "hotfix"), scope["reasons"])
+        self.assertEqual((scope["since"]["round"], scope["changed_lines"]), (1, 140))
+        self.assertEqual(sorted(c["path"] for c in scope["changed_files"]), ["app.py", "lib.py"],
+                         "app.py is named by F01, blocking since r1; lib.py by the fix-log entry")
+        rv = scope["reverify"]
+        self.assertEqual((rv["since"]["round"], rv["since"]["snapshot"]), (2, str(self.base / "accepted-candidate")))
+        self.assertEqual([c["path"] for c in rv["changed_files"]], ["lib.py"], "the re-verify reviews the hotfix")
+        self.assertIn("+# hotfix 0", Path(rv["delta_patch"]).read_text())
+        self.assertNotIn("# fix line", Path(rv["delta_patch"]).read_text())
+        self.assertEqual([f["id"] for f in scope["findings"]], ["M1-F01"])
+        (self.p / "lib.py").write_text("def helper():\n    return 1\n" + "".join(f"# hotfix {i}\n" for i in range(70)))
+        # Two contained steps (a focused fix, then a hotfix) never add up to an uncontained change.
+        self.assertFull(self.decide(3), "150 changed lines since r1")
+        import shutil
+        shutil.rmtree(self.base / "full-candidate")
+        self.assertFull(self.decide(3), "snapshot missing", "the last full round's candidate")
+
+    def test_a_hotfix_on_the_final_milestone_may_be_focused(self):
+        final = MS.replace("Status: planned", "Status: dropped")
+        (self.p / "docs/project/milestones.md").write_text(final)
+        self.full_round(verdict="ACCEPT-READY", blocking=())
+        self.accept(1, ms=final)
+        self.fix_log(("F-001", "2026-10-02", "app.py"))
+        (self.p / "app.py").write_text(APP + "# hotfix\n")
+        scope = self.decide(2)
+        self.assertEqual((scope["scope"], scope["kind"]), ("focused", "hotfix"), scope["reasons"])
+        self.fix_log()
+        self.assertFull(self.decide(2), "M1 is the final milestone", "the fix log has no entry since")
+
+    def test_a_fix_log_entry_written_before_the_acceptance_is_not_a_hotfix(self):
+        self.full_round(blocking=(("M1-F01", ["app.py"]),))
+        (self.p / "app.py").write_text(APP + "# fixed\n")
+        self.fix_log(("F-001", "2026-10-01", "app.py"))  # the gate fix, logged the day it was accepted
+        self.focused_round(2, verdict="ACCEPT-READY")
+        self.accept(2, date="2026-10-01")
+        self.assertEqual(json.loads((self.base / "accepted-candidate.json").read_text())["fix_log_ids"], ["F-001"])
+        (self.p / "app.py").write_text(APP + "# fixed\n# changed again, unlogged\n")
+        self.assertFull(self.decide(3), "the fix log has no entry since")
+        self.fix_log(("F-001", "2026-10-01", "app.py"), ("F-002", "2026-10-01", "app.py"))
+        scope = self.decide(3)
+        self.assertEqual(([f["id"] for f in scope["fixes"]], scope["scope"]), (["F-002"], "focused"), scope["reasons"])
+        rec = json.loads((self.base / "accepted-candidate.json").read_text())
+        del rec["fix_log_ids"]
+        (self.base / "accepted-candidate.json").write_text(json.dumps(rec))
+        self.assertFull(self.decide(3), "the fix log has no entry since")  # no record: the acceptance day is unsure
+
+    def test_a_file_whose_lines_cannot_be_counted_is_full(self):
+        self.full_round(blocking=(("M1-F01", ["legacy.py", "logo.png"]),))
+        (self.p / "legacy.py").write_bytes("# résumé\n".encode("latin-1"))
+        scope = self.decide()
+        self.assertFull(scope, "legacy.py changed since r1 and its lines cannot be counted (binary or not UTF-8")
+        self.assertEqual(scope["changed_files"], [{"path": "legacy.py", "status": "added", "added": None,
+                                                   "removed": None, "binary": True, "why": "binary or not UTF-8 text"}])
+        self.assertIn("Binary files /dev/null and b/legacy.py differ", Path(scope["delta_patch"]).read_text())
+
+    def test_the_delta_patch_marks_a_missing_final_newline(self):
+        self.full_round(blocking=(("M1-F01", ["app.py", "lib.py"]),))
+        (self.p / "app.py").write_text(APP.rstrip("\n"))
+        (self.p / "lib.py").write_text("def helper():\n    return 2\n")
+        scope = self.decide()
+        text = Path(scope["delta_patch"]).read_text()
+        self.assertIn("-    items.append(x)\n+    items.append(x)\n\\ No newline at end of file\n", text)
+        import baseline
+        self.assertEqual(sorted(baseline.split_patch(text)), ["app.py", "lib.py"], "each file keeps its own block")
+        self.assertEqual([(c["path"], c["added"], c["removed"]) for c in scope["changed_files"]],
+                         [("app.py", 1, 1), ("lib.py", 1, 1)])
 
     # ---- full, one reason at a time ---------------------------------------------------------------------------
     def test_round_one_is_always_full(self):

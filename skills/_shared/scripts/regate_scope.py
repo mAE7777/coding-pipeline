@@ -9,20 +9,23 @@ every gate round; a focused round carries the blind evaluator's results from the
 code-verifier in re-verify mode on the open findings and the delta.
 
 A round is focused only when ALL of these hold; otherwise it is full, and every reason that applies is listed:
-  - it is not round 1, --full was not given, and the milestone is not the final one (the last milestone in
-    milestones.md whose Status is not dropped);
-  - kind "changes": the previous round of this milestone ended CHANGES; or kind "hotfix": the milestone is
-    accepted (Status accepted and an owner acceptance in decisions.md naming a fingerprint) and
-    docs/project/fix-log.md has entries dated on or after that acceptance;
-  - since: for kind changes the last FULL round's candidate (the carried evidence comes from that round, so
-    the whole change since it must meet every rule), for kind hotfix the accepted candidate; its listing
-    (r<n>/candidate.txt) and its content snapshot (.evidence/gate/M<k>/full-candidate/ or accepted-candidate/)
-    must exist;
+  - it is not round 1 and --full was not given;
+  - kind "changes": the previous round of this milestone ended CHANGES, and the milestone is not the final one
+    (the last milestone in milestones.md whose Status is not dropped: its build rounds are always full); or
+    kind "hotfix" (on any milestone, the final one included): the milestone is accepted (Status accepted and
+    an owner acceptance in decisions.md naming a fingerprint) and docs/project/fix-log.md has entries dated on
+    or after that acceptance that were not yet in the log when the accepted candidate passed (the entry IDs
+    accepted-candidate.json records; without that record, entries dated after the acceptance day only);
+  - since: the candidate of the last FULL round, whose evaluator results are carried, for both kinds: the
+    whole change since it must meet every rule below, however many focused rounds and hotfixes lie between.
+    Its listing (r<n>/candidate.txt) and its content snapshot (.evidence/gate/M<k>/full-candidate/) must
+    exist; a hotfix also needs the accepted candidate's (accepted-candidate/), which its re-verify starts from;
   - every file changed since then is a test file (gate_checks.py's patterns) or is named in the files of a
     finding that was blocking in some round since then (the findings ledger, reviews/M<k>.findings.json), or,
     for a hotfix, in the Change line of a fix-log entry since the acceptance; a blocking finding without files
     forces full; logged findings never count;
-  - fewer than 150 changed lines (added plus removed, text files);
+  - fewer than 150 changed lines since then (added plus removed); a changed file whose lines cannot be counted
+    (binary, not UTF-8 text, or a symlink) forces full;
   - no changed file is intent-bearing (gate.md "Intent-bearing paths", docs/project/), a dependency manifest,
     a lockfile, a migration, or build or CI configuration; intent.md and the milestone's contract are as
     they were when the carried evidence was made;
@@ -30,17 +33,22 @@ A round is focused only when ALL of these hold; otherwise it is full, and every 
     status OK, their result files exist, and the fingerprint they ran on is recorded.
 
 scope.json: scope ("focused" or "full"), milestone, kind ("changes", "hotfix", or null), reasons, since {round,
-fingerprint, snapshot}, changed_files [{path, status, added, removed}], changed_lines, delta_patch (the unified
-diff from the snapshot to the current tree, written to <ev>/delta.patch), findings [{id, summary, class,
-severity, files, where, fixed_when}] (the open ones, to re-verify), fixes [{id, title, symptom, reproduction,
-change}] (a hotfix's fix-log entries), carried {"loyal-evaluator": {round, fingerprint, summary, result},
-"loyal-evaluator-pass2": {...}}.
+fingerprint, snapshot} (the last full round's candidate), changed_files [{path, status, added, removed}] and
+changed_lines (since then; added and removed are null, with binary true, for a file whose lines cannot be
+counted), delta_patch (the unified diff from that snapshot to the current tree, <ev>/delta.patch), reverify
+{since, changed_files, changed_lines, delta_patch}: the delta the re-verify reviews (for kind changes the same
+as above; for a hotfix the change since the accepted candidate, <ev>/reverify-delta.patch), findings [{id,
+status, fixed_round, summary, class, severity, files, where, fixed_when}] (every finding blocking in some round
+since the last full round, open or fixed, each with its current ledger status: the re-verify re-checks them
+all, so a fix undone later is caught), fixes [{id, title, symptom, reproduction, change}] (a hotfix's fix-log
+entries), carried {"loyal-evaluator": {round, fingerprint, summary, result}, "loyal-evaluator-pass2": {...}}.
 
 Snapshots (kept by gate_run.py through this module): every round writes <ev>/candidate.txt (fingerprint.py
 --list format); a full round keeps .evidence/gate/M<k>/full-candidate/ and an ACCEPT-READY round keeps
 accepted-candidate/, each a copy of the candidate's product files (a clone where the disk supports it) that
 replaces the previous one, with <name>.json beside it recording the round, the fingerprint, the intent's hash,
-and the milestone's contract hash.
+and the milestone's contract hash; accepted-candidate.json also records fix_log_ids, the fix-log entries
+present when that candidate passed.
 Exit 0 when scope.json was written (focused or full), 1 when it could not be, 2 on bad usage.
 """
 import datetime
@@ -56,7 +64,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from baseline import read_listing, text_of  # noqa: E402
+from baseline import diff_lines, read_listing, text_of, unified  # noqa: E402
 from fingerprint import fingerprint, fingerprint_of  # noqa: E402
 from gate_checks import is_test_file  # noqa: E402
 from gate_keys import read_keys  # noqa: E402
@@ -166,10 +174,14 @@ def keep_snapshot(project, mid, which, rnd, fp, rows, source=None):
         rec.unlink(missing_ok=True)  # no record names a half-replaced snapshot
         shutil.rmtree(snap, ignore_errors=True)
         tmp.rename(snap)
-        rec.write_text(json.dumps({
-            "round": rnd, "fingerprint": fp, "files": len(rels), "method": method,
-            "intent_sha256": intent_hash(project), "contract": contract_of(project, mid),
-            "kept": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}, indent=2))
+        record = {"round": rnd, "fingerprint": fp, "files": len(rels), "method": method,
+                  "intent_sha256": intent_hash(project), "contract": contract_of(project, mid),
+                  "kept": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        if which == "accepted":
+            # The fix-log entries written before this candidate passed: a later hotfix counts only the others,
+            # whatever their date says (an entry of the gate fix itself is often dated the acceptance day).
+            record["fix_log_ids"] = fix_log_ids(project)
+        rec.write_text(json.dumps(record, indent=2))
     except OSError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(snap, ignore_errors=True)
@@ -202,12 +214,24 @@ def acceptance(project, mid):
     return found
 
 
-def fix_entries(project, since_date):
-    """Fix-log entries dated on or after since_date."""
+def fix_log_text(project):
     p = Path(project) / "docs/project/fix-log.md"
+    return p.read_text(encoding="utf-8") if p.is_file() else ""
+
+
+def fix_log_ids(project):
+    """The IDs of every entry in docs/project/fix-log.md now."""
+    return [m.group(1) for m in FIX_ENTRY.finditer(fix_log_text(project))]
+
+
+def fix_entries(project, since_date, known=None):
+    """Fix-log entries dated on or after since_date and not among known (the entries already in the log when the
+    accepted candidate passed). With known None (no such record), an entry dated since_date itself may predate
+    the acceptance, so only entries dated after it count."""
     out = []
-    for m in FIX_ENTRY.finditer(p.read_text(encoding="utf-8") if p.is_file() else ""):
-        if m.group(2) < since_date:
+    for m in FIX_ENTRY.finditer(fix_log_text(project)):
+        if m.group(2) < since_date or (known is None and m.group(2) == since_date) or \
+                (known is not None and m.group(1) in known):
             continue
         body = m.group(4)
 
@@ -252,7 +276,10 @@ def named_in_changes(fixes, product):
 # ---- the delta ----------------------------------------------------------------------------------------------
 def delta(project, snap, old, cur, patch_path):
     """Every file changed between the snapshot (listing old) and the tree (rows cur), with its added and removed
-    lines, and the unified diff written to patch_path."""
+    lines, and the unified diff written to patch_path by baseline.py's writer (the one the review patch uses: a
+    last line without a newline carries git's marker, so the next line is never glued to it). A file whose lines
+    cannot be counted (binary, not UTF-8 text, or a symlink) has added and removed None and binary True, and a
+    git-style "Binary files ... differ" line in the patch."""
     changed, chunks = [], []
     for rel in sorted(set(old) | set(cur)):
         o = old.get(rel) if old.get(rel) != "deleted" else None
@@ -260,23 +287,32 @@ def delta(project, snap, old, cur, patch_path):
         if o == c:
             continue
         status = "added" if o is None else "deleted" if c is None else "modified"
+        link = (o is not None and (Path(snap) / rel).is_symlink()) or \
+            (c is not None and (Path(project) / rel).is_symlink())
         before = text_of(Path(snap) / rel) if o is not None else ""
         after = text_of(Path(project) / rel) if c is not None else ""
+        if before is None or after is None or link:
+            a_name = "/dev/null" if o is None else f"a/{rel}"
+            b_name = "/dev/null" if c is None else f"b/{rel}"
+            chunks.append(f"Binary files {a_name} and {b_name} differ\n")
+            changed.append({"path": rel, "status": status, "added": None, "removed": None, "binary": True,
+                            "why": "a symlink" if link else "binary or not UTF-8 text"})
+            continue
         added = removed = 0
-        if before is None or after is None or Path(project, rel).is_symlink():
-            chunks.append(f"Binary or unreadable file {rel} {status}\n")
-        else:
-            a, b = before.splitlines(True), after.splitlines(True)
-            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
-                if tag in ("replace", "delete"):
-                    removed += i2 - i1
-                if tag in ("replace", "insert"):
-                    added += j2 - j1
-            chunks.append("".join(difflib.unified_diff(a, b, "/dev/null" if o is None else f"a/{rel}",
-                                                       "/dev/null" if c is None else f"b/{rel}")))
+        opcodes = difflib.SequenceMatcher(None, diff_lines(before), diff_lines(after), autojunk=False).get_opcodes()
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag in ("replace", "delete"):
+                removed += i2 - i1
+            if tag in ("replace", "insert"):
+                added += j2 - j1
+        chunks.append(unified(rel, before, after, status))
         changed.append({"path": rel, "status": status, "added": added, "removed": removed})
-    Path(patch_path).write_text("".join(x if x.endswith("\n") else x + "\n" for x in chunks), encoding="utf-8")
+    Path(patch_path).write_text("".join(chunks), encoding="utf-8")
     return changed
+
+
+def counted_lines(changed):
+    return sum(c["added"] + c["removed"] for c in changed if isinstance(c.get("added"), int))
 
 
 # ---- the decision -------------------------------------------------------------------------------------------
@@ -305,13 +341,29 @@ def carried_evidence(base, full_rec):
     return out, problems
 
 
+def snapshot_of(base, rec, name, what, full):
+    """(listing rows, {round, fingerprint, snapshot}) of the snapshot <name>/ that rec records, or (None, None) with
+    the reason appended to full."""
+    snap = base / name
+    listing = base / f"r{(rec or {}).get('round')}/candidate.txt"
+    if not rec or not snap.is_dir() or not listing.is_file():
+        full.append(f"snapshot missing: no listing and content snapshot of {what} to measure the change from")
+        return None, None
+    fp, rows = read_listing(listing)
+    if fp != rec.get("fingerprint"):
+        full.append(f"snapshot missing: r{rec.get('round')}/candidate.txt names {fp}, the {name} snapshot "
+                    f"{rec.get('fingerprint')}")
+        return None, None
+    return rows, {"round": rec.get("round"), "fingerprint": fp, "snapshot": str(snap)}
+
+
 def decide(project, mid, rnd, out, force_full=False):
     project = Path(project).resolve()
     base, ev = base_dir(project, mid), Path(out).resolve().parent
     ev.mkdir(parents=True, exist_ok=True)
     full, ok = [], []
     scope = {"scope": "full", "milestone": mid, "kind": None, "reasons": [], "since": None, "changed_files": [],
-             "changed_lines": 0, "delta_patch": None, "findings": [], "fixes": [], "carried": {}}
+             "changed_lines": 0, "delta_patch": None, "reverify": None, "findings": [], "fixes": [], "carried": {}}
 
     def finish():
         scope["scope"] = "focused" if not full else "full"
@@ -330,45 +382,48 @@ def decide(project, mid, rnd, out, force_full=False):
         full.append(f"{mid} is not in docs/project/milestones.md")
         return finish()
     live = [m for m, text in ms if status_of(text) != "dropped"]
-    if live and live[-1] == mid:
-        full.append(f"{mid} is the final milestone (the last one not dropped), so every round is full")
+    final = bool(live and live[-1] == mid)
 
-    # The kind of re-gate, and the candidate the change is measured from.
+    # The kind of re-gate. Whatever the kind, the change is measured from the last full round, whose evaluator
+    # results are carried; a hotfix's re-verify reviews only what changed since the accepted candidate.
     full_rec = load(base / "full-candidate.json")
     full_rec = full_rec if isinstance(full_rec, dict) else None
     prev = load(base / f"r{rnd - 1}/verdict.json") or {}
-    since_rec = snap = acc = since_problem = None
+    acc = acc_rec = since_problem = None
     fixes = []
     if status_of(sections[mid]) == "accepted":
         acc = acceptance(project, mid)
         if not acc:
             full.append(f"{mid} is accepted, but decisions.md has no owner acceptance naming a fingerprint")
         else:
-            fixes = fix_entries(project, acc["date"])
+            rec = load(base / "accepted-candidate.json")
+            acc_rec = rec if isinstance(rec, dict) else None
+            known = (acc_rec or {}).get("fix_log_ids")
+            fixes = fix_entries(project, acc["date"], known if isinstance(known, list) else None)
             if not fixes:
-                full.append(f"{mid} is accepted ({acc['id']}, {acc['date']}) and the fix log has no entry since, "
-                            "so this is not a hotfix re-gate")
+                full.append(f"{mid} is accepted ({acc['id']}, {acc['date']}) and the fix log has no entry since "
+                            "(dated on or after it and not yet logged when the accepted candidate passed), so this "
+                            "is not a hotfix re-gate")
             else:
                 scope.update(kind="hotfix", fixes=[{k: f[k] for k in ("id", "title", "symptom", "reproduction",
                                                                        "change")} for f in fixes])
                 ok.append(f"a hotfix re-gate of accepted {mid}: fix-log {', '.join(f['id'] for f in fixes)} since "
                           f"the acceptance on {acc['date']}")
-                rec = load(base / "accepted-candidate.json")
-                since_rec, snap = (rec if isinstance(rec, dict) else None), base / "accepted-candidate"
-                if since_rec and since_rec.get("fingerprint") != acc["fingerprint"]:
-                    since_problem = (f"the accepted-candidate snapshot is {since_rec.get('fingerprint')}, but "
+                if acc_rec and acc_rec.get("fingerprint") != acc["fingerprint"]:
+                    since_problem = (f"the accepted-candidate snapshot is {acc_rec.get('fingerprint')}, but "
                                      f"{acc['id']} accepted {acc['fingerprint']}")
     elif str(prev.get("verdict")).upper() == "CHANGES":
         scope["kind"] = "changes"
         ok.append(f"the previous round (r{rnd - 1}) ended CHANGES")
-        since_rec, snap = full_rec, base / "full-candidate"
     else:
         full.append(f"the previous round (r{rnd - 1}) ended {prev.get('verdict') or 'without a verdict'}, not "
                     "CHANGES, and this is not a hotfix after acceptance")
+    if final and scope["kind"] != "hotfix":
+        # The final milestone's build rounds are always full; a hotfix after its acceptance may still be focused.
+        full.append(f"{mid} is the final milestone (the last one not dropped), so every round is full")
     if not scope["kind"]:
         return finish()
 
-    # The carried evaluator results come from the last full round, whatever the kind.
     carried, problems = carried_evidence(base, full_rec)
     scope["carried"] = carried
     full += [f"carried evidence unusable: {p}" for p in problems]
@@ -381,48 +436,56 @@ def decide(project, mid, rnd, out, force_full=False):
             full.append(f"{mid}'s contract (Promise, Carries, Demo ending, Done examples) changed since "
                         f"r{full_rec['round']}")
 
-    listing = base / f"r{(since_rec or {}).get('round')}/candidate.txt"
-    what = "the accepted candidate" if scope["kind"] == "hotfix" else "the last full round's candidate"
     if since_problem:
         full.append(since_problem)
         return finish()
-    if not since_rec or not snap.is_dir() or not listing.is_file():
-        full.append(f"snapshot missing: no listing and content snapshot of {what} to measure the change from")
+    old, since = snapshot_of(base, full_rec, "full-candidate",
+                             "the last full round's candidate (the one the carried evaluator results ran on)", full)
+    if since is None:
         return finish()
-    since_fp, old = read_listing(listing)
-    if since_fp != since_rec.get("fingerprint"):
-        full.append(f"snapshot missing: r{since_rec.get('round')}/candidate.txt names {since_fp}, the snapshot "
-                    f"{since_rec.get('fingerprint')}")
-        return finish()
-    scope["since"] = {"round": since_rec.get("round"), "fingerprint": since_fp, "snapshot": str(snap)}
+    scope["since"] = since
+    acc_old = acc_since = None
+    if scope["kind"] == "hotfix":
+        acc_old, acc_since = snapshot_of(base, acc_rec, "accepted-candidate", "the accepted candidate", full)
+        if acc_since is None:
+            return finish()
 
-    # The change since then.
+    # The change since the last full round: every rule below measures all of it, cumulatively.
     _, rows = fingerprint(project, "product")
     cur = {rel: h[:16] for rel, h in rows}
     patch = ev / "delta.patch"
-    changed = delta(project, snap, old, cur, patch)
-    scope.update(changed_files=changed, changed_lines=sum(c["added"] + c["removed"] for c in changed),
-                 delta_patch=str(patch))
-    if scope["kind"] == "changes":
-        ledger = load(project / f"docs/project/reviews/{mid}.findings.json")
-        ledger = ledger if isinstance(ledger, dict) else {}
-        since_round = since_rec.get("round") or 0
-        # Blocking in some round since then (open or fixed since); a logged finding never blocked, so never counts.
-        in_range = {fid: row for fid, row in ledger.items() if isinstance(row, dict) and
-                    any(isinstance(n, int) and n >= since_round for n in row.get("rounds_blocking") or [])}
-        files = {fid: [norm(f) for f in ([row["files"]] if isinstance(row.get("files"), str) else
-                                         row.get("files") or []) if norm(f)] for fid, row in in_range.items()}
-        bare = sorted(fid for fid in in_range if not files[fid])
-        if bare:
-            full.append("blocking finding(s) without files, so the fix cannot be bounded: " + ", ".join(bare))
-        names = {f for fs in files.values() for f in fs}
-        scope["findings"] = [{"id": fid, **{k: row.get(k) for k in ("summary", "class", "severity", "files", "where",
-                                                                     "fixed_when")}}
-                             for fid, row in in_range.items() if row.get("status") == "open"]
-        named_by = f"a finding blocking since r{since_round}"
+    changed = delta(project, Path(since["snapshot"]), old, cur, patch)
+    scope.update(changed_files=changed, changed_lines=counted_lines(changed), delta_patch=str(patch))
+    if scope["kind"] == "hotfix":
+        rpatch = ev / "reverify-delta.patch"
+        rchanged = delta(project, Path(acc_since["snapshot"]), acc_old, cur, rpatch)
+        scope["reverify"] = {"since": acc_since, "changed_files": rchanged, "changed_lines": counted_lines(rchanged),
+                             "delta_patch": str(rpatch)}
     else:
-        names = named_in_changes(fixes, set(cur) | set(old))
-        named_by = "a fix-log Change line since the acceptance"
+        scope["reverify"] = {"since": since, "changed_files": changed, "changed_lines": scope["changed_lines"],
+                             "delta_patch": str(patch)}
+
+    # The findings blocking in some round since the last full round, open or fixed: their files bound the change,
+    # and the re-verify re-checks every one (a fix undone by a later fix is caught there). A logged finding never
+    # blocked, so it never counts.
+    ledger = load(project / f"docs/project/reviews/{mid}.findings.json")
+    ledger = ledger if isinstance(ledger, dict) else {}
+    since_round = since.get("round") or 0
+    in_range = {fid: row for fid, row in ledger.items() if isinstance(row, dict) and
+                any(isinstance(n, int) and n >= since_round for n in row.get("rounds_blocking") or [])}
+    files = {fid: [norm(f) for f in ([row["files"]] if isinstance(row.get("files"), str) else
+                                     row.get("files") or []) if norm(f)] for fid, row in in_range.items()}
+    bare = sorted(fid for fid in in_range if not files[fid])
+    if bare:
+        full.append("blocking finding(s) without files, so the fix cannot be bounded: " + ", ".join(bare))
+    names = {f for fs in files.values() for f in fs}
+    scope["findings"] = [{"id": fid, "status": row.get("status"), "fixed_round": row.get("fixed_round"),
+                          **{k: row.get(k) for k in ("summary", "class", "severity", "files", "where", "fixed_when")}}
+                         for fid, row in in_range.items()]
+    named_by = f"a finding blocking since r{since_round}"
+    if scope["kind"] == "hotfix":
+        names |= named_in_changes(fixes, set(cur) | set(old) | set(acc_old))
+        named_by += " or a fix-log Change line since the acceptance"
     intent_paths = [norm(p) for p in read_keys(project).get("Intent-bearing paths") or []] + ["docs/project/"]
     outside = []
     for c in changed:
@@ -434,16 +497,23 @@ def decide(project, mid, rnd, out, force_full=False):
         if kinds:
             full.append(f"{rel} is a {kinds[0]}")
             continue
+        if c.get("binary"):
+            full.append(f"{rel} changed since r{since_round} and its lines cannot be counted ({c.get('why')})")
+            continue
         if not (is_test_file(rel) or covered(rel, names)):
             outside.append(rel)
     if outside:
-        full.append(f"changed since r{since_rec.get('round')} but neither a test file nor named in {named_by}: "
+        full.append(f"changed since r{since_round} but neither a test file nor named in {named_by}: "
                     + ", ".join(outside))
     if scope["changed_lines"] >= LINE_LIMIT:
-        full.append(f"{scope['changed_lines']} changed lines since r{since_rec.get('round')} (the limit for a "
-                    f"focused round is under {LINE_LIMIT})")
-    ok.append(f"{len(changed)} file(s) and {scope['changed_lines']} line(s) changed since r{since_rec.get('round')}, "
+        full.append(f"{scope['changed_lines']} changed lines since r{since_round} (the limit for a focused round is "
+                    f"under {LINE_LIMIT})")
+    ok.append(f"{len(changed)} file(s) and {scope['changed_lines']} line(s) changed since r{since_round}, "
               f"each a test file or named in {named_by}")
+    if scope["kind"] == "hotfix":
+        rv = scope["reverify"]
+        ok.append(f"the re-verify reviews the change since the accepted candidate (r{acc_since['round']}): "
+                  f"{len(rv['changed_files'])} file(s), {rv['changed_lines']} line(s)")
     return finish()
 
 
