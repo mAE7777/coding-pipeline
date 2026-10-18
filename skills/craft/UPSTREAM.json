@@ -192,7 +192,7 @@
       "upstream": "skills/poteto-mode/playbooks/shipping.md",
       "commit": "99743e9",
       "sha256": "bf56339bdf7e0223bcff5abf4e8599e3f5b547b3fcc3b4ce9475e6e7dda14a9f",
-      "local_edit": "gh is the only forge (Origin and Graphite text dropped); the per-PR verdict is the pipeline's gate acceptance of the milestone instead of cloud-agent verifiers; patch-id re-checks become pr_watch.py land-check (product fingerprint equals the accepted candidate, or a focused re-gate accepted the change); /loop is Claude Code's"
+      "local_edit": "gh is the only forge (Origin and Graphite text dropped); the per-PR verdict is the pipeline's gate acceptance of the milestone instead of cloud-agent verifiers; patch-id re-checks become pr_watch.py land-check (product fingerprint equals the accepted candidate, or a focused re-gate accepted the change); /loop is Claude Code's; each merge, and each armed auto-merge, pins the head land-check printed (gh pr merge --match-head-commit)"
     },
     {
       "local": "methods/prototype.md",

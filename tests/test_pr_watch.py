@@ -1093,6 +1093,16 @@ class ScriptTest(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (64, ""))
         self.assertIn("unknown option '--bogus'", out.stderr)
 
+    def test_shipping_merges_only_the_head_land_check_checked(self):
+        import re
+        text = (ROOT / "skills/craft/methods/pr/shipping.md").read_text(encoding="utf-8")
+        merges = re.findall(r"`(gh pr merge [^`]*)`", text)
+        self.assertTrue(merges)
+        for command in merges:
+            self.assertIn("--match-head-commit <head>", command)
+        self.assertIn("the `head` that PR's `land-check` printed", text)
+        self.assertRegex(text, r"`--auto`[^.]*pin that head with `--match-head-commit`")
+
     def test_a_failing_gh_is_a_status_query_blocker(self):
         with tempfile.TemporaryDirectory() as d:
             fake = Path(d) / "gh"
