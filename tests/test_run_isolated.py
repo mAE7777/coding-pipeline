@@ -190,6 +190,36 @@ class AgentAndPackTest(unittest.TestCase):
             self.assertNotIn("---", data["cold-reader"]["prompt"][:5], "frontmatter is not part of the prompt")
             self.assertEqual(len(sha), 64)
 
+    def test_each_shipped_agent_cuts_to_its_route(self):
+        """The prompt each checker route gets from the shipped agent file holds its own mode's instructions and no
+        other mode's; a role whose routes have no mode carries no mode block (it would reach no run)."""
+        import models  # run_isolated.py put its own folder on the path
+        own = {"code-verifier.review": ("## Review", "class `structure`", "Deterministic layer"),
+               "code-verifier.reverify": ("## Review", "## Re-verify mode"),
+               "code-verifier.demo": ("## Demo", ".demo-captures/"),
+               "cold-reader.documents": ("## Documents mode",),
+               "cold-reader.reread": ("## Documents mode", "## Re-read"),
+               "cold-reader.understanding": ("## Understanding mode",),
+               "cold-reader.extract": ("## Extraction mode",),
+               "cold-reader.fidelity": ("## Fidelity mode",),
+               "cold-reader.refidelity": ("## Fidelity mode", "## Re-audit")}
+        headings = {h for want in own.values() for h in want if h.startswith("## ")}
+        for route in models.CHECKER_ROUTES:
+            role = route.split(".", 1)[0]
+            if role == "probe":
+                continue
+            _, meta, body = ri.read_agent(role, str(AGENTS / f"{role}.md"), sorted(models.section_names(route)))
+            self.assertNotIn("<!--", body, route)
+            if route not in own:
+                self.assertNotIn("_mode_sections", meta, f"{route} has no mode, so a mode block reaches no run")
+                continue
+            for text in own[route]:
+                self.assertIn(text, body, route)
+            for h in sorted(headings - set(own[route])):
+                self.assertNotIn(h, body, f"{route} carries another mode's instructions ({h})")
+        review = ri.read_agent("code-verifier", str(AGENTS / "code-verifier.md"), ["review"])[2]
+        self.assertNotIn("Re-verify mode", review, "test_gate_run's stand-in tells a re-verify run by these words")
+
     def test_pass_one_pack_leak_detected(self):
         with tempfile.TemporaryDirectory() as d:
             docs = Path(d) / "docs/project"
