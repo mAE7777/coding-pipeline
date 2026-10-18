@@ -1,0 +1,54 @@
+{
+  "M1-F01": {
+    "summary": "export writes a category that holds a comma, a double quote, or a line break as it is, so the CSV line splits into the wrong columns or rows",
+    "first_round": 1,
+    "rounds_blocking": [
+      1
+    ],
+    "status": "open",
+    "last_evidence": "add 'eat, out' 2 --on 2026-09-03; export -> 2026-09-03,eat, out,2.00 (four columns)",
+    "loop_back": "fix",
+    "fixed_when": "every category comes back unchanged when the export is read as CSV, for example a category `eat, out` added on 2026-09-03 exports as `2026-09-03,\"eat, out\",2.00`",
+    "files": [
+      "tally/export.py"
+    ],
+    "class": "correctness",
+    "severity": "high",
+    "where": "tally/export.py:9"
+  },
+  "M1-F02": {
+    "summary": "add accepts a negative amount: `add food -5` records -5.00 and lowers the food total",
+    "first_round": 1,
+    "rounds_blocking": [
+      1
+    ],
+    "status": "open",
+    "last_evidence": "add food -5 -> added -5.00 to food; total food -> Total food: -5.00",
+    "loop_back": "fix",
+    "fixed_when": "`add food -5` exits 2 with an error and records nothing, and `add food 0` is still accepted",
+    "files": [
+      "tally/money.py"
+    ],
+    "class": "correctness",
+    "severity": "medium",
+    "where": "tally/money.py:15"
+  },
+  "M1-F03": {
+    "summary": "an unreadable expenses.json is read as an empty list, so `add` overwrites it with one expense (L-01) and total, export, and archive show nothing (I-D2)",
+    "first_round": 1,
+    "rounds_blocking": [
+      1
+    ],
+    "status": "open",
+    "last_evidence": "printf '{broken' > expenses.json; add food 1 -> exit 0; expenses.json now holds one expense",
+    "loop_back": "fix",
+    "fixed_when": "with expenses.json holding `{broken`, `add food 1` exits 2 with an error naming the file and the file still holds `{broken`; total, export, and archive refuse it the same way",
+    "files": [
+      "tally/store.py",
+      "tally/cli.py"
+    ],
+    "class": "silent-degradation",
+    "severity": "high",
+    "where": "tally/store.py:16"
+  }
+}

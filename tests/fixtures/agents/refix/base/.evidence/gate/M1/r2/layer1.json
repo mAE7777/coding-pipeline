@@ -1,0 +1,36 @@
+{
+  "status": "PASS",
+  "checks": [
+    {
+      "name": "gate.sh",
+      "status": "PASS",
+      "exit": 0
+    },
+    {
+      "name": "milestone_lint",
+      "status": "PASS",
+      "exit": 0
+    },
+    {
+      "name": "intent_lock verify",
+      "status": "PASS",
+      "exit": 0
+    },
+    {
+      "name": "rulings",
+      "status": "PASS",
+      "exit": 0
+    },
+    {
+      "name": "inbox",
+      "status": "PASS",
+      "exit": 0
+    },
+    {
+      "name": "test suite",
+      "status": "PASS",
+      "exit": 0
+    }
+  ],
+  "for_reviewer": []
+}

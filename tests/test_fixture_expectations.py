@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "skills/_shared/scripts"))
 import agent_fixtures  # noqa: E402
 import fixture_expectations as fx  # noqa: E402
+import render_pack  # noqa: E402
 from fixture_expectations import FIXTURES  # noqa: E402
 
 FIX = ROOT / "tests/fixtures/agents"
@@ -30,11 +31,17 @@ NEW = ("code-verifier-demo-web-planted", "code-verifier-demo-web-clean", "code-v
        "cold-reader-understanding-shift-narrowed", "cold-reader-understanding-shift-mechanism",
        "cold-reader-understanding-shift-weakened", "cold-reader-understanding-shift-clean", "cold-reader-reread-partial", "cold-reader-reread-clean",
        "cold-reader-extract-clean", "claim-verifier-misquote", "claim-verifier-clean",
-       "probe-explorer-recall", "probe-explain-grounding")
+       "probe-explorer-recall", "probe-explain-grounding",
+       "code-verifier-review-structure-planted", "code-verifier-review-structure-clean",
+       "code-verifier-review-outside-excerpt", "code-verifier-reverify-refix-works",
+       "code-verifier-reverify-refix-fails", "code-verifier-reverify-refix-breaks-other")
+REFIX = ("code-verifier-reverify-refix-works", "code-verifier-reverify-refix-fails",
+         "code-verifier-reverify-refix-breaks-other")
 # The role prefix that `agent_fixtures.py --only <prefix>` (and repro:route:fixtures:<prefix>) selects each route by.
 PREFIX = {"code-verifier.demo": "code-verifier-demo", "gate-judge": "gate-judge",
           "cold-reader.understanding": "cold-reader-understanding", "cold-reader.reread": "cold-reader-reread",
-          "cold-reader.extract": "cold-reader-extract", "claim-verifier": "claim-verifier"}
+          "cold-reader.extract": "cold-reader-extract", "claim-verifier": "claim-verifier",
+          "code-verifier.review": "code-verifier-review", "code-verifier.reverify": "code-verifier-reverify"}
 
 
 def empty(name):
@@ -69,6 +76,11 @@ class RegistrationTest(unittest.TestCase):
                     self.assertTrue((FIX / spec["folder"] / spec["pack"]).is_file())
                 if spec["role"] == "probe":
                     self.assertTrue((ROOT / spec["agent"]).is_file())
+                if spec.get("base"):
+                    self.assertTrue((FIX / spec["base"]).is_dir())
+                if spec.get("scope"):
+                    self.assertEqual(spec.get("mode"), "reverify")
+                    self.assertTrue((FIX / spec["folder"] / spec["scope"]).is_file())
 
     def test_evolve_finds_the_probes_whose_text_changed(self):
         import evolve
@@ -83,13 +95,20 @@ class RegistrationTest(unittest.TestCase):
                   "cold-reader-understanding-shift-narrowed": 2, "cold-reader-understanding-shift-mechanism": 2,
                   "cold-reader-understanding-shift-weakened": 2, "cold-reader-reread-partial": 5,
                   "claim-verifier-misquote": 5, "probe-explorer-recall": 8,
-                  "probe-explain-grounding": 4}
+                  "probe-explain-grounding": 4, "code-verifier-review-structure-planted": 3,
+                  "code-verifier-review-outside-excerpt": 1, "code-verifier-reverify-refix-fails": 3,
+                  "code-verifier-reverify-refix-breaks-other": 4}
         for name, n in counts.items():
             with self.subTest(name):
                 self.assertEqual(len(empty(name)), n, empty(name))
         for name in NEW:
             if FIXTURES[name]["kind"] == "clean":
                 self.assertTrue(empty(name), f"{name}: an empty verdict must fail the clean control")
+
+    def test_the_reverify_route_pools_at_least_six_planted_items_per_run(self):
+        """Plan 7.3: at least 30 item-trials per side at --runs 5."""
+        planted = [n for n, s in FIXTURES.items() if s["serves"] == "code-verifier.reverify" and s["kind"] == "planted"]
+        self.assertGreaterEqual(sum(len(empty(n)) for n in planted) * 5, 30)
 
 
 class DemoExpectationTest(unittest.TestCase):
@@ -357,23 +376,151 @@ class ProbeExpectationTest(unittest.TestCase):
         self.assertNotIn("import", prose)
 
 
+class ReviewLensExpectationTest(unittest.TestCase):
+    """The structure lens twins and the defect outside the review pack's excerpt."""
+
+    def planted(self):
+        return {"mode": "review", "verdict": "FAIL",
+                "done_examples": [{"id": d, "status": "HOLDS"} for d in fx.STRUCTURE_DONE],
+                "findings": [{"id": "F01", "class": "structure", "severity": "medium", "where": "tally/report.py:7",
+                              "summary": "_amount is a second implementation of money.format_amount"},
+                             {"id": "F02", "class": "Structure", "severity": "medium", "where": "tally/cli.py:58",
+                              "summary": "the report command reads the ledger's private _expenses list"},
+                             {"id": "F03", "class": "structure", "severity": "medium", "where": "tally/dates.py:27",
+                              "summary": "the comment says month_of raises BadDay; it only slices the string"}]}
+
+    def test_structure_planted_counts_each_planted_item(self):
+        good = self.planted()
+        self.assertEqual(fx.structure_planted(good), [])
+        for i, rel in enumerate(("report.py", "cli.py", "dates.py")):
+            missed = json.loads(json.dumps(good))
+            del missed["findings"][i]
+            problems = fx.structure_planted(missed)
+            self.assertEqual(len(problems), 1, problems)
+            self.assertIn(rel, problems[0])
+            other_class = json.loads(json.dumps(good))
+            other_class["findings"][i]["class"] = "correctness"
+            self.assertEqual(len(fx.structure_planted(other_class)), 1, "only a structure finding counts")
+        wrong_file = json.loads(json.dumps(good))
+        wrong_file["findings"][1]["where"] = "tally/ledger.py:8"
+        self.assertEqual(len(fx.structure_planted(wrong_file)), 1, "the finding must name the file")
+        invented = {**good, "done_examples": [{"id": "M2.D2", "status": "FAILS"}]}
+        self.assertEqual(fx.structure_planted(invented), ["M2.D2 FAILS, but its behavior holds (an invented "
+                                                          "correctness claim)"])
+        self.assertEqual(len(fx.structure_planted({})), 3)
+
+    def test_structure_clean_allows_logged_nits_only(self):
+        good = {"verdict": "PASS", "done_examples": [{"id": d, "status": "HOLDS"} for d in fx.STRUCTURE_DONE],
+                "findings": [{"class": "structure", "severity": "low", "summary": "the docstring narrates"}]}
+        self.assertEqual(fx.structure_clean(good), [])
+        loud = json.loads(json.dumps(good))
+        loud["findings"][0]["severity"] = "medium"
+        self.assertEqual(len(fx.structure_clean(loud)), 1)
+        marked = json.loads(json.dumps(good))
+        marked["findings"][0]["presumptive_blocker"] = True
+        self.assertEqual(len(fx.structure_clean(marked)), 1)
+        failed = json.loads(json.dumps(good))
+        failed["done_examples"][0]["status"] = "FAILS"
+        self.assertEqual(len(fx.structure_clean(failed)), 1, "a FAILS row is one problem, not two")
+        skipped = {**good, "done_examples": good["done_examples"][1:] + [{"id": "M2-D3", "status": "UNGROUNDED"}]}
+        self.assertEqual(len(fx.structure_clean(skipped)), 2)
+        self.assertEqual(len(fx.structure_clean({})), 3)
+
+    def test_outside_excerpt_is_caught_by_the_file_or_the_dropped_line(self):
+        by_file = {"findings": [{"class": "correctness", "severity": "high", "where": "tally/dedupe.py:31",
+                                 "summary": "split adds each key to seen, so a repeated line is never new"}]}
+        self.assertEqual(fx.outside_excerpt(by_file), [])
+        by_run = {"must_not_lose": [{"id": "L-03", "status": "FAILS",
+                                     "evidence": "two identical coffees on 02/09 -> 1 imported, 1 already recorded"}]}
+        self.assertEqual(fx.outside_excerpt(by_run), [])
+        held = {"must_not_lose": [{"id": "L-03", "status": "HOLDS", "evidence": "two identical lines, both imported"}]}
+        self.assertEqual(len(fx.outside_excerpt(held)), 1, "a holding row is no catch")
+        other = {"findings": [{"class": "correctness", "summary": "a date of 31/09 is refused"}]}
+        self.assertEqual(len(fx.outside_excerpt(other)), 1)
+        self.assertEqual(len(fx.outside_excerpt({})), 1)
+
+
+class ReverifyExpectationTest(unittest.TestCase):
+    """The three re-verify fixtures: a FIXED or NOT_FIXED row per scope finding, and the broken caller."""
+
+    def rows(self, f01, f02, f03, findings=()):
+        return {"mode": "reverify", "verdict": "FAIL",
+                "reverify": [{"id": fid, "status": s, "evidence": "..."} for fid, s in
+                             (("M1-F01", f01), ("M1-F02", f02), ("M1-F03", f03))],
+                "findings": list(findings)}
+
+    def test_refix_works_wants_every_finding_fixed_and_nothing_new_that_blocks(self):
+        self.assertEqual(fx.refix_works(self.rows("FIXED", "FIXED", "FIXED")), [])
+        self.assertEqual(fx.refix_works(self.rows("fixed", "Fixed", "FIXED")), [], "statuses compared without case")
+        for i in range(3):
+            statuses = ["FIXED"] * 3
+            statuses[i] = "NOT_FIXED"
+            problems = fx.refix_works(self.rows(*statuses))
+            self.assertEqual(len(problems), 1)
+            self.assertTrue(problems[0].startswith(f"M1-F0{i + 1}: NOT_FIXED"))
+        nit = {"class": "structure", "severity": "low", "summary": "csv_line could be inlined"}
+        self.assertEqual(fx.refix_works(self.rows("FIXED", "FIXED", "FIXED", [nit])), [])
+        new = {"class": "correctness", "severity": "high", "summary": "export drops the last line"}
+        self.assertEqual(len(fx.refix_works(self.rows("FIXED", "FIXED", "FIXED", [new]))), 1)
+        renamed = self.rows("FIXED", "FIXED", "FIXED")
+        renamed["reverify"][0]["id"] = "F01"
+        self.assertEqual(len(fx.refix_works(renamed)), 1, "a row must carry the scope's id, as gate_report.py reads it")
+        self.assertEqual(len(fx.refix_works({})), 3)
+
+    def test_refix_fails_counts_each_finding(self):
+        self.assertEqual(fx.refix_fails(self.rows("NOT_FIXED", "FIXED", "NOT_FIXED")), [])
+        for statuses, fid in ((("FIXED", "FIXED", "NOT_FIXED"), "M1-F01"), (("NOT_FIXED", "NOT_FIXED", "NOT_FIXED"),
+                                                                             "M1-F02"),
+                              (("NOT_FIXED", "FIXED", "FIXED"), "M1-F03")):
+            problems = fx.refix_fails(self.rows(*statuses))
+            self.assertEqual(len(problems), 1, problems)
+            self.assertTrue(problems[0].startswith(fid))
+        self.assertIn("a different path", fx.refix_fails(self.rows("NOT_FIXED", "FIXED", "FIXED"))[0])
+        self.assertEqual(len(fx.refix_fails(self.rows("NOT FIXED", "FIXED", "NOT_FIXED"))), 1,
+                         "NOT FIXED is not a status gate_report.py reads")
+        self.assertEqual(len(fx.refix_fails({})), 3)
+
+    def test_refix_breaks_other_wants_the_fixes_and_the_broken_caller(self):
+        caller = {"id": "F01", "class": "correctness", "severity": "high", "where": "tally/archive.py:14",
+                  "summary": "archive now writes the header twice: csv_lines starts with it"}
+        self.assertEqual(fx.refix_breaks_other(self.rows("FIXED", "FIXED", "FIXED", [caller])), [])
+        by_row = {**self.rows("FIXED", "FIXED", "FIXED"), "done_examples": [{"id": "M1.D3", "status": "FAILS"}]}
+        self.assertEqual(fx.refix_breaks_other(by_row), [])
+        missed = fx.refix_breaks_other(self.rows("FIXED", "FIXED", "FIXED"))
+        self.assertEqual(len(missed), 1)
+        self.assertIn("archive", missed[0])
+        logged = {**caller, "severity": "low"}
+        self.assertEqual(len(fx.refix_breaks_other(self.rows("FIXED", "FIXED", "FIXED", [logged]))), 1)
+        blamed = fx.refix_breaks_other(self.rows("NOT_FIXED", "FIXED", "FIXED", [caller]))
+        self.assertEqual(len(blamed), 1, "the export's own finding is fixed; the archive is a new one")
+        self.assertTrue(blamed[0].startswith("M1-F01"))
+        self.assertEqual(len(fx.refix_breaks_other({})), 4)
+
+
 class PackTest(unittest.TestCase):
     """Each new fixture's pack, built the way agent_fixtures.py builds it, with no model."""
 
-    def pack(self, name):
+    def built(self, name, inspect):
+        """inspect(pack text, {project, workdir, patch}) on the fixture's pack, rendered as agent_fixtures.py renders
+        it (the project made by make_project, the checker's folder by prepare), before the work folder goes."""
         spec = FIXTURES[name]
         with tempfile.TemporaryDirectory() as d:
             work = Path(d)
-            shutil.copytree(FIX / spec["folder"], work / "project")
-            project = work / "project"
+            project = agent_fixtures.make_project(spec, work)
             workdir, _ = agent_fixtures.prepare(spec, project, work)
+            ctx = {"project": project, "workdir": workdir, "patch": work / "ev/code-verifier.change.patch"}
             if spec.get("pack"):
-                return agent_fixtures.embedded_pack(spec, project), workdir.name, []
-            out = work / "pack.md"
+                return inspect(agent_fixtures.embedded_pack(spec, project), ctx)
+            out = work / "ev/code-verifier.pack.md"
             r = subprocess.run([sys.executable, str(RENDER), spec["role"], "--out", str(out),
                                 *agent_fixtures.render_args(spec, project, workdir)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            return out.read_text(), workdir.name, agent_fixtures.judge_captures(spec, workdir)
+            return inspect(out.read_text(), ctx)
+
+    def pack(self, name):
+        spec = FIXTURES[name]
+        return self.built(name, lambda text, ctx: (text, ctx["workdir"].name,
+                                                   agent_fixtures.judge_captures(spec, ctx["workdir"])))
 
     def test_every_new_pack_renders_complete_and_without_canaries(self):
         for name in NEW:
@@ -419,6 +566,68 @@ class PackTest(unittest.TestCase):
             self.assertTrue((workdir / "serve.py").is_file())
             self.assertFalse((workdir / "docs").exists())
 
+    def test_a_review_pack_shows_the_milestone_change_over_its_base(self):
+        def inspect(text, ctx):
+            change = section_of(text, "Change since the milestone started")
+            self.assertRegex(change, r"added     tally/report\.py +\+\d+ -0 +code +inlined")
+            self.assertRegex(change, r"modified  tally/cli\.py ")
+            self.assertNotIn("tally/money.py", change, "M1's files are the baseline, not the change")
+            self.assertIn("+def _amount(cents):", change)
+            self.assertIn("+        lines = report.monthly(ledger._expenses)", change)
+            self.assertIn("+    # Checks the day first", change)
+            self.assertIn("## Structure lens (finding class structure)", text)
+            self.assertIn("M2.D2 When a month's total reaches a thousand", text)
+            self.assertFalse((ctx["workdir"] / ".evidence").exists(), "the baseline stays out of the review copy")
+        self.built("code-verifier-review-structure-planted", inspect)
+
+    def test_the_defect_file_is_outside_the_excerpt_and_whole_in_the_full_patch(self):
+        def inspect(text, ctx):
+            change = section_of(text, "Change since the milestone started")
+            rows = {m.group(1): m.group(2) for m in re.finditer(r"^\w+ +(\S+) +\+\d+ -\d+ +.+?  (\S.*)$", change, re.M)}
+            self.assertEqual(rows["tally/dedupe.py"], "not inlined: read it in the full patch")
+            self.assertEqual(rows["tally/importer.py"], "inlined", "the wiring's files come first")
+            self.assertNotIn("+++ b/tally/dedupe.py", text)
+            self.assertNotIn("seen.add", text, "the defect's hunk is absent from the pack")
+            self.assertNotIn("def split(", text)
+            patch = ctx["patch"].read_text()
+            self.assertGreater(len(patch.encode()), render_pack.DIFF_BUDGET, "the change is over the inline budget")
+            self.assertIn(f"The full patch: {ctx['patch'].resolve()}.", change)
+            self.assertIn("+            seen.add(k)", patch)
+            self.assertEqual(sorted(re.findall(r"^\+\+\+ b/(\S+)", patch, re.M)), sorted(rows), "every file, whole")
+            inlined = change.split("```diff", 1)[1]
+            for word in ("identical", "dedupe.py", "seen"):
+                self.assertNotIn(word, inlined, "nothing inlined points at the defect")
+        self.built("code-verifier-review-outside-excerpt", inspect)
+
+    def test_the_reverify_packs_carry_the_scope_findings_and_only_the_delta(self):
+        for name in REFIX:
+            spec = FIXTURES[name]
+
+            def inspect(text, ctx, spec=spec):
+                scope = json.loads((ctx["project"] / spec["scope"]).read_text())
+                delta = Path(scope["delta_patch"])
+                self.assertTrue(delta.is_absolute() and delta.is_file(), delta)
+                self.assertEqual(delta.parent, ctx["project"] / fx.REFIX_ROUND)
+                self.assertEqual(Path(scope["since"]["snapshot"]), ctx["project"] / ".evidence/gate/M1/full-candidate")
+                self.assertTrue(text.startswith("# Re-verify pack: M1 (focused, since round 1)"))
+                findings = section_of(text, "Open findings to re-verify")
+                for f in scope["findings"]:
+                    self.assertIn(f"- {f['id']} [{f['class']}, {f['severity']}] {f['summary']}", findings)
+                    self.assertIn(f"fixed when: {f['fixed_when']}", findings)
+                    self.assertIn(f"files: {', '.join(f['files'])}", findings)
+                self.assertEqual(ctx["patch"].read_text(), delta.read_text(), "the full delta sits beside the pack")
+                self.assertNotIn("Change since the milestone started", text)
+                self.assertIn("- test suite: PASS, exit 0", text)
+                self.assertNotIn("tally/archive.py", section_of(text, "Change since round 1's candidate"))
+            with self.subTest(name):
+                self.built(name, inspect)
+
+
+def section_of(text, heading):
+    """The body of the pack's '## heading' section (up to the next '## ' line that is a pack section)."""
+    m = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## (?!M\d+ )|\Z)", text, re.M | re.S)
+    return m.group(1) if m else None
+
 
 class HarnessTest(unittest.TestCase):
     """run_one end to end with a stand-in runner: no model, no spending."""
@@ -437,13 +646,17 @@ class HarnessTest(unittest.TestCase):
             shutil.copy(f, agents / f.name)
         self.calls = []
 
-    def stand_in(self, verdict, captures=()):
+    def stand_in(self, verdict, captures=(), seen=None):
+        """run_isolated.py replaced by a runner that writes the verdict; seen(cmd), when given, looks at the run's
+        folders while they exist."""
         real = agent_fixtures.run
 
         def fake(cmd, **kw):
             if not any(str(c).endswith("run_isolated.py") for c in cmd):
                 return real(cmd, **kw)
             self.calls.append(cmd)
+            if seen:
+                seen(cmd)
             out, workdir = Path(cmd[cmd.index("--out") + 1]), Path(cmd[cmd.index("--dir") + 1])
             stem = cmd[2] + ("-demo" if "--mode" in cmd and cmd[cmd.index("--mode") + 1] == "demo" else "")
             for rel in captures:
@@ -488,6 +701,61 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(rec["problems"], ["no Playwright here"])
         self.assertEqual(rec["problem_count"], 1 + len(empty("code-verifier-demo-web-planted")))
         self.assertEqual(list((self.tmp / "work").iterdir()), [], "the work copy is removed")
+
+    def test_help_prints_the_usage_and_runs_nothing(self):
+        # --only selects no fixture, so even without the help guard nothing could run here.
+        r = subprocess.run([sys.executable, "-B", str(ROOT / "tests/agent_fixtures.py"), "--only", "no-such-fixture",
+                            "--help"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.startswith("Level-3 harness"), r.stdout[:200])
+        self.assertNotIn("agent-fixtures:", r.stdout)
+
+    def test_a_reverify_fixture_renders_its_scope_and_runs_on_the_reverify_route(self):
+        name = "code-verifier-reverify-refix-fails"
+        spec, looked = FIXTURES[name], []
+
+        def seen(cmd):
+            render = cmd[cmd.index("--render") + 1:cmd.index("--", cmd.index("--render"))]
+            project = Path(render[render.index("--project") + 1])
+            scope_path = Path(render[render.index("--scope") + 1])
+            self.assertEqual(scope_path, project / spec["scope"])
+            scope = json.loads(scope_path.read_text())
+            self.assertEqual(Path(scope["delta_patch"]), project / fx.REFIX_ROUND / "delta.patch")
+            self.assertTrue(Path(scope["delta_patch"]).is_file())
+            self.assertEqual(render[render.index("--mode") + 1], "reverify")
+            self.assertTrue(Path(render[render.index("--layer1") + 1]).is_file())
+            self.assertFalse((project / ".evidence/baseline-M1.txt").exists(), "a re-verify reads no baseline")
+            self.assertTrue((project / "tally/archive.py").is_file(), "the base is under the variant")
+            looked.append(cmd)
+        verdict = {"mode": "reverify", "verdict": "FAIL", "findings": [],
+                   "reverify": [{"id": "M1-F01", "status": "NOT_FIXED"}, {"id": "M1-F02", "status": "FIXED"},
+                                {"id": "M1-F03", "status": "NOT_FIXED"}]}
+        with self.stand_in(verdict, seen=seen):
+            _, _, problems, _, rec = agent_fixtures.run_one(name, spec, 1, False, None)
+        self.assertEqual(problems, [])
+        self.assertEqual(rec["kind"], "planted")
+        cmd = looked[0]
+        self.assertEqual(cmd[cmd.index("--mode", cmd.index("--")) + 1], "reverify", "run_isolated runs the mode")
+        self.assertIn("CANARY-REFIX-STATE-6620", cmd)
+        self.assertTrue((self.tmp / "repo/.evidence/fixtures" / name / "run-1/verdict.json").is_file())
+        with self.stand_in({**verdict, "reverify": verdict["reverify"][1:]}):
+            rec = agent_fixtures.run_one(name, spec, 2, False, None)[4]
+        self.assertEqual(rec["problem_count"], 1)
+        self.assertTrue(rec["problems"][0].startswith("M1-F01: no reverify row"))
+
+    def test_a_review_fixture_with_a_base_records_the_baseline_before_its_change(self):
+        import baseline
+        name, changed = "code-verifier-review-structure-planted", []
+
+        def seen(cmd):
+            render = cmd[cmd.index("--render") + 1:cmd.index("--", cmd.index("--render"))]
+            project = Path(render[render.index("--project") + 1])
+            changed.extend(sorted((f["path"], f["status"]) for f in baseline.changes(project, "M2")["files"]))
+        with self.stand_in({"mode": "review", "findings": []}, seen=seen):
+            rec = agent_fixtures.run_one(name, FIXTURES[name], 1, False, None)[4]
+        self.assertEqual(changed, [("tally/cli.py", "modified"), ("tally/dates.py", "modified"),
+                                   ("tally/report.py", "added"), ("tests/test_report.py", "added")])
+        self.assertEqual(rec["problem_count"], 3)
 
 
 class PlantedProductTest(unittest.TestCase):
@@ -570,6 +838,146 @@ console.log(JSON.stringify(out));
         r = subprocess.run([sys.executable, "-B", str(FIX / "explorer-recall/tests/test_shelf.py")],
                            capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         self.assertEqual(r.returncode, 0, r.stderr[-600:])
+
+
+class LayeredProductTest(unittest.TestCase):
+    """The products of the structure, excerpt, and re-verify fixtures (a base with the fixture laid over it) behave
+    as their expectations say, and each passes its own suite, as the deterministic layer in the re-verify packs
+    reports."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def product(self, name):
+        spec = FIXTURES[name]
+        where = Path(tempfile.mkdtemp(dir=self.tmp))
+        dest = where / "project"
+        shutil.copytree(FIX / spec["base"], dest)
+        shutil.copytree(FIX / spec["folder"], dest, dirs_exist_ok=True)
+        folder = where / "run"
+        folder.mkdir()
+        return dest, folder
+
+    def tally(self, project, folder, *args):
+        env = {**os.environ, "PYTHONPATH": str(project), "PYTHONDONTWRITEBYTECODE": "1"}
+        return subprocess.run([sys.executable, "-m", "tally", *args], cwd=folder, capture_output=True, text=True,
+                              env=env)
+
+    def test_every_layered_product_passes_its_own_suite(self):
+        for name in (n for n in NEW if FIXTURES[n].get("base")):
+            with self.subTest(name):
+                project, _ = self.product(name)
+                r = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=project,
+                                   capture_output=True, text=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                self.assertEqual(r.returncode, 0, r.stderr[-800:])
+
+    def test_the_structure_twins_behave_alike_and_differ_only_where_planted(self):
+        reports = {}
+        for name in ("code-verifier-review-structure-planted", "code-verifier-review-structure-clean"):
+            project, folder = self.product(name)
+            for args in (("food", "5", "--on", "2026-09-03"), ("travel", "40", "--on", "2026-09-10"),
+                         ("food", "7.50", "--on", "2026-09-20"), ("food", "3", "--on", "2026-10-01"),
+                         ("rent", "1250", "--on", "2026-10-01")):
+                self.tally(project, folder, "add", *args)
+            reports[name] = self.tally(project, folder, "report").stdout.splitlines()
+        self.assertEqual(set(map(tuple, reports.values())), {("2026-09 food 12.50", "2026-09 travel 40.00",
+                                                              "2026-10 food 3.00", "2026-10 rent 1,250.00")})
+        planted, clean = FIX / "structure-planted", FIX / "structure-clean"
+        files = sorted(p.relative_to(planted).as_posix() for p in planted.rglob("*") if p.is_file())
+        self.assertEqual(files, sorted(p.relative_to(clean).as_posix() for p in clean.rglob("*") if p.is_file()))
+        differ = [f for f in files if (planted / f).read_bytes() != (clean / f).read_bytes()]
+        self.assertEqual(differ, ["tally/cli.py", "tally/dates.py", "tally/report.py"])
+        self.assertIn("def _amount(cents):", (planted / "tally/report.py").read_text())
+        self.assertIn("money.format_amount(cents)", (clean / "tally/report.py").read_text())
+        self.assertIn("report.monthly(ledger._expenses)", (planted / "tally/cli.py").read_text())
+        self.assertIn("report.monthly(ledger.expenses())", (clean / "tally/cli.py").read_text())
+        project, _ = self.product("code-verifier-review-structure-planted")
+        said = subprocess.run([sys.executable, "-c", "from tally import dates; print(dates.month_of('2026-99-99x'))"],
+                              cwd=project, capture_output=True, text=True)
+        self.assertEqual(said.stdout.strip(), "2026-99", "the comment says it raises BadDay; it does not")
+
+    def test_the_import_records_one_of_two_identical_lines(self):
+        project, folder = self.product("code-verifier-review-outside-excerpt")
+        (folder / "rules.txt").write_text("coffee -> food\n")
+        (folder / "pair.csv").write_text("Date,Description,Amount\n02/09/2026,CORNER COFFEE HOUSE,-3.50\n"
+                                         "02/09/2026,CORNER COFFEE HOUSE,-3.50\n05/09/2026,SHELL,-10.00\n")
+        out = self.tally(project, folder, "import", "pair.csv")
+        self.assertIn("imported 2 expense(s)", out.stdout)
+        self.assertIn("(1 already recorded", out.stdout, "the lost line is counted as already recorded")
+        self.assertEqual(self.tally(project, folder, "total", "food").stdout.strip(), "Total food: 3.50")
+
+    def csv_round_trip(self, project, folder):
+        """(export rows, archive rows) for categories holding a comma, a quote, and a line break."""
+        import csv
+        import io
+        categories = ["eat, out", 'say "hi", ok', "two\nlines"]
+        for c in categories:
+            self.tally(project, folder, "add", c, "2", "--on", "2026-09-03")
+        self.tally(project, folder, "archive", "2026-09")
+        exported = list(csv.reader(io.StringIO(self.tally(project, folder, "export").stdout)))
+        archived = list(csv.reader(io.StringIO((folder / "archive/2026-09.csv").read_text())))
+        return categories, exported, archived
+
+    def broken_add(self, project, folder):
+        """(exit of add on an unreadable file, what the file holds after)."""
+        data = folder / "expenses.json"
+        data.write_text("{broken")
+        code = self.tally(project, folder, "add", "food", "1").returncode
+        return code, data.read_text()
+
+    def test_each_refix_variant_does_what_its_expectation_says(self):
+        header = ["day", "category", "amount"]
+        for name in REFIX:
+            with self.subTest(name):
+                project, folder = self.product(name)
+                self.assertEqual(self.tally(project, folder, "add", "food", "-5").returncode, 2, "M1-F02 fixed")
+                categories, exported, archived = self.csv_round_trip(project, folder)
+                rows = [header] + [["2026-09-03", c, "2.00"] for c in categories]
+                code, kept = self.broken_add(project, folder)
+                if name.endswith("works"):
+                    self.assertEqual((exported, archived), (rows, rows))
+                    self.assertEqual((code, kept), (2, "{broken"))
+                elif name.endswith("fails"):
+                    self.assertEqual(exported[1], ["2026-09-03", "eat, out", "2.00"], "fixed_when's own example")
+                    self.assertNotEqual(exported, rows, "M1-F01 is not fixed for a quote or a line break")
+                    self.assertEqual(code, 0, "M1-F03 is not fixed: add still overwrites the unreadable file")
+                    self.assertNotEqual(kept, "{broken")
+                else:
+                    self.assertEqual(exported, rows)
+                    self.assertEqual(archived, [header] + rows, "the archive, a caller of csv_lines, has two headers")
+                    self.assertEqual((code, kept), (2, "{broken"))
+
+    def test_each_refix_delta_is_what_regate_scope_writes(self):
+        import regate_scope
+        from fingerprint import fingerprint
+        snap = self.tmp / "snap"
+        shutil.copytree(FIX / "refix/base", snap)
+        since, rows = fingerprint(snap, "product")
+        old = {rel: h[:16] for rel, h in rows}
+        ledger = json.loads((FIX / "refix/base/docs/project/reviews/M1.findings.json").read_text())
+        for name in REFIX:
+            with self.subTest(name):
+                spec = FIXTURES[name]
+                project, _ = self.product(name)
+                cur = {rel: h[:16] for rel, h in fingerprint(project, "product")[1]}
+                patch = self.tmp / f"{name}.patch"
+                changed = regate_scope.delta(project, snap, old, cur, patch)
+                scope = json.loads((FIX / spec["folder"] / spec["scope"]).read_text())
+                self.assertEqual(patch.read_text(), (FIX / spec["folder"] / scope["delta_patch"]).read_text())
+                self.assertEqual(scope["changed_files"], changed)
+                self.assertEqual(scope["changed_lines"], sum(c["added"] + c["removed"] for c in changed))
+                self.assertLess(scope["changed_lines"], regate_scope.LINE_LIMIT)
+                self.assertEqual((scope["scope"], scope["milestone"], scope["kind"]), ("focused", "M1", "changes"))
+                self.assertEqual(scope["since"]["fingerprint"], since)
+                self.assertEqual([f["id"] for f in scope["findings"]], sorted(fid for fid, r in ledger.items()
+                                                                               if r["status"] == "open"))
+                for f in scope["findings"]:
+                    for k in ("summary", "class", "severity", "files", "where", "fixed_when"):
+                        self.assertEqual(f[k], ledger[f["id"]][k], (f["id"], k))
+                named = {p for f in scope["findings"] for p in f["files"]}
+                for c in changed:
+                    self.assertTrue(c["path"] in named or c["path"].startswith("tests/"), c["path"])
 
 
 if __name__ == "__main__":

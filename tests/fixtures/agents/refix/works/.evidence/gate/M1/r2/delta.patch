@@ -1,0 +1,136 @@
+--- a/tally/cli.py
++++ b/tally/cli.py
+@@ -40,7 +40,10 @@
+ 
+ def main(argv=None):
+     args = parser().parse_args(argv)
+-    items = store.load()
++    try:
++        items = store.load()
++    except store.Unreadable as exc:
++        return refuse(f"{exc}; the file was left untouched")
+     if args.cmd == "add":
+         try:
+             item = {"day": day_of(args.on), "category": args.category, "cents": money.parse_amount(args.amount)}
+--- a/tally/export.py
++++ b/tally/export.py
+@@ -1,9 +1,19 @@
+ """Expenses as CSV: day, category, amount."""
++import csv
++import io
++
+ from tally.money import format_amount
+ 
+ HEADER = "day,category,amount"
+ 
+ 
++def csv_line(cells):
++    """One CSV record: a cell holding a comma, a double quote, or a line break is quoted as CSV quotes it."""
++    out = io.StringIO()
++    csv.writer(out, lineterminator="").writerow(cells)
++    return out.getvalue()
++
++
+ def csv_lines(items):
+     """One CSV line per expense, in the order recorded, without the header."""
+-    return [f"{i['day']},{i['category']},{format_amount(i['cents'])}" for i in items]
++    return [csv_line([i["day"], i["category"], format_amount(i["cents"])]) for i in items]
+--- a/tally/money.py
++++ b/tally/money.py
+@@ -7,13 +7,15 @@
+ 
+ 
+ def parse_amount(text):
+-    """The amount typed ("12.5", "0.99") as whole cents; BadAmount when it is not a number."""
++    """The amount typed ("12.5", "0.99", "0") as whole cents; BadAmount when it is not a number or is below zero."""
+     try:
+         value = Decimal(text.strip())
+     except InvalidOperation:
+         raise BadAmount(f"not an amount: {text}") from None
+     if not value.is_finite():
+         raise BadAmount(f"not an amount: {text}")
++    if value < 0:
++        raise BadAmount(f"not an amount: {text} (an expense is never below zero)")
+     return int((value * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+ 
+ 
+--- a/tally/store.py
++++ b/tally/store.py
+@@ -7,14 +7,31 @@
+ DATA = Path("expenses.json")
+ 
+ 
++class Unreadable(Exception):
++    pass
++
++
++def is_expense(item):
++    return (isinstance(item, dict) and isinstance(item.get("day"), str) and isinstance(item.get("category"), str)
++            and type(item.get("cents")) is int and item["cents"] >= 0)
++
++
+ def load(path=DATA):
+-    """The expenses the file holds; none when there is no file."""
++    """The expenses the file holds; none when there is no file. Unreadable when the file exists but is not a list
++    of expenses; the file is never touched."""
+     try:
+-        return json.loads(Path(path).read_text(encoding="utf-8"))
++        text = Path(path).read_text(encoding="utf-8")
+     except FileNotFoundError:
+         return []
+-    except ValueError:
+-        return []
++    except (OSError, UnicodeDecodeError) as exc:
++        raise Unreadable(f"cannot read {path}: {exc}") from exc
++    try:
++        items = json.loads(text)
++    except ValueError as exc:
++        raise Unreadable(f"cannot read {path}: {exc}") from exc
++    if not isinstance(items, list) or not all(is_expense(i) for i in items):
++        raise Unreadable(f"cannot read {path}: it does not hold a list of expenses")
++    return items
+ 
+ 
+ def save(items, path=DATA):
+--- a/tests/test_tally.py
++++ b/tests/test_tally.py
+@@ -1,3 +1,5 @@
++import csv
++import io
+ import os
+ import subprocess
+ import sys
+@@ -54,6 +56,33 @@
+         self.assertNotIn("2026-10", text)
+         self.assertEqual(tally(self.dir, "archive", "2026-13").returncode, 2)
+ 
++    def test_a_negative_amount_is_refused_and_zero_is_kept(self):
++        out = tally(self.dir, "add", "food", "-5")
++        self.assertEqual(out.returncode, 2)
++        self.assertIn("not an amount: -5", out.stderr)
++        self.assertFalse((Path(self.dir) / "expenses.json").exists())
++        self.assertEqual(tally(self.dir, "add", "food", "0").returncode, 0)
++
++    def test_every_category_reads_back_from_export_and_archive(self):
++        categories = ["eat, out", 'say "hi", ok', "two\nlines", '"quoted" lunch']
++        for category in categories:
++            tally(self.dir, "add", category, "2", "--on", "2026-09-03")
++        exported = list(csv.reader(io.StringIO(tally(self.dir, "export").stdout)))
++        self.assertEqual(exported, [["day", "category", "amount"]] + [["2026-09-03", c, "2.00"] for c in categories])
++        tally(self.dir, "archive", "2026-09")
++        archived = list(csv.reader(io.StringIO((Path(self.dir) / "archive/2026-09.csv").read_text())))
++        self.assertEqual(archived, exported)
++
++    def test_an_unreadable_file_is_refused_by_every_command_and_kept(self):
++        data = Path(self.dir) / "expenses.json"
++        for raw in ("{broken", "{}", "[1, 2]"):
++            data.write_text(raw)
++            for args in (("add", "food", "1"), ("total", "food"), ("export",), ("archive", "2026-09")):
++                out = tally(self.dir, *args)
++                self.assertEqual(out.returncode, 2, (raw, args))
++                self.assertIn("cannot read expenses.json", out.stderr)
++            self.assertEqual(data.read_text(), raw)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

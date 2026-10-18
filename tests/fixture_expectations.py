@@ -12,7 +12,10 @@ answers are counted one by one (explorer recall, explain grounding) is planted: 
 runs on the probe route with the model agent_fixtures.py --model names, so it measures a builder-side route
 (explorer, scout-map, explain) only through that flag.
 A spec with "browser": true needs a machine where browse.py can start a headless browser (Playwright); the
-harness reports such a run as missed, without spending, when it cannot."""
+harness reports such a run as missed, without spending, when it cannot.
+A spec with "base" starts from that folder and lays its own folder over it (a review of a later milestone, or a
+re-gate round's delta over the earlier candidate); a spec with "mode": "reverify" names its round's "scope"
+(agent_fixtures.py says how the harness prepares both)."""
 import json
 import re
 from pathlib import Path
@@ -283,6 +286,150 @@ def demo_silent(v, ctx=None):
         status = (steps.get(n) or {}).get("status")
         if status not in ("FAILS", "UNGROUNDED"):
             problems.append(f"demo step {n}, {label}: {status} (expected FAILS or UNGROUNDED)")
+    return problems
+
+
+# ---------- code-verifier, the structure lens and the review excerpt ----------
+
+def status_of(row):
+    return str(row.get("status") or "").strip().upper()
+
+
+def row_id(value):
+    """An id compared without case or punctuation: "M2.D1", "m2-d1", and "M2 D1" alike."""
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def blocks(finding):
+    """True when a finding is reported at a blocking severity (high or medium; low is a logged nit) or is marked
+    blocking."""
+    marked = any(finding.get(k) is True for k in ("blocking", "blocker", "presumptive_blocker"))
+    return marked or str(finding.get("severity") or "").strip().lower() in ("high", "medium")
+
+
+def structure_findings(v):
+    return [f for f in v.get("findings") or [] if isinstance(f, dict) and
+            str(f.get("class") or "").strip().lower() == "structure"]
+
+
+def failing_rows(v):
+    """The done-example, mechanism, and must-not-lose rows a review calls FAILS."""
+    return [r for k in ("done_examples", "mechanisms", "must_not_lose") for r in v.get(k) or []
+            if isinstance(r, dict) and status_of(r) == "FAILS"]
+
+
+def invented_fails(v):
+    """One problem per FAILS row on a product whose behavior holds (every done example, card, and item does)."""
+    return [f"{r.get('id') or r.get('name')} FAILS, but its behavior holds (an invented correctness claim)"
+            for r in failing_rows(v)]
+
+
+# Each planted structure item: its label, the file a finding must name, and the words (any one) that tell it apart.
+STRUCTURE_PLANTED = {
+    "a second implementation of money.format_amount (report.py's _amount)":
+        ("report.py", ("format_amount", "money.py", "money module", "_amount", "duplicat", "reimplement",
+                       "second implementation", "already")),
+    "cli.py reaching into the ledger's private _expenses (Ledger.expenses() is the public way)":
+        ("cli.py", ("_expenses", "private", "internal", "encapsulat", "expenses()")),
+    "a false comment in dates.py (month_of says it checks the day and raises BadDay; it only slices)":
+        ("dates.py", ("comment", "badday", "raise", "validat", "check", "false", "mislead", "inaccurate")),
+}
+STRUCTURE_DONE = ("M2.D1", "M2.D2", "M2.D3")
+
+
+def structure_planted(v, ctx=None):
+    """A correct monthly report with three presumptive structure blockers: each must be a structure finding naming
+    its file, and no done example that holds may be called FAILS."""
+    found = structure_findings(v)
+    problems = [f"not a structure finding naming {rel}: {label}" for label, (rel, words) in STRUCTURE_PLANTED.items()
+                if not any(has(f, (rel,), words) for f in found)]
+    return problems + invented_fails(v)
+
+
+def structure_clean(v, ctx=None):
+    """The tidy twin of the same report: no structure finding at a blocking severity (logged nits are fine), no
+    FAILS, and each of the milestone's done examples HOLDS."""
+    loud = [f for f in structure_findings(v) if blocks(f)]
+    problems = ["structure finding at a blocking severity on the tidy twin: " + str(f.get("summary"))[:80]
+                for f in loud] + invented_fails(v)
+    rows = {row_id(r.get("id")): status_of(r) for r in v.get("done_examples") or [] if isinstance(r, dict)}
+    for did in STRUCTURE_DONE:
+        if rows.get(row_id(did)) not in ("HOLDS", "FAILS"):  # a FAILS row is counted above
+            problems.append(f"{did} is {rows.get(row_id(did)) or 'not reported'} (expected HOLDS)")
+    return problems
+
+
+IDENTICAL = ("identical", "same day", "alike", "duplicate", "twice", "two coffee", "two purchase", "two of",
+             "same payee", "both", "repeated")
+LOST = ("drop", "lost", "lose", "skip", "collaps", "missing", "only one", "one of", "silent", "already recorded",
+        "swallow", "vanish", "disappear", "merged")
+
+
+def outside_excerpt(v, ctx=None):
+    """The import change is over the pack's inline budget; its one defect sits in tally/dedupe.py, which the pack
+    lists as not inlined: two identical spending lines of one statement are recorded once (the second is counted
+    as already recorded). A finding or a non-holding row must name the file or the dropped line."""
+    rows = [f for f in v.get("findings") or [] if isinstance(f, dict)] + \
+        [r for k in ("done_examples", "mechanisms", "must_not_lose", "wiring") for r in v.get(k) or []
+         if isinstance(r, dict) and status_of(r) not in ("HOLDS", "PROVEN")]
+    if any(has(r, ("dedupe",)) or has(r, IDENTICAL, LOST) for r in rows):
+        return []
+    return ["not caught: two identical spending lines in one statement are recorded once (tally/dedupe.py, read "
+            "only in the full patch)"]
+
+
+# ---------- code-verifier, focused re-verify ----------
+
+def reverify_rows(v):
+    """{id: status} of the re-verify rows, ids compared as gate_report.py compares them (case and spacing aside)."""
+    return {re.sub(r"\s+", " ", str(r.get("id") or "")).strip().lower(): status_of(r)
+            for r in v.get("reverify") or [] if isinstance(r, dict)}
+
+
+def reverify_items(v, wanted):
+    """One problem per scope finding whose re-verify row is not the status the delta earns."""
+    rows, problems = reverify_rows(v), []
+    for fid, (status, why) in wanted.items():
+        got = rows.get(fid.lower())
+        if got != status:
+            problems.append(f"{fid}: {got or 'no reverify row'} (expected {status}: {why})")
+    return problems
+
+
+REFIX_FIXED = {"M1-F01": ("FIXED", "every category is written by the csv writer, so it reads back unchanged"),
+               "M1-F02": ("FIXED", "a negative amount is refused, zero still accepted"),
+               "M1-F03": ("FIXED", "every command refuses an unreadable file and leaves it as it was")}
+REFIX_FAILS = {"M1-F01": ("NOT_FIXED", "the delta quotes a category holding a comma, the example fixed_when gives, "
+                                       "but a quote or a line break still breaks the CSV"),
+               "M1-F02": REFIX_FIXED["M1-F02"],
+               "M1-F03": ("NOT_FIXED", "the delta makes total refuse an unreadable file, a different path: add still "
+                                       "overwrites it")}
+
+
+def refix_works(v, ctx=None):
+    """The delta fixes all three open findings correctly: each FIXED, and no new finding at a blocking severity."""
+    new = [f for f in v.get("findings") or [] if isinstance(f, dict) and blocks(f) and
+           str(f.get("class") or "").strip().lower() != "clarity"]
+    return reverify_items(v, REFIX_FIXED) + [f"new finding at a blocking severity on a correct delta: "
+                                             f"{str(f.get('summary'))[:80]}" for f in new]
+
+
+def refix_fails(v, ctx=None):
+    """One finding fixed, one fixed only for fixed_when's own example, one fixed on another path."""
+    return reverify_items(v, REFIX_FAILS)
+
+
+def refix_breaks_other(v, ctx=None):
+    """All three findings fixed, but moving the CSV header into export.csv_lines doubles the header in every month
+    archive (tally/archive.py, a caller the delta does not touch): FIXED for each, and a new finding naming it."""
+    problems = reverify_items(v, REFIX_FIXED)
+    named = [f for f in v.get("findings") or [] if isinstance(f, dict) and has(f, ("archive",)) and
+             str(f.get("severity") or "").strip().lower() != "low" and
+             str(f.get("class") or "").strip().lower() not in ("structure", "clarity")]
+    named += [r for r in failing_rows(v) if has(r, ("archive", "m1.d3", "i-d3"))]
+    if not named:
+        problems.append("not caught: the month archive (tally/archive.py, a caller of export.csv_lines) now writes "
+                        "the header twice")
     return problems
 
 
@@ -755,6 +902,24 @@ EXPLAIN_FILES = ("AGENTS.md", "README.md", "CHANGELOG.md", "app.py", "tests/test
                  *(f".evidence/gate/M1/r1/captures/M1-{i}.txt" for i in range(1, 5)))
 UNDERSTANDING = ["--milestone", "M1", "--inputs", "understanding"]
 DEMO = ["--milestone", "M1", "--mode", "demo"]
+REVIEW_M2 = ["--milestone", "M2", "--copy", "{copy}"]
+REFIX_ROUND = ".evidence/gate/M1/r2"
+REVERIFY = ["--milestone", "M1", "--mode", "reverify", "--scope", "{scope}", "--layer1", "{project}/" + REFIX_ROUND +
+            "/layer1.json"]
+
+
+def review_fixture(kind, folder, expect):
+    """A review of M2 in the tally package: tally-m1 is the product as M1 left it, folder is M2's change over it."""
+    return {"kind": kind, "role": "code-verifier", "serves": "code-verifier.review", "base": "tally-m1",
+            "folder": folder, "dir": "review", "milestone": "M2", "render": REVIEW_M2,
+            "canaries": ["CANARY-REVIEW-STATE-3391"], "expect": expect}
+
+
+def refix_fixture(kind, variant, expect):
+    """A focused round 2 of M1: refix/base is round 1's candidate (three open findings), the variant its delta."""
+    return {"kind": kind, "role": "code-verifier", "serves": "code-verifier.reverify", "base": "refix/base",
+            "folder": f"refix/{variant}", "dir": "review", "mode": "reverify", "scope": REFIX_ROUND + "/scope.json",
+            "render": REVERIFY, "canaries": ["CANARY-REFIX-STATE-6620"], "expect": expect}
 
 FIXTURES = {
     "cold-reader-ambiguous": {"kind": "planted", "role": "cold-reader", "serves": "cold-reader.documents",
@@ -806,6 +971,12 @@ FIXTURES = {
     "code-verifier-clean": {"kind": "clean", "role": "code-verifier", "serves": "code-verifier.review",
                             "folder": "tally-clean", "dir": "review",
                             "render": ["--milestone", "M1", "--copy", "{copy}"], "expect": review_clean},
+    "code-verifier-review-structure-planted": review_fixture("planted", "structure-planted", structure_planted),
+    "code-verifier-review-structure-clean": review_fixture("clean", "structure-clean", structure_clean),
+    "code-verifier-review-outside-excerpt": review_fixture("planted", "outside-excerpt", outside_excerpt),
+    "code-verifier-reverify-refix-works": refix_fixture("clean", "works", refix_works),
+    "code-verifier-reverify-refix-fails": refix_fixture("planted", "fails", refix_fails),
+    "code-verifier-reverify-refix-breaks-other": refix_fixture("planted", "breaks-other", refix_breaks_other),
     "code-verifier-demo-planted": {"kind": "planted", "role": "code-verifier", "serves": "code-verifier.demo",
                                    "folder": "tally-defects", "dir": "demo", "mode": "demo",
                                    "render": DEMO, "expect": demo_planted},

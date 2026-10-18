@@ -1,0 +1,93 @@
+--- a/tally/cli.py
++++ b/tally/cli.py
+@@ -52,6 +52,8 @@
+             return refuse(f"cannot save {store.DATA}: {exc}; nothing was recorded")
+         print(f"added {money.format_amount(item['cents'])} to {item['category']} on {item['day']}")
+     elif args.cmd == "total":
++        if not store.readable():
++            return refuse(f"cannot read {store.DATA}: it does not hold JSON; the file was left untouched")
+         cents = sum(i["cents"] for i in items if i["category"] == args.category)
+         print(f"Total {args.category}: {money.format_amount(cents)}")
+     elif args.cmd == "export":
+--- a/tally/export.py
++++ b/tally/export.py
+@@ -4,6 +4,11 @@
+ HEADER = "day,category,amount"
+ 
+ 
++def cell(text):
++    """A cell as CSV writes it: one holding a comma is quoted."""
++    return f'"{text}"' if "," in text else text
++
++
+ def csv_lines(items):
+     """One CSV line per expense, in the order recorded, without the header."""
+-    return [f"{i['day']},{i['category']},{format_amount(i['cents'])}" for i in items]
++    return [f"{i['day']},{cell(i['category'])},{format_amount(i['cents'])}" for i in items]
+--- a/tally/money.py
++++ b/tally/money.py
+@@ -7,13 +7,15 @@
+ 
+ 
+ def parse_amount(text):
+-    """The amount typed ("12.5", "0.99") as whole cents; BadAmount when it is not a number."""
++    """The amount typed ("12.5", "0.99", "0") as whole cents; BadAmount when it is not a number or is below zero."""
+     try:
+         value = Decimal(text.strip())
+     except InvalidOperation:
+         raise BadAmount(f"not an amount: {text}") from None
+     if not value.is_finite():
+         raise BadAmount(f"not an amount: {text}")
++    if value < 0:
++        raise BadAmount(f"not an amount: {text} (an expense is never below zero)")
+     return int((value * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+ 
+ 
+--- a/tally/store.py
++++ b/tally/store.py
+@@ -17,6 +17,17 @@
+         return []
+ 
+ 
++def readable(path=DATA):
++    """False when the file exists but does not hold JSON."""
++    try:
++        json.loads(Path(path).read_text(encoding="utf-8"))
++    except FileNotFoundError:
++        return True
++    except ValueError:
++        return False
++    return True
++
++
+ def save(items, path=DATA):
+     """Write every expense through a temporary file and a rename, so a failed write leaves the old file."""
+     path = Path(path)
+--- a/tests/test_tally.py
++++ b/tests/test_tally.py
+@@ -54,6 +54,25 @@
+         self.assertNotIn("2026-10", text)
+         self.assertEqual(tally(self.dir, "archive", "2026-13").returncode, 2)
+ 
++    def test_a_negative_amount_is_refused_and_zero_is_kept(self):
++        out = tally(self.dir, "add", "food", "-5")
++        self.assertEqual(out.returncode, 2)
++        self.assertIn("not an amount: -5", out.stderr)
++        self.assertFalse((Path(self.dir) / "expenses.json").exists())
++        self.assertEqual(tally(self.dir, "add", "food", "0").returncode, 0)
++
++    def test_a_category_with_a_comma_is_quoted(self):
++        tally(self.dir, "add", "eat, out", "2", "--on", "2026-09-03")
++        self.assertEqual(tally(self.dir, "export").stdout, 'day,category,amount\n2026-09-03,"eat, out",2.00\n')
++
++    def test_total_refuses_an_unreadable_file(self):
++        data = Path(self.dir) / "expenses.json"
++        data.write_text("{broken")
++        out = tally(self.dir, "total", "food")
++        self.assertEqual(out.returncode, 2)
++        self.assertIn("cannot read expenses.json", out.stderr)
++        self.assertEqual(data.read_text(), "{broken")
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

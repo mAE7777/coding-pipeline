@@ -1,0 +1,96 @@
+{
+  "scope": "focused",
+  "milestone": "M1",
+  "kind": "changes",
+  "reasons": [
+    "the previous round (r1) ended CHANGES",
+    "the evaluator's results from r1 (product:630fe33bd4f7c71a) are carried",
+    "5 file(s) and 75 line(s) changed since r1, each a test file or named in a finding blocking since r1"
+  ],
+  "since": {
+    "round": 1,
+    "fingerprint": "product:630fe33bd4f7c71a",
+    "snapshot": ".evidence/gate/M1/full-candidate"
+  },
+  "changed_files": [
+    {
+      "path": "tally/cli.py",
+      "status": "modified",
+      "added": 4,
+      "removed": 1
+    },
+    {
+      "path": "tally/export.py",
+      "status": "modified",
+      "added": 11,
+      "removed": 1
+    },
+    {
+      "path": "tally/money.py",
+      "status": "modified",
+      "added": 3,
+      "removed": 1
+    },
+    {
+      "path": "tally/store.py",
+      "status": "modified",
+      "added": 21,
+      "removed": 4
+    },
+    {
+      "path": "tests/test_tally.py",
+      "status": "modified",
+      "added": 29,
+      "removed": 0
+    }
+  ],
+  "changed_lines": 75,
+  "delta_patch": ".evidence/gate/M1/r2/delta.patch",
+  "findings": [
+    {
+      "id": "M1-F01",
+      "summary": "export writes a category that holds a comma, a double quote, or a line break as it is, so the CSV line splits into the wrong columns or rows",
+      "class": "correctness",
+      "severity": "high",
+      "files": [
+        "tally/export.py"
+      ],
+      "where": "tally/export.py:9",
+      "fixed_when": "every category comes back unchanged when the export is read as CSV, for example a category `eat, out` added on 2026-09-03 exports as `2026-09-03,\"eat, out\",2.00`"
+    },
+    {
+      "id": "M1-F02",
+      "summary": "add accepts a negative amount: `add food -5` records -5.00 and lowers the food total",
+      "class": "correctness",
+      "severity": "medium",
+      "files": [
+        "tally/money.py"
+      ],
+      "where": "tally/money.py:15",
+      "fixed_when": "`add food -5` exits 2 with an error and records nothing, and `add food 0` is still accepted"
+    },
+    {
+      "id": "M1-F03",
+      "summary": "an unreadable expenses.json is read as an empty list, so `add` overwrites it with one expense (L-01) and total, export, and archive show nothing (I-D2)",
+      "class": "silent-degradation",
+      "severity": "high",
+      "files": [
+        "tally/store.py",
+        "tally/cli.py"
+      ],
+      "where": "tally/store.py:16",
+      "fixed_when": "with expenses.json holding `{broken`, `add food 1` exits 2 with an error naming the file and the file still holds `{broken`; total, export, and archive refuse it the same way"
+    }
+  ],
+  "fixes": [],
+  "carried": {
+    "loyal-evaluator": {
+      "round": 1,
+      "fingerprint": "product:630fe33bd4f7c71a"
+    },
+    "loyal-evaluator-pass2": {
+      "round": 1,
+      "fingerprint": "product:630fe33bd4f7c71a"
+    }
+  }
+}
