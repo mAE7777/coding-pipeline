@@ -82,13 +82,18 @@ ritual inside the build.
 ## Checkers
 
 Each runs as a separate headless process in a prepared copy of the project, under the operating system's
-sandbox, with its inputs rendered by a script from files. None sees the builder's conversation. Each one's model
-and effort come from the routing table, `skills/_shared/models.json` (`models.py list` shows them), never from
-the agent file.
+sandbox, with its inputs rendered by a script from files. None sees the builder's conversation. Each run's
+model and effort come from the routing table, `skills/_shared/models.json` (`models.py list` shows them), by
+route: the checker, and its mode where the modes judge different things (the code-verifier's review, re-verify,
+and demo; the cold-reader's documents, re-read, understanding, extraction, fidelity, and re-audit). The agent
+file sets neither, and each run gets only its own mode's part of it. Every route runs today's setting until a
+change to it passes the measurements in [`docs/model-routing.md`](docs/model-routing.md) (pooled fixtures,
+cost, shadow runs beside real rounds) and the owner approves it. `spend.py report` shows what each milestone,
+round, and checker cost.
 
 | Agent | Catches |
 |---|---|
-| `code-verifier` | a build that passes its own tests while the core mechanism is a familiar imitation, or failure paths quietly degrade; also runs the demo from a clean start |
+| `code-verifier` | a build that passes its own tests while the core mechanism is a familiar imitation, or failure paths quietly degrade; structural damage, logged unless it is one of four presumptive blockers; in a focused round, whether the open findings are fixed; also runs the demo from a clean start |
 | `loyal-evaluator` | a product that works but is no longer the thing that was meant: it describes what the product does and guesses its purpose before it is told the goal |
 | `gate-judge` | a verdict that grades the builder's story instead of the evidence |
 | `cold-reader` | a document clear to its author that admits several builds; a restatement that shifted the promise; a summary that lost or bent its source |
@@ -140,7 +145,8 @@ every installed file's hash, and the routing table's on its own. Your personal r
 (`~/.claude/.pipeline-models.json`) and shadow-run records (`~/.claude/.pipeline-shadow.jsonl`) are never touched.
 
 Tests: `bash tests/pipeline-selftest.sh` runs every script and hook suite and the static checks.
-`python3 tests/agent_fixtures.py` runs each checker against planted-defect and clean projects, three times each.
+`python3 tests/agent_fixtures.py` runs each checker against planted-defect and clean projects, three times each,
+on its route's setting (`--model` and `--effort` measure another).
 
 Requirements: macOS (the sandbox and copy-on-write clones), Python 3.9+, Claude Code 2.1.283 or later,
 Playwright for Python with Chromium (the checkers' browser), and `playwright-cli` (the builder's browser);
