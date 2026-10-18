@@ -49,6 +49,33 @@ class MarkerTest(unittest.TestCase):
         found = gc.new_markers(old, old + ["@pytest.mark.skip", "def test_b():", "    assert 1"])
         self.assertEqual([n for n, _ in found], [4])
 
+    def test_f_and_x_prefixed_calls_are_markers_only_in_js_with_a_string_argument(self):
+        for line in ("assert fit([1]) == 1", "model = fit(X, y)", "xit(data)", "fdescribe(suite)"):
+            self.assertEqual(gc.new_markers([], [line], js=False), [], line)
+        for line in ("const y = fit(x)", "xit(data)", "fdescribe(suite)"):
+            self.assertEqual(gc.new_markers([], [line], js=True), [], line)
+        for line in ("fit('a', () => {})", 'xtest("a")', "xcontext(`a`, fn)", "fcontext('a', fn)"):
+            self.assertEqual(len(gc.new_markers([], [line], js=True)), 1, line)
+            self.assertEqual(gc.new_markers([], [line], js=False), [], line)
+
+    def test_a_marker_is_keyed_to_the_test_it_applies_to(self):
+        old = ['@pytest.mark.skip(reason="flaky")', "def test_legacy_sync():", "    sync()", "",
+               "def test_total():", "    assert total() == 3"]
+        moved = ['@pytest.mark.skip(reason="flaky")', "def test_total():", "    assert total() == 3"]
+        self.assertEqual(gc.new_markers(old, moved), [(1, "new skip marker @pytest.mark.skip")],
+                         "a skip moved from a deleted test onto one that ran")
+        reworded = ['@pytest.mark.skip(reason="flaky, see #12")', "def test_legacy_sync():", "    sync()"]
+        self.assertEqual(gc.new_markers(old, reworded), [], "a reworded marker on the same test")
+        renamed = ['@pytest.mark.skip(reason="flaky")', "def test_legacy_sync_v2():", "    sync()", "",
+                   "def test_total():", "    assert total() == 3"]
+        self.assertEqual(gc.new_markers(old, renamed), [], "the same marker on its renamed test")
+        inline_old = ["def test_a():", "    pytest.skip('slow')", "", "def test_b():", "    assert 1"]
+        inline_new = ["def test_a():", "    pytest.skip('slow')", "", "def test_new():", "    assert 2", "",
+                      "def test_b():", "    assert 1"]
+        self.assertEqual(gc.new_markers(inline_old, inline_new), [], "a test added after a skipped one")
+        inline_moved = ["def test_a():", "    assert 0", "", "def test_b():", "    pytest.skip('slow')"]
+        self.assertEqual(gc.new_markers(inline_old, inline_moved), [(5, "new skip marker pytest.skip(")])
+
     def test_test_files_follow_the_usual_conventions(self):
         for rel in ("tests/a.py", "test/a.js", "src/__tests__/a.ts", "spec/a.rb", "pkg/a_test.go", "a.test.tsx",
                     "a.spec.js", "test_a.py", "a_test.py", "AppTests.swift", "conftest.py"):
@@ -65,6 +92,67 @@ class TimeoutTest(unittest.TestCase):
 
     def test_a_new_timeout_line_has_nothing_to_compare_with(self):
         self.assertEqual(gc.raised_timeouts([], ["jest.setTimeout(60000);"]), [])
+
+    def test_package_json_compares_only_the_runners_numeric_timeouts(self):
+        old = '{\n  "dependencies": {"p-timeout": "^5.1.0"},\n  "jest": {"testTimeout": 5000},\n  "mocha": {"timeout": 2000}\n}\n'
+        new = old.replace("^5.1.0", "^6.0.0").replace('"timeout": 2000', '"timeout": 1000')
+        self.assertEqual(gc.package_timeouts(old, new), [], "a dependency upgrade and a lowered timeout")
+        new = new.replace("5000", "60000")
+        self.assertEqual(gc.package_timeouts(old, new), [(3, "timeout raised 5000 -> 60000 (jest.testTimeout)")])
+        with self.assertRaises(ValueError):
+            gc.package_timeouts(old, "{not json")
+
+
+class TamperTest(unittest.TestCase):
+    """test-tamper end to end, against a recorded baseline."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.p = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def baseline(self, files):
+        for rel, text in files.items():
+            (self.p / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.p / rel).write_text(text)
+        subprocess.run([sys.executable, str(SCRIPT.parent / "baseline.py"), "record", str(self.p), "M1"], check=True,
+                       capture_output=True)
+
+    def tamper(self):
+        return gc.test_tamper(self.p, "M1")[0]
+
+    def move(self, a, b):
+        (self.p / b).parent.mkdir(parents=True, exist_ok=True)
+        (self.p / a).rename(self.p / b)
+
+    def test_a_move_out_of_the_runners_collection_is_a_deletion(self):
+        body = "from store import total\n\ndef test_total():\n    assert total() == 3\n"
+        self.baseline({"tests/test_store.py": body, "tests/helpers.py": "def h():\n    return 1\n",
+                       "web/total.test.js": "test('t', () => { expect(total()).toBe(3) })\n"})
+        self.move("tests/test_store.py", "tests/unit/test_store.py")  # still collected
+        self.move("tests/helpers.py", "tests/support/helpers.py")      # never collected
+        self.assertEqual(self.tamper()[0], "PASS", self.tamper())
+        self.move("tests/unit/test_store.py", "tests/unit/store_checks.py")
+        self.move("web/total.test.js", "web/total.js")
+        status, detail = self.tamper()
+        self.assertEqual(status, "FAIL")
+        self.assertIn("tests/test_store.py moved to tests/unit/store_checks.py, a name the test runner does not "
+                      "collect", detail)
+        self.assertNotIn("web/total.test.js moved", detail, "web/total.js is no test file: a plain deletion")
+        self.assertIn("web/total.test.js deleted", detail)
+
+    def test_ordinary_edits_are_not_tampering(self):
+        pkg = '{\n  "name": "x",\n  "dependencies": {\n    "p-timeout": "^5.1.0"\n  }\n}\n'
+        self.baseline({"tests/test_model.py": "from model import fit\n\ndef test_a():\n    assert fit([1]) == 1\n",
+                       "package.json": pkg, "tests/a.test.js": "test('a', () => { expect(1).toBe(1) })\n"})
+        (self.p / "tests/test_model.py").write_text("from model import fit\n\ndef test_a():\n    assert fit([1]) == 1"
+                                                    "\n\ndef test_b():\n    assert fit([1, 2]) == 2\n")
+        (self.p / "package.json").write_text(pkg.replace("^5.1.0", "^6.0.0"))
+        self.assertEqual(self.tamper()[0], "PASS", self.tamper())
+        (self.p / "tests/a.test.js").write_text("fit('a', () => { expect(1).toBe(1) })\n")
+        self.assertIn("tests/a.test.js:1 new only marker fit(", self.tamper()[1])
 
 
 class ExemptionTest(unittest.TestCase):
