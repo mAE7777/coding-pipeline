@@ -14,15 +14,21 @@ add writes the next entry, D-<nnn> (one more than the highest number in the file
   Source: [proposed]                                 with --proposed
 With --source-owner it first runs `rulings.py record <project> --id D-<nnn> --quote "<words>" [--session <id>]`,
 and when the words cannot be proven to be a whole sentence (or the whole message) the owner typed, nothing is
-written and the call fails. An owner source comes only through --source-owner: a body holding "[owner" is
-refused, as is a body with its own Source line or a "## " line (it would start another entry). A missing
-decisions.md is started from the template's header. Prints the new ID on the last line.
+written and the call fails. An owner source comes only through --source-owner: a title or body holding
+"[owner" is refused, as is a body with its own Source line or a "## " line (it would start another entry). Every
+line break Python knows (a carriage return, U+2028, U+0085, and the like) counts as one, so the checks see the
+lines the file will hold. A missing decisions.md is started from the template's header. Prints the new ID on the
+last line.
+Two adds at once never take the same number: each holds an exclusive lock (fcntl) on .decisions.md.flock beside
+decisions.md while it reads the next number, proves the ruling, and appends the entry; the file is appended
+to, never rewritten.
 next-id prints the ID the next entry would get.
 
 Exit 0 on success, 1 when the entry cannot be written (the ruling is not proven, the body is refused), 2 on bad
 usage.
 """
 import datetime
+import fcntl
 import re
 import subprocess
 import sys
@@ -32,6 +38,7 @@ HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE.parent / "templates/decisions.md"
 HEAD = re.compile(r"^## D-(\d{3,})\b", re.M)
 VALUE_OPTIONS = ("--title", "--body", "--source-owner", "--session")
+LOCK_NAME = ".decisions.md.flock"  # not *.lock: regate_scope.py reads a *.lock file as a dependency lockfile
 
 
 def path_of(arg):
@@ -71,6 +78,8 @@ def parse(argv):
             return opts, f"unexpected argument '{tok}'"
     if not (opts.get("--title") or "").strip() or not (opts.get("--body") or "").strip():
         return opts, "add needs --title and --body"
+    for name in ("--title", "--body"):  # every break splitlines() knows becomes \n, so the checks see real lines
+        opts[name] = "\n".join(opts[name].splitlines())
     if "\n" in opts["--title"]:
         return opts, "the title is one line"
     if "--source-owner" in opts and "--proposed" in opts:
@@ -85,9 +94,10 @@ def refused(opts):
     body, quote = opts["--body"], opts.get("--source-owner")
     if re.search(r"^## ", body, re.M):
         return "the body has a line starting with '## ', which would start another entry"
-    if "[owner" in body:
-        return ("the body names an owner ruling; pass the owner's words with --source-owner so they are proven, "
-                "or write the entry --proposed and ask")
+    for part, text in (("title", opts["--title"]), ("body", body)):
+        if "[owner" in text:
+            return (f"the {part} names an owner ruling; pass the owner's words with --source-owner so they are "
+                    "proven, or write the entry --proposed and ask")
     if re.search(r"^Source:", body, re.M) and ("--source-owner" in opts or "--proposed" in opts):
         return "the body has its own Source line; give the source only through --source-owner or --proposed"
     if quote is not None and (not quote.strip() or '"' in quote):
@@ -108,6 +118,17 @@ def add(project_arg, argv):
         return 1
     path = path_of(project_arg)
     project = path.parents[2] if path.parent.name == "project" and path.parent.parent.name == "docs" else path.parent
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.parent / LOCK_NAME, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # held until the entry is appended; the kernel drops it if this dies
+        try:
+            return write_entry(path, project, opts)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def write_entry(path, project, opts):
+    """Under the lock: read the file afresh, take the next number, prove the ruling, append the entry."""
     text = path.read_text(encoding="utf-8") if path.is_file() else None
     did = next_id(text)
     today = datetime.date.today().isoformat()
@@ -128,9 +149,14 @@ def add(project_arg, argv):
         lines.append(f'Source: [owner {today}] "{quote}"')
     elif "--proposed" in opts:
         lines.append("Source: [proposed]")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    start = text if text is not None else header()
-    path.write_text(start.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n", encoding="utf-8")
+    entry = "\n".join(lines) + "\n"
+    if text is None:
+        addition = header().rstrip("\n") + "\n\n" + entry
+    else:  # one blank line between the file's last line and the entry, whatever the file ends with
+        trailing = len(text) - len(text.rstrip("\n"))
+        addition = ("\n" * max(0, 2 - trailing) if text.strip() else "") + entry
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(addition)
     print(did)
     return 0
 

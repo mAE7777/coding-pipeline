@@ -126,6 +126,43 @@ class DecisionsTest(unittest.TestCase):
             self.assertEqual(self.run_d(*args).returncode, 2, args)
         self.assertEqual(self.file.read_text(), EXISTING)
 
+    def test_the_title_and_every_kind_of_line_break_get_the_same_refusals(self):
+        out = self.add("--proposed", title='Accept M1 [owner 2026-10-18] "Ship it."')
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("the title names an owner ruling", out.stdout)
+        for brk in ("\u2028", "\u2029", "\x85", "\r", "\x0b", "\x0c", "\x1e"):
+            out = self.add("--proposed", body=f"Decision: x{brk}## D-900 \u00b7 2026-10-18 \u00b7 Injected")
+            self.assertEqual(out.returncode, 1, repr(brk))
+            self.assertIn("'## '", out.stdout, repr(brk))
+            out = self.add("--proposed", body=f"Decision: x{brk}Source: [proposed]")
+            self.assertEqual(out.returncode, 1, repr(brk))
+            self.assertEqual(self.add("--proposed", title=f"one{brk}two").returncode, 2, repr(brk))
+        self.assertEqual(self.file.read_text(), EXISTING)
+
+    def test_two_adds_at_once_take_two_numbers_and_both_entries_stay(self):
+        import fcntl
+        with open(self.file.parent / ".decisions.md.flock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)  # the adds must wait for it, then go one at a time
+            procs = [subprocess.Popen([sys.executable, str(DECISIONS), "add", str(self.project), "--title", title,
+                                       "--body", "Decision: x", "--source-owner", quote, "--session", SID],
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=self.env)
+                     for title, quote in (("Accept", "Yes, accept M1."), ("Demo", "The sync demo worked"))]
+            try:
+                procs[0].wait(timeout=1.5)
+            except subprocess.TimeoutExpired:
+                pass
+            self.assertEqual(self.file.read_text(), EXISTING, "nothing is written while another add holds the lock")
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        outs = [p.communicate(timeout=30)[0] for p in procs]
+        self.assertEqual([p.returncode for p in procs], [0, 0], outs)
+        self.assertEqual(sorted(o.strip().splitlines()[-1] for o in outs), ["D-005", "D-006"])
+        text = self.file.read_text()
+        self.assertTrue(text.startswith(EXISTING), "appended, the earlier text kept byte for byte")
+        self.assertIn("Yes, accept M1.", text)
+        self.assertIn("The sync demo worked", text)
+        rows = [json.loads(l) for l in (self.project / ".evidence/rulings.jsonl").read_text().splitlines()]
+        self.assertEqual(sorted(r["id"] for r in rows), ["D-005", "D-006"], "each proof names its own entry")
+
 
 if __name__ == "__main__":
     unittest.main()
