@@ -155,3 +155,27 @@ whisper (audio capture).
 
 A local `private/` folder, if present, is installed over the same paths (the owner's standing requirements
 and any private rules) and carries its own tests, which the self-test runs; it is never published.
+
+## Updating the pipeline
+
+Type `/pipeline update` in any session. It pulls the repository `~/.claude` was installed from (fast-forward
+only: a diverged branch is reported, never merged; a failed fetch goes on with the local commits), runs
+`install.py apply` and `settings_patch.py --apply`, proves the result with `install.py check`, and reports the
+revisions before and after, the commits between them, and which skills, agents, hooks, and shared files
+changed. It refuses while the repository has uncommitted changes or untracked files under `skills/`, `agents/`,
+or `hooks/` (an edit in progress is never installed half-done) and while a gate or checker run is in progress.
+`/pipeline status` shows what is installed and what the repository holds. Nothing pulls or installs in the
+background.
+
+What a running session keeps: Claude Code gives the next invocation of a skill its changed SKILL.md, but a skill
+already invoked stays in the conversation as the text it read then, and its frontmatter hooks stay as they were
+registered at that invocation. Scripts, hook scripts, and checker agents are read from `~/.claude` at each call,
+so they run the new version at once. Two hooks close the gap. At session start, a session is told when the
+repository holds commits not installed yet. At the first prompt after an update, every open session is told,
+once, that the skill text it read is out of date: re-read the SKILL.md of the skill in use and the references
+the next step relies on, or invoke the skill again (which also registers its new hooks); the changed skills are
+named. Claude Code's settings watcher usually picks up new hook registrations in open sessions; a restart does
+when it does not.
+
+Once, on a machine whose installed copy predates this: run `python3 install.py apply` and
+`python3 settings_patch.py --apply` from the repository. From then on `/pipeline update` does both.

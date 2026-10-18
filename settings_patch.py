@@ -7,7 +7,9 @@ Usage:
 
 Adds (each only if not already present): the heavy-job guard on shell and browser tools; the reload gate
 (arm after compaction, track reads, guard writes); the continuity hooks (session start, first edit, stop); the
-pre-compaction snapshot; the once-per-turn typecheck; the leftover-debug audit at stop; and the subagent limits (5 at once, depth 2, workflows 3
+pre-compaction snapshot; the once-per-turn typecheck; the leftover-debug audit at stop; the pipeline update notices
+(pipeline_sync.py: at session start, commits in the repository not installed yet; at a prompt, skill text this
+session read before an update); and the subagent limits (5 at once, depth 2, workflows 3
 agents at once). Removes: the compaction nudge after 50 tool calls and the full typecheck after every edit.
 Leaves every other setting and hook exactly as it is. The backup is written next to settings.json as
 settings.json.bak-<UTC time> before anything changes.
@@ -29,6 +31,8 @@ ADD = [
     ("PostToolUse", "Read|Bash", f"python3 {H}/reload-gate.py track", 10),
     ("SessionStart", "compact", f"python3 {H}/reload-gate.py arm", 10),
     ("SessionStart", "startup|resume|clear", f"python3 {S}/continuity.py session-start --tool claude", 30),
+    ("SessionStart", "startup|resume|clear|fork", f"python3 {S}/pipeline_sync.py session-start", 10),
+    ("UserPromptSubmit", None, f"python3 {S}/pipeline_sync.py prompt", 5),
     ("PreCompact", None, f"python3 {H}/snapshot-state.py", 15),
     ("Stop", None, f"python3 {S}/continuity.py stop --tool claude", 60),
     ("Stop", None, f"python3 {H}/typecheck-once.py", 240),

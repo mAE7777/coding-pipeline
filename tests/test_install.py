@@ -81,7 +81,10 @@ class InstallTest(unittest.TestCase):
         hooks = {"hooks": {"PreToolUse": [{"hooks": [{"command": c}]} for c in (
             "python3 heavy-guard.py", "python3 reload-gate.py guard", "python3 continuity.py claim")],
             "PostToolUse": [{"hooks": [{"command": "python3 reload-gate.py track"}]}],
-            "SessionStart": [{"hooks": [{"command": "python3 reload-gate.py arm"}, {"command": "python3 continuity.py session-start"}]}],
+            "SessionStart": [{"hooks": [{"command": "python3 reload-gate.py arm"},
+                                        {"command": "python3 continuity.py session-start"},
+                                        {"command": "python3 pipeline_sync.py session-start"}]}],
+            "UserPromptSubmit": [{"hooks": [{"command": "python3 pipeline_sync.py prompt"}]}],
             "PreCompact": [{"hooks": [{"command": "python3 snapshot-state.py"}]}],
             "Stop": [{"hooks": [{"command": "python3 typecheck-once.py"}, {"command": "python3 continuity.py stop"},
                               {"command": "~/.claude/hooks/verify-pipeline-completion.sh"}]}]}}
@@ -426,6 +429,9 @@ class InstallTest(unittest.TestCase):
         (self.home / ".claude/settings.json").write_text(json.dumps({"hooks": {}}))
         out = self.run_i("check")
         self.assertIn("hook not registered in settings.json: heavy-guard.py", out.stdout)
+        # the update notices: commits not installed at session start, stale skill text at a prompt
+        self.assertIn("hook not registered in settings.json: pipeline_sync.py session-start", out.stdout)
+        self.assertIn("hook not registered in settings.json: pipeline_sync.py prompt", out.stdout)
 
     def test_missing_tools_are_named(self):
         bare = self.home / "bin"

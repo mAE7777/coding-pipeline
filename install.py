@@ -27,8 +27,9 @@ made under ~/.claude, by hand or by /update) stops apply, which lists it: port t
 (or its private/ overlay) and apply again, or pass --overwrite-live-edits to replace it (the backup keeps it). The manifest (~/.claude/.pipeline-install.json) records the sha256 of every
 installed file, the repository revision, and the routing table's sha256 on its own (routing_table): which model
 and effort each checker runs on is part of the released behavior. The owner's personal files beside it,
-~/.claude/.pipeline-models.json (the routing override) and ~/.claude/.pipeline-shadow.jsonl (shadow-run records),
-are never written or removed, not even from the private/ overlay.
+~/.claude/.pipeline-models.json (the routing override), ~/.claude/.pipeline-shadow.jsonl (shadow-run records), and
+pipeline_sync.py's state (.pipeline-sessions/, .pipeline-runs/, .pipeline-sync.json), are never written or removed,
+not even from the private/ overlay.
 
 Codex. When ~/.agents/skills links into a Codex package (the folder holding scripts/convert_helm.py) and Codex's
 copies are older than what was just installed, apply brings them up to date in the same run (--no-codex skips it
@@ -69,8 +70,10 @@ SHARED = ("gate.sh", "scripts", "templates", "models.json", "references/project-
           "references/record-glossary.md", "references/agent-product")
 ROUTING_TABLE = "skills/_shared/models.json"
 # The owner's own files under ~/.claude that the pipeline's scripts read or append to: never installed over, never
-# removed, never listed in the manifest.
-PERSONAL = (".pipeline-models.json", ".pipeline-shadow.jsonl")
+# removed, never listed in the manifest. A folder's name covers everything in it (pipeline_sync.py's session
+# records and run registry).
+PERSONAL = (".pipeline-models.json", ".pipeline-shadow.jsonl", ".pipeline-sessions", ".pipeline-runs",
+            ".pipeline-sync.json")
 AGENTS = ("code-verifier", "loyal-evaluator", "gate-judge", "cold-reader", "claim-verifier", "change-reviewer")
 RETIRED_AGENTS = ("dev-planner", "task-implementer", "qa-planner", "category-executor", "project-analyzer",
                   "migration-planner", "doc-generator", "market-researcher", "winners-board")
@@ -78,7 +81,8 @@ KEEP_LIVE = ("brain.md", "friction.log", "tests")
 HOOKS = ("heavy-guard.py", "reload-gate.py", "snapshot-state.py", "typecheck-once.py", "verify-pipeline-completion.sh")
 HOOK_COMMANDS = ("heavy-guard.py", "reload-gate.py arm", "reload-gate.py track", "reload-gate.py guard",
                  "snapshot-state.py", "typecheck-once.py", "continuity.py session-start", "continuity.py claim",
-                 "continuity.py stop", "verify-pipeline-completion.sh")
+                 "continuity.py stop", "verify-pipeline-completion.sh", "pipeline_sync.py session-start",
+                 "pipeline_sync.py prompt")
 REQUIRED_TOOLS = (("claude", "Claude Code, which runs the builder and every checker"),
                   ("playwright-cli", "the builder's browser (npm install -g @playwright/cli)"))
 OPTIONAL_TOOLS = (("codex", "the other model family for code review; without it the review runs on Claude and says so"),
@@ -123,8 +127,8 @@ def desired(home):
         for f in files_under(overlay):
             if f.relative_to(overlay).parts[0] == "tests":
                 continue  # the overlay's own tests run from the repository, never from ~/.claude
-            if f.relative_to(overlay).as_posix() in PERSONAL:
-                continue  # the owner's routing override and shadow records are theirs alone
+            if f.relative_to(overlay).parts[0] in PERSONAL:
+                continue  # the owner's routing override, shadow records, and update state are theirs alone
             want[claude / f.relative_to(overlay)] = f
     return want
 

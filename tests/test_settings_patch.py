@@ -32,8 +32,15 @@ class SettingsPatchTest(unittest.TestCase):
             self.assertIn("guard-truth-reload", text)
             for cmd in ("heavy-guard.py", "reload-gate.py arm", "reload-gate.py track", "reload-gate.py guard",
                         "snapshot-state.py", "typecheck-once.py", "continuity.py session-start", "continuity.py claim",
-                        "continuity.py stop", "verify-pipeline-completion.sh"):
+                        "continuity.py stop", "verify-pipeline-completion.sh", "pipeline_sync.py session-start",
+                        "pipeline_sync.py prompt"):
                 self.assertEqual(text.count(cmd), 1, cmd)
+            starts = {e.get("matcher"): [h["command"] for h in e["hooks"]] for e in after["hooks"]["SessionStart"]}
+            self.assertIn("python3 ~/.claude/skills/_shared/scripts/pipeline_sync.py session-start",
+                          starts.get("startup|resume|clear|fork", []), "a forked session keeps its parent's text")
+            prompt = after["hooks"]["UserPromptSubmit"][0]
+            self.assertNotIn("matcher", prompt)
+            self.assertEqual(prompt["hooks"][0]["timeout"], 5, "the prompt notice stays far inside its time limit")
             self.assertEqual(after["theme"], "light")
             self.assertEqual(after["env"]["KEEP"], "1")
             self.assertEqual(after["env"]["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "5")
