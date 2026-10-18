@@ -63,11 +63,15 @@ scenario run (scenarios), Claude usage only.
   INCOMPARABLE  a suite not measured on one side; for fixtures and scenarios no pair of measurements taken in
                 the same environment, or a different number of runs; a cost that cannot be computed because a
                 side's measurements hold no raw usage (taken before usage was stored per run: measure both
-                sides again with bench --again); for repro:route, a fixture with no kind or a run with no
-                problem count. Environments match on everything above, the served models included, except
-                when the change's own diff touches skills/_shared/models.json: then the served models are left
-                out of the match, and the output says "model routing changed" with each route that differs,
-                before and after.
+                sides again with bench --again); a cost rule (repro:cost, repro:route) whose base has no priced
+                usage ($0 a run: $0 <= 0.8 x $0 would pass anything); for repro:route, a fixture with no kind,
+                a run with no problem count or no count of the planted items it checked, or fewer than 30
+                planted item-trials (items checked, summed over every run of every planted fixture) on either
+                side, named with the --runs that would reach 30. Environments match on everything above, the
+                served models included, except when the change's own diff is the routing table (every file it
+                changes is skills/_shared/models.json or a document: under docs/, or a .md file outside skills/
+                and agents/): then the served models are left out of the match. Whenever the diff touches the
+                table, the output says "model routing changed" with each route that differs, before and after.
   WORSE         a selftest suite that passed now fails or is missing, or any selftest suite fails at head; a
                 test file with fewer tests than before; a fixture passing a smaller share of its runs, or
                 costing more than a quarter more per run; a scenario or a non-reproduction test that passed now
@@ -99,7 +103,9 @@ byte for byte with full blob ids, no file it touches changed underneath, and eac
 for the same reason once run-varying text is reduced, a base never measured counting as no reason: a rebase onto
 unrelated work keeps the review) (cause
 fixed, reproduction faithful, the workaround weighed, no check weakened,
-the kind confirmed, no high or medium finding), and, for a capability or rule change, the owner's words
+the kind confirmed, no high or medium finding; and only from a reviewer run whose change-reviewer.summary.json
+says OK, since an INCONCLUSIVE, ERROR, or LEAK run's result is no review, and review refuses one the same way,
+naming its status and reason), and, for a capability or rule change, the owner's words
 proven in their transcript. check proves the whole ledger, including that every fixed incident's change reached main.
 Exit 0 on success, 1 on a failed check or a verdict other than BETTER, 2 on bad usage.
 """
@@ -640,6 +646,7 @@ FIXTURES_OF_AGENT = {"code-verifier": "code-verifier,escape", "loyal-evaluator":
                      "change-reviewer": "change-reviewer"}
 ALL_CHECKERS = "code-verifier,loyal-evaluator,gate-judge,cold-reader,claim-verifier,change-reviewer,escape,probe"
 ROUTING_TABLE = "skills/_shared/models.json"
+ROUTE_MIN_TRIALS = 30  # plan 7.3: planted item-trials on each side before the route rule judges a routing change
 # Every suite measures the repository's own routing table, never the owner's personal override.
 SUITE_ENV = {"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"}
 
@@ -800,6 +807,8 @@ def measure(tree, suite, runs):
             rec.update({k: own[k] for k in ("pass", "escalated", "status") if k in own})
             if isinstance(own.get("problem_count"), int):
                 rec["problems"] = own["problem_count"]
+            if isinstance(own.get("items"), int) and not isinstance(own.get("items"), bool):
+                rec["items"] = own["items"]  # the planted items this run checked (route rule's sample floor)
             if own.get("kind"):
                 kinds[name] = own["kind"]
             per_run.setdefault(name, []).append(rec)
@@ -968,6 +977,12 @@ def no_raw_usage(what, side, suite):
             f"stored per run); measure both sides again with evolve.py bench <ref> --suites \"{suite}\" --again")
 
 
+def unpriced_base(what):
+    """A cost rule's ratio needs a base cost: with no priced usage at base, $0 <= 0.8 x $0 would pass anything."""
+    return (f"{what}: no priced usage at base ($0.00 a run), so the cost rule cannot judge (Codex usage and models "
+            "spend.py has no price for count nothing): measure with usage the price table prices")
+
+
 def summary_line(data):
     last = data["measurements"][-1]
     if "suites" in last:
@@ -1016,6 +1031,19 @@ def routing_change(base, head):
             if before.get(k) != after.get(k)]
 
 
+def is_document(path):
+    """A file that only documents: under docs/, or a Markdown file outside skills/ and agents/ (those are the
+    pipeline's own instructions, so they change what is measured)."""
+    return path.startswith("docs/") or (path.endswith(".md") and not path.startswith(("skills/", "agents/")))
+
+
+def only_routing(base, head):
+    """True when the change's own diff is the routing table: every file it changes is skills/_shared/models.json or
+    a document. Only then are the served models left out of the environment match."""
+    changed = [f for f in git("diff", "--name-only", base, head).splitlines() if f]
+    return ROUTING_TABLE in changed and all(f == ROUTING_TABLE or is_document(f) for f in changed)
+
+
 def same_env(x, y, ignore_models):
     drop = (lambda e: {k: v for k, v in e.items() if k != "models"}) if ignore_models else (lambda e: e)
     return drop(x["env"]) == drop(y["env"])
@@ -1038,6 +1066,7 @@ def route_rule(suite, bms, hms):
         return inc, worse, None
     counts = {"planted": [0, 0], "clean": [0, 0]}
     cost, n_runs, clean_ok, clean_runs = [0.0, 0.0], [0, 0], 0, 0
+    trials, per_round, planted_runs = [0, 0], 0, 0  # planted item-trials per side; items in one run of each fixture
     for name in sorted(set(b_runs) | set(h_runs)):
         b, h = b_runs.get(name, []), h_runs.get(name, [])
         kind = kinds.get(name)
@@ -1051,6 +1080,10 @@ def route_rule(suite, bms, hms):
         if kind == "planted" and any(r.get("problems") is None for r in b + h):
             inc.append(f"fixture {name}: a run records no problem count: measure with an instrument that counts them")
             continue
+        if kind == "planted" and any(not isinstance(r.get("items"), int) for r in b + h):
+            inc.append(f"fixture {name}: a run records no count of the planted items it checked (measured before "
+                       "agent_fixtures.py wrote one): measure both sides again with an instrument that records it")
+            continue
         for i, rs in enumerate((b, h)):
             for r in rs:
                 cost[i] += run_cost(r.get("usage"))[1]
@@ -1058,6 +1091,10 @@ def route_rule(suite, bms, hms):
         if kind == "planted":
             counts["planted"][0] += sum(r["problems"] for r in b)
             counts["planted"][1] += sum(r["problems"] for r in h)
+            for i, rs in enumerate((b, h)):
+                trials[i] += sum(r["items"] for r in rs)
+            per_round += max(r["items"] for r in b + h) if b + h else 0
+            planted_runs = max(planted_runs, len(b))
         elif kind == "clean":
             counts["clean"][0] += 1
             clean_runs += len(h)
@@ -1070,6 +1107,16 @@ def route_rule(suite, bms, hms):
         return inc, worse, None
     planted = sum(1 for n in b_runs if kinds.get(n) == "planted")
     bd, hd = cost[0] / max(n_runs[0], 1), cost[1] / max(n_runs[1], 1)
+    if planted and min(trials) < ROUTE_MIN_TRIALS:
+        need = -(-ROUTE_MIN_TRIALS // per_round) if per_round else 0
+        inc.append(f"{suite}: {trials[0]} planted item-trials at base and {trials[1]} at head ({per_round} planted "
+                   f"item(s) a run, {planted_runs} run(s)); the rule needs at least {ROUTE_MIN_TRIALS} on each side: "
+                   + (f"bench both sides with --runs {need} to reach it" if need else
+                      "the planted fixtures check no item, so no number of runs reaches it"))
+        return inc, worse, None
+    if n_runs[0] and not bd:
+        inc.append(unpriced_base(suite))
+        return inc, worse, None
     bp, hp = counts["planted"]
     checks = [(planted > 0, f"{planted} planted fixture(s)"),
               (counts["clean"][0] > 0, f"{counts['clean'][0]} clean fixture(s)"),
@@ -1085,6 +1132,7 @@ def compare(base_sha, head_sha, suites, inst_sha):
     """(verdict, reasons, rows) by the rule fixed in advance."""
     worse, incomparable, repro, rows = [], [], [], []
     routing = routing_change(base_sha, head_sha)
+    ignore_models = routing is not None and only_routing(base_sha, head_sha)
     if routing is not None:
         rows.append({"suite": "model routing changed", "note": True,
                      "routes": [{"route": k, "before": v, "after": w} for k, v, w in routing],
@@ -1101,13 +1149,19 @@ def compare(base_sha, head_sha, suites, inst_sha):
             continue
         b, h = b_all[-1], h_all[-1]
         if inner.startswith(("fixtures:", "scenario:")):
-            pairs = [(x, y) for x in b_all for y in h_all if same_env(x, y, routing is not None)]
+            pairs = [(x, y) for x in b_all for y in h_all if same_env(x, y, ignore_models)]
             if not pairs:
                 only_models = any(same_env(x, y, True) for x in b_all for y in h_all)
+                why = ""
+                if only_models and routing is None:
+                    why = (f"; only the served models differ, and a change meant to move work to another model changes "
+                           f"{ROUTING_TABLE}")
+                elif only_models:
+                    why = (f"; only the served models differ, but this change touches more than {ROUTING_TABLE} and "
+                           "documents, so the models it is served by are part of what it changed: change the routing "
+                           "table on its own")
                 incomparable.append(f"{s}: base and head were measured in different environments "
-                                    f"({b['env']} / {h['env']})" +
-                                    (f"; only the served models differ, and a change meant to move work to another "
-                                     f"model changes {ROUTING_TABLE}" if only_models else ""))
+                                    f"({b['env']} / {h['env']}){why}")
                 continue
             b, h = pairs[-1]
         rows.append({"suite": s, "base": summary_line(b), "head": summary_line(h)})
@@ -1142,6 +1196,8 @@ def compare(base_sha, head_sha, suites, inst_sha):
                     incomparable.append(no_raw_usage(f"fixture {name}", "base" if name not in bc else "head", s))
                 if hn != n:
                     incomparable.append(f"fixture {name}: {n} runs at base, {hn} at head (measure both sides alike)")
+                elif cost_repro and costed and not bc[name][1]:
+                    incomparable.append(unpriced_base(f"fixture {name}"))
                 elif cost_repro:
                     ok = hp_ * n >= p * hn and costed and hc[name][1] <= 0.8 * bc[name][1]
                     repro.append((f"fixture {name} cost", ok, f"{cost or 'no cost measured'}; passes {p}/{n} -> {hp_}/{hn}"))
@@ -1159,7 +1215,9 @@ def compare(base_sha, head_sha, suites, inst_sha):
                 cost = cost_text(bc[name], hc[name], "a run") if costed else ""
                 if not costed:
                     incomparable.append(no_raw_usage(f"scenario {name}", "base" if name not in bc else "head", s))
-                if cost_repro:
+                if cost_repro and costed and not bc[name][1]:
+                    incomparable.append(unpriced_base(f"scenario {name}"))
+                elif cost_repro:
                     repro.append((f"scenario {name} cost", hst == "PASS" and costed and hc[name][1] <= 0.8 * bc[name][1],
                                   f"{cost or 'no cost measured'}; base {st}, head {hst}"))
                 elif is_repro:
@@ -1415,12 +1473,34 @@ def cmd_review(argv):
     data, why = read_verdict(result.read_text(encoding="utf-8")) if result.is_file() else (None, "no result file")
     body = re.sub(r"^Result:.*$", f"Result: {result}", text, count=1, flags=re.M)
     (HOME / "changes" / f"{cid}.md").write_text(body, encoding="utf-8")
+    run_problem = reviewer_run_problem(out)
+    if run_problem:
+        return fail(f"{cid}: {run_problem}")
     if not data:
         return fail(f"{cid}: the reviewer returned no verdict: {why} ({(r.stdout + r.stderr)[-300:]})")
     problems = review_problems(data)
     print(f"{cid}: reviewer {data.get('verdict')}, {'accepted' if not problems else 'not accepted: ' + '; '.join(problems)} "
           f"-> {result}")
     return 0 if not problems else 1
+
+
+def reviewer_run_problem(review):
+    """Why the isolated change reviewer's run does not count, else None: its result is a review only when
+    run_isolated.py's change-reviewer.summary.json says OK (INCONCLUSIVE: it ran no tool or skipped a required
+    read; ERROR, LEAK, and the rest: the run itself failed)."""
+    f = Path(review) / "change-reviewer.summary.json"
+    try:
+        s = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"the change reviewer's run left no readable {f.name}, so its result is not a review: review again"
+    if not isinstance(s, dict):
+        s = {}
+    if s.get("status") == "OK":
+        return None
+    reason = s.get("reason") or s.get("unavailable_reason") or (
+        f"{s['tool_uses']} tool use(s)" if isinstance(s.get("tool_uses"), int) else "no reason given")
+    return (f"the change reviewer's run is {s.get('status') or 'without a status'} ({reason}), not OK, so its "
+            "result is not a review: review again")
 
 
 def owner_problem(text):
@@ -1469,7 +1549,10 @@ def change_problems(cid, need_merged=False):
     data = last_json((review / "change-reviewer.result.md").read_text(encoding="utf-8")) \
         if (review / "change-reviewer.result.md").is_file() else None
     rp = review_problems(data)
-    if rp:
+    run_problem = reviewer_run_problem(review) if review.is_dir() else None
+    if run_problem:
+        out.append(f"{cid}: {run_problem}")
+    elif rp:
         out.append(f"{cid}: the isolated change review does not accept it: " + "; ".join(rp)[:400])
     elif not review_covers(meta, base, head, suites)[0]:
         out.append(f"{cid}: the review was of {str(meta.get('head'))[:12]}, the branch is at {head[:12]}, and "

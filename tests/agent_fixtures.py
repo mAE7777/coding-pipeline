@@ -25,7 +25,10 @@ dollars at list prices (by this tree's spend.py; null when it has no price table
 escalated: true fails: a retry on another model never rescues the model under test. The problem count is the
 number of problems the expectation reported (a runner status other than OK is one of them); a run that gave
 no verdict of its own (no summary, no verdict block, or escalated) missed everything, so it counts one plus
-every problem its expectation finds in an empty verdict. evolve.py pools these counts (repro:route).
+every problem its expectation finds in an empty verdict. The record's "items" is the number of planted items the
+run checked: for a planted fixture, every problem its expectation finds in an empty verdict; 0 for the others.
+evolve.py pools these counts (repro:route), and judges a routing change only on 30 or more planted item-trials
+a side.
 
 A fixture with a "base" (a folder beside it) starts from that folder, the product as the milestone found it, and
 its own folder is copied over it; a review fixture's milestone baseline is recorded in between, so its pack shows
@@ -209,6 +212,17 @@ def problem_count(spec, problems, judged, ctx):
     return 1 + len(spec["expect"]({}, ctx))
 
 
+def planted_items(spec, ctx):
+    """How many planted items a run of this fixture checks: every problem the expectation finds in an empty verdict
+    (it misses each one), for a planted fixture; 0 for the others. None when that cannot be read."""
+    if spec.get("kind") != "planted":
+        return 0
+    try:
+        return len(spec["expect"]({}, ctx))
+    except Exception:  # an expectation that cannot judge an empty verdict: the count is unknown, never a guess
+        return None
+
+
 def record(name, spec, n, ev, problems, judged, summary, result_text=""):
     """Write the run's fixture-result.json and return (name, run, problems, summary, record)."""
     usage, models, escalated = run_usage(ev)
@@ -216,8 +230,9 @@ def record(name, spec, n, ev, problems, judged, summary, result_text=""):
         problems = problems + ["escalated: the run was retried on another model, and a retried run fails (the retry "
                                "never rescues the model under test)"]
         judged = False
+    ctx = {"summary": summary or {}, "result": result_text}
     rec = {"fixture": name, "run": n, "kind": spec.get("kind", "other"), "pass": not problems, "problems": problems,
-           "problem_count": problem_count(spec, problems, judged, {"summary": summary or {}, "result": result_text}),
+           "problem_count": problem_count(spec, problems, judged, ctx), "items": planted_items(spec, ctx),
            "status": (summary or {}).get("status"), "escalated": escalated, "served_models": models, "usage": usage,
            "dollars": dollars_of(usage)}
     (Path(ev) / "fixture-result.json").write_text(json.dumps(rec, indent=2))
