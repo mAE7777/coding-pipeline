@@ -192,14 +192,14 @@ class RegateScopeTest(unittest.TestCase):
         self.assertTrue(ok, line)
         (self.p / "docs/project/milestones.md").write_text(ms.replace("Status: changes", "Status: accepted", 1))
         (self.p / "docs/project/decisions.md").write_text(
-            f"# Decisions\n\n## D-002 · {date} · Accept M1\n"
-            f"Decision: Accept M1 · contract 0123456789abcdef · fingerprint {fp} · review reviews/M1.md\n"
+            f"# Decisions\n\n## D-002 \u00b7 {date} \u00b7 Accept M1\n"
+            f"Decision: Accept M1 \u00b7 contract 0123456789abcdef \u00b7 fingerprint {fp} \u00b7 review reviews/M1.md\n"
             f'Source: [owner {date}] "yes, accept it"\n')
         return fp
 
     def fix_log(self, *entries):
         (self.p / "docs/project/fix-log.md").write_text("# Fix log\n\n" + "".join(
-            f"## {fid} · {date} · a fix\nSymptom: s\nReproduction: r\nChange: {change}\n\n"
+            f"## {fid} \u00b7 {date} \u00b7 a fix\nSymptom: s\nReproduction: r\nChange: {change}\n\n"
             for fid, date, change in entries))
 
     def test_a_finding_fixed_in_a_focused_round_is_re_verified_in_every_later_one(self):
@@ -274,7 +274,7 @@ class RegateScopeTest(unittest.TestCase):
 
     def test_a_file_whose_lines_cannot_be_counted_is_full(self):
         self.full_round(blocking=(("M1-F01", ["legacy.py", "logo.png"]),))
-        (self.p / "legacy.py").write_bytes("# résumé\n".encode("latin-1"))
+        (self.p / "legacy.py").write_bytes("# r\u00e9sum\u00e9\n".encode("latin-1"))
         scope = self.decide()
         self.assertFull(scope, "legacy.py changed since r1 and its lines cannot be counted (binary or not UTF-8")
         self.assertEqual(scope["changed_files"], [{"path": "legacy.py", "status": "added", "added": None,
