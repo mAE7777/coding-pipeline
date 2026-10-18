@@ -104,9 +104,11 @@ fix anything; a step that does not produce its result is a failed step, reported
 <!-- mode: reverify -->
 ## Re-verify mode (a focused re-gate)
 
-The pack holds the findings still open from earlier rounds (or, after a hotfix, its fix-log entries), the
-delta since the last full round (the changed files and the patch), and the deterministic layer's results.
-Everything outside the delta was reviewed in full on the round the delta starts from.
+The pack holds every finding that blocked since the last full round, open or already fixed (a fixed one is
+checked again, so a fix a later change undid is caught), after a hotfix also its fix-log entries, the delta
+(since the last full round, or since the accepted candidate for a hotfix: the changed files and the patch),
+and the deterministic layer's results. Everything outside the delta was reviewed in full on the round the
+delta starts from.
 
 - **Each finding or fix**: run what its `fixed_when` names (for a fix, its reproduction) and report FIXED or
   NOT_FIXED with the command and a verbatim output fragment. FIXED needs that trace; one you could not
