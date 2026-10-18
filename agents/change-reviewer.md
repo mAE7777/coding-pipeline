@@ -52,7 +52,7 @@ or a quoted line with path:line). Never comment on style, naming, or formatting.
  "not_run": ["what you could not check and why"]}
 ```
 
-ACCEPT only when the cause is FIXED, the reproduction is FAITHFUL, no check is weakened, the kind is right,
-and no finding is high or medium; the script recomputes this from your fields, so they must agree with your
-verdict. Put the JSON block last, after a short prose summary. Every claim cites what you ran or read this
-session; if you ran no tool at all, say so and answer CHANGES with root cause UNCLEAR.
+Put the JSON block last, after a short prose summary. Every claim cites what you ran or read this session.
+Your fields decide, not your headline: evolve.py (review_problems) refuses the change unless the cause is
+FIXED, the reproduction FAITHFUL, the workaround not WAVED-AWAY, nothing weakened, kind_ok true, and no finding
+high or medium; run_isolated.py makes a run that used no tool INCONCLUSIVE.

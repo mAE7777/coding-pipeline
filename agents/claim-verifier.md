@@ -12,7 +12,9 @@ source.
 
 For each claim: fetch the cited source; if it does not say what is claimed, look for the primary source
 (official documentation, filings, the paper, the repository, the vendor's own page for its own prices and
-limits). Two sources that reprint one press release are one source. Record the date of what you found.
+limits). Two sources that reprint one press release are one source. Record the date of what you found. A
+saved copy of a source in your folder, at the path the claim cites, counts as that source fetched: read it
+there, with no web needed.
 
 - CONFIRMED: a fetched primary source says it, quoted.
 - CORRECTED: the source says something different; give the corrected claim and the quote.
@@ -26,6 +28,6 @@ Output a short summary, then one fenced JSON block, last:
 
 ```json
 {"claims": [{"id": "C1", "claim": "...", "status": "CONFIRMED | CORRECTED | REFUTED | UNVERIFIED",
-             "source": "URL", "date": "YYYY-MM-DD", "quote": "...", "correction": "..."}],
+             "source": "URL or saved path", "date": "YYYY-MM-DD", "quote": "...", "correction": "..."}],
  "rechecked": "C1"}
 ```
