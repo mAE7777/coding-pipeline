@@ -32,10 +32,11 @@ yet: every route runs today's setting.
 
 ## The table
 
-Today, every checker route is `"model": "default"` (no `--model` flag, so the Claude Code default serves) at
-effort `xhigh`; the code-verifier's review runs on Codex when Codex can serve (`gate_run.py --family auto`), and
-Codex keeps its own model whatever the table says. Builder-side routes are `"model": "session"`: the
-session's model and effort. `python3 ~/.claude/skills/_shared/scripts/models.py list` shows what each route
+Today, every checker route is `claude-opus-5-5` at effort `xhigh`. The table names the model instead of
+`"default"`, so a change to Claude Code's default model, or to your own `model` setting, never changes what a
+checker runs on. The code-verifier's review runs on Codex when Codex can serve (`gate_run.py --family auto`), on
+the table's `codex` entry (`gpt-6-astra` at `xhigh`), which the personal override can also change. Builder-side
+routes are `"model": "session"`: the session's model and effort. `python3 ~/.claude/skills/_shared/scripts/models.py list` shows what each route
 resolves to on this machine, the personal override and any shadow included.
 
 | Route | Candidate | Why |
@@ -54,7 +55,7 @@ resolves to on this machine, the personal override and any shadow included.
 | `cold-reader.refidelity` | claude-opus-5-5 `high` | re-audits what the first audit flagged |
 | `claim-verifier` | claude-sonnet-5-5 `high` | fetch, find the quote, compare |
 | `change-reviewer` | no change | rare; decides what the pipeline becomes |
-| `explorer` | claude-sonnet-5-5 `medium`; claude-haiku-5-5 `low` for where-is-X sweeps | returns pointers; the builder reads the cited lines |
+| `explorer` | claude-sonnet-5-5 `medium` | returns pointers; the builder reads the cited lines |
 | `scout-map` | a forked skill on claude-sonnet-5-5 `medium` | self-contained read-and-report work, kept out of the long session |
 | `explain` | a forked skill on claude-sonnet-5-5 `high` | reads the record and evidence and writes for an audience |
 | `delegate` | claude-sonnet-5-5 `high`, only when the owner asks | fully specified work; the builder reviews the diff |
@@ -189,12 +190,28 @@ replaces that folder, so copy it aside before the next setting:
 ```
 python3 tests/agent_fixtures.py --only probe-explorer-recall --runs 5 --model claude-opus-5-5 --effort <the session's effort>
 python3 tests/agent_fixtures.py --only probe-explorer-recall --runs 5 --model claude-sonnet-5-5 --effort medium
-python3 tests/agent_fixtures.py --only probe-explorer-recall --runs 5 --model claude-haiku-5-5 --effort low
 python3 tests/agent_fixtures.py --only probe-explain-grounding --runs 8 --model claude-sonnet-5-5 --effort high
 ```
 
 The candidate passes when its problems over all runs are no more than today's and it costs less; the owner
-weighs the numbers, then the change goes through `/evolve` like any other.
+weighs the numbers, then the change goes through `/evolve` like any other. No builder-side route moves to
+Haiku: wide reading moves to Sonnet at most, and the main session reads the files the helper points to.
+
+## The main session
+
+The pipeline never switches the session's model or effort: a switch mid-session drops the prompt cache, and the
+choice is yours (`/model`, `/effort`). This is the recommended setting per kind of work, not a rule any script
+enforces:
+
+| Work | Model and effort |
+|---|---|
+| `/plan`, `/plan adopt`, `/dev`, `/evolve`, a one-way architecture decision | Opus 5.5 at `xhigh` |
+| `/fix`, `/deploy`, `/explain`, `/scout`, `/inbox`, `/capture`'s own session | Opus 5.5 at `xhigh`; `high` when the week's allowance is tight |
+| `/next`, `/gate`, `/handoff`, `/pipeline` (scripts and checkers do the work) | whatever the session already runs |
+
+Below Opus 5.5 at `high` is not recommended for work under the full pipeline: its projects are the ones where a
+missed requirement costs more than the tokens saved. Start the next milestone in a fresh session instead of
+lowering the effort: a long session re-reads its whole context on every turn.
 
 ## The fast reviewer (the fast pipeline's /gate-fast)
 
@@ -242,18 +259,18 @@ What each outcome decides:
 
 ## Prices, and what they are worth
 
-`spend.py` prices each run by the model that served it, per million tokens, as of 2026-10-06 (plan 6.1):
+`spend.py` prices each run by the model that served it, per million tokens, as of 2026-10-19 (the pricing page):
 
 | Model | Input | Cache write | Cache read | Output |
 |---|---|---|---|---|
 | claude-opus-5-5 | 4.00 | 5.00 | 0.20 | 20.00 |
-| claude-sonnet-5-5 | 2.00 | 2.50 | 0.20 | 10.00 |
-| claude-haiku-5-5 | 0.10 | 0.125 (assumed) | 0.01 (assumed) | 0.50 |
+| claude-sonnet-5-5 | 2.00 | 2.50 | 0.10 | 10.00 |
+| claude-haiku-5-5 | 0.10 | 0.125 | 0.01 | 0.50 |
 
 Haiku costs $0.50 input and $2.50 output for prompts over 100K tokens; `spend.py` applies that rate to each
 transcript call whose prompt is over 100K, and keeps the base rate for an isolated run's summed usage, whose
 prompt sizes it does not know. A 1-hour cache write costs 2x input (a 5-minute one 1.25x) when the usage names
-it (`cache_creation.ephemeral_1h_input_tokens`, or `cache_write_1h` in a run's summary). Cache reads cost the same on Opus and Sonnet, so moving a
-cache-heavy role saves less than the input prices suggest. These are list prices: the owner's plan limits may
+it (`cache_creation.ephemeral_1h_input_tokens`, or `cache_write_1h` in a run's summary). Cache reads cost 0.05x input on Opus and Sonnet alike, so
+moving a cache-heavy role to Sonnet halves its cache-read cost, as it halves the other prices. These are list prices: the owner's plan limits may
 not follow their ratios, so the dollars are estimates. The table lives in `spend.py` (`PRICES`), and
 `evolve.py` computes cost when it compares, from stored raw usage, so a price change moves both sides alike.

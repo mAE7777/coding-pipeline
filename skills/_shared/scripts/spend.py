@@ -25,11 +25,11 @@ apart: Codex draws on a different allowance.
 Beside the units, every output gives the same spend in US dollars at list prices, by the model that served
 each call (a transcript line's message.model; an isolated run's served model). Units stay model-blind, as the
 allowance and its caps were calibrated in them; dollars show what moving work to another model saves. Prices
-are per million tokens, as of 2026-10-06:
+are per million tokens, from the pricing page as of 2026-10-19:
   claude-opus-5-5     input 4.00   cache write 5.00    cache read 0.20   output 20.00
-  claude-sonnet-5-5   input 2.00   cache write 2.50    cache read 0.20   output 10.00
+  claude-sonnet-5-5   input 2.00   cache write 2.50    cache read 0.10   output 10.00
   claude-haiku-5-5    input 0.10   cache write 0.125   cache read 0.01   output 0.50
-Haiku's cache prices are assumed at 1.25 and 0.1 times its input price. A cache write is priced by how long it
+Haiku's cache prices are 1.25 and 0.1 times its input price. A cache write is priced by how long it
 lives when the usage says so (usage.cache_creation.ephemeral_1h_input_tokens, in a transcript line or a run's
 stream): a 1-hour write at 2 times the model's input price, the rest at its cache write price (1.25 times); usage
 without that breakdown (an isolated run's summary, unless it records cache_write_1h) prices every write at the
@@ -71,10 +71,10 @@ sys.path.insert(0, str(HERE))
 WEIGHTS = {"input": 1.0, "cache_write": 1.25, "cache_read": 0.1, "output": 5.0}
 DEFAULTS = {"weekly_units": 540_000_000, "target_percent": 5, "cap_percent": 10,
             "calibrated": "2026-09-29: about 270 million units showed as about half of the week"}
-# List prices in US dollars per million tokens, as of 2026-10-06 (see the module text for Haiku's assumptions).
+# List prices in US dollars per million tokens, from the pricing page as of 2026-10-19.
 PRICES = {
     "claude-opus-5-5": {"input": 4.00, "cache_write": 5.00, "cache_read": 0.20, "output": 20.00},
-    "claude-sonnet-5-5": {"input": 2.00, "cache_write": 2.50, "cache_read": 0.20, "output": 10.00},
+    "claude-sonnet-5-5": {"input": 2.00, "cache_write": 2.50, "cache_read": 0.10, "output": 10.00},
     "claude-haiku-5-5": {"input": 0.10, "cache_write": 0.125, "cache_read": 0.01, "output": 0.50},
 }
 PRICED_AS = "claude-opus-5-5"  # an unknown or missing model is priced as the dearest, never as free

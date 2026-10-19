@@ -143,7 +143,7 @@ class SpendTest(unittest.TestCase):
     def test_price_table(self):
         # Per million tokens, by the model that served them.
         self.assertEqual(spend.dollars(OPUS, MTOK), (4.00 + 5.00 + 0.20 + 20.00, True))
-        self.assertEqual(spend.dollars(SONNET, MTOK), (2.00 + 2.50 + 0.20 + 10.00, True))
+        self.assertEqual(spend.dollars(SONNET, MTOK), (2.00 + 2.50 + 0.10 + 10.00, True))
         self.assertAlmostEqual(spend.dollars(HAIKU, MTOK)[0], 0.10 + 0.125 + 0.01 + 0.50)
         # Haiku's cache prices are its input price times 1.25 (write) and 0.1 (read).
         self.assertAlmostEqual(spend.PRICES[HAIKU]["cache_write"], 1.25 * spend.PRICES[HAIKU]["input"])
@@ -229,13 +229,13 @@ class SpendTest(unittest.TestCase):
         self.assertEqual(m["conversations"], 3_000_000 * 5, "units are unchanged by the model")
         self.assertAlmostEqual(m["dollars"]["conversations"], 20.00 + 10.00 + 20.00)
         # the served model counts, not the requested one; Codex is never priced
-        self.assertAlmostEqual(m["dollars"]["isolated"], 0.50 + 0.20 + 4.00)
+        self.assertAlmostEqual(m["dollars"]["isolated"], 0.50 + 0.10 + 4.00)
         self.assertEqual(m["unpriced_model"], 2, "the call with no model and the unknown run; a call with no tokens "
                                                  "is not counted")
         self.assertEqual(m["unpriced_models"], ["claude-mystery-1", "missing"])
         self.assertEqual(m["codex"], 1_000_000 * 5)
         r = self.spend("status", str(self.project))
-        self.assertIn("$54.70 at list prices", r.stdout)
+        self.assertIn("$54.60 at list prices", r.stdout)
         self.assertIn("unpriced_model: 2 usage entries", r.stdout)
         self.assertIn("claude-mystery-1, missing", r.stdout)
 
@@ -271,7 +271,7 @@ class SpendTest(unittest.TestCase):
                                ("-", "dev", "-", "cold-reader", 1)])
         demo = rep["groups"][1]
         self.assertEqual(demo["models"], [SONNET])
-        self.assertAlmostEqual(demo["dollars"], (100 * 2 + 900 * 2.5 + 9000 * 0.2 + 1000 * 10) / 1e6)
+        self.assertAlmostEqual(demo["dollars"], (100 * 2 + 900 * 2.5 + 9000 * 0.1 + 1000 * 10) / 1e6)
         self.assertEqual(demo["units"], spend.units(u))
         self.assertAlmostEqual(demo["cache_read_share"], 9000 / 10000)
         self.assertEqual(demo["tokens"], u)

@@ -60,8 +60,9 @@ leaves the Claude Code default) and always passes --effort; the agent definition
 route that cannot be resolved, or a builder-side route (model session), ends the run ERROR with the reason.
 The summary records route, requested_model, requested_effort, model_source and effort_source (repo, override,
 or flag), served_model (from the stream), and model_mismatch (true when a named model was asked for and the
-served model's ID does not start with it; null when the stream named none). The Codex family keeps its own
-model and effort: its summary records the route with route_applies false.
+served model's ID does not start with it; null when the stream named none). The Codex family runs on the
+table's codex entry (models.py), --effort still winning: its summary records codex_model, codex_effort, and
+codex_source, and the route with route_applies false.
 
 Mode sections. An agent body may hold blocks between `<!-- mode: NAME -->` and `<!-- end mode -->` lines (NAME
 may list several names, separated by commas). The prompt (Claude or Codex) keeps the common text and only the blocks
@@ -665,9 +666,11 @@ def route_record(summary, rt, opts):
         return {}
     rec = {"route": rt["route"], "route_from": rt["route_from"]}
     if summary.get("family") == "codex":
-        rec.update({"route_applies": False, "route_note": "the Codex family keeps its own model and effort "
-                                                          f"(effort {opts['effort']}); the route and --model apply "
-                                                          "to the Claude family only"})
+        cx = opts.get("_codex") or {}
+        rec.update({"route_applies": False, "codex_model": cx.get("model"), "codex_effort": cx.get("effort"),
+                    "codex_source": cx.get("source"),
+                    "route_note": "the Codex family runs on the routing table's codex entry; the route and --model "
+                                  "apply to the Claude family only"})
         return rec
     rec.update({"route_applies": True, "requested_model": rt["model"], "requested_effort": rt["effort"],
                 "model_source": rt["model_source"], "effort_source": rt["effort_source"]})
@@ -750,8 +753,9 @@ def codex_cmd(role, opts, workdir, stem, sid):
     profile = Path(str(stem) + ".sb")
     profile.write_text(codex_profile(workdir, home, list(opts["allow_read"]) + list(opts.get("_readable") or []),
                                      private_tmp, codex))
+    cx = opts.get("_codex") or {"model": "gpt-6-astra", "effort": opts["effort"]}  # main() sets it from the table
     cmd = ["sandbox-exec", "-f", str(profile), codex, "exec", "-C", str(workdir), "-s", "danger-full-access",
-           "--skip-git-repo-check", "-m", "gpt-6-astra", "-c", f'model_reasoning_effort="{opts["effort"]}"',
+           "--skip-git-repo-check", "-m", cx["model"], "-c", f'model_reasoning_effort="{cx["effort"]}"',
            "-c", 'approval_policy="never"', "--json", "-o", str(private_tmp / "result.md"), "-"]
     env = {k: v for k, v in os.environ.items()
            if k not in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "HEAVY_LOCK_HELD", "CLAUDECODE",
@@ -1079,6 +1083,11 @@ def main(argv):
             return 1
         rt = None  # the Codex family keeps its own model and effort; the routing problem is still on record
         opts["_route_error"] = str(exc)
+    try:
+        cx = models.codex()
+    except models.ModelsError:  # on record above (a Claude run has already stopped); Codex keeps its setting
+        cx = {"model": "gpt-6-astra", "effort": "xhigh", "source": "fallback"}
+    opts["_codex"] = {**cx, "effort": opts["effort"] if "effort" in opts["_given"] else cx["effort"]}
     plan = shadow_plan(role, opts)
     pack_path = Path(str(stem) + ".pack.md")
     if "render" in opts:

@@ -24,9 +24,11 @@ A checker route (an isolated run) never takes model session or effort inherit: c
 them there, since every run on such a route would end ERROR.
 "escalate" names the model and effort a gate retry moves to (gate_run.py), when the first attempt ended ERROR
 or INCONCLUSIVE on another model or a lower effort.
+"codex" names the model and effort of code-verifier's Codex family (run_isolated.py passes them to codex exec;
+--effort given to run_isolated.py still wins): a Codex model ID, never a Claude one, and an effort level.
 
 Override: ~/.claude/.pipeline-models.json, {"routes": {"<route>": {"model": ..., "effort": ...}}}, for some
-routes and some fields; the rest come from the table. PIPELINE_MODELS_IGNORE_OVERRIDE=1 ignores it (the
+routes and some fields, and {"codex": {...}} likewise; the rest come from the table. PIPELINE_MODELS_IGNORE_OVERRIDE=1 ignores it (the
 /evolve benchmarks measure the repository's own table).
 
 Shadow: the same file may hold {"shadow": {"<route>": {"model": ..., "effort": ...}}} beside "routes": a candidate
@@ -167,9 +169,29 @@ def table_problems(data, where):
         routes = {}
     for route, entry in routes.items():
         out += entry_problems(route, entry, allowed, where)
-    extra = sorted(set(data) - {"version", "allowed_models", "escalate", "routes", "note"})
+    if "codex" in data:
+        out += codex_problems(data["codex"], where)
+    extra = sorted(set(data) - {"version", "allowed_models", "escalate", "codex", "routes", "note"})
     if extra:
         out.append(f"{where}: unknown field(s) {', '.join(extra)}")
+    return out
+
+
+def codex_problems(entry, where, partial=False):
+    if not isinstance(entry, dict):
+        return [f"{where}: codex must be an object with model and effort"]
+    out = []
+    model, effort = entry.get("model"), entry.get("effort")
+    if not (partial and model is None):
+        if not isinstance(model, str) or not model.strip():
+            out.append(f"{where}: codex model must be a Codex model ID")
+        elif any(f in model.lower() for f in FORBIDDEN) or model.lower().startswith("claude"):
+            out.append(f"{where}: codex model {model} is not a Codex model ID")
+    if not (partial and effort is None) and effort not in EFFORTS:
+        out.append(f"{where}: codex effort {effort!r} must be one of {', '.join(EFFORTS)}")
+    extra = sorted(set(entry) - {"model", "effort", "note"})
+    if extra:
+        out.append(f"{where}: codex has unknown field(s) {', '.join(extra)}")
     return out
 
 
@@ -187,7 +209,9 @@ def override_problems(data, table, where):
         out += entry_problems(route, entry, allowed, where, partial=True)
     if "shadow" in data:
         out += shadow_problems(data["shadow"], table, where)
-    extra = sorted(set(data) - {"version", "routes", "shadow", "note"})
+    if "codex" in data:
+        out += codex_problems(data["codex"], where, partial=True)
+    extra = sorted(set(data) - {"version", "routes", "shadow", "codex", "note"})
     if extra:
         out.append(f"{where}: unknown field(s) {', '.join(extra)}")
     return out
@@ -251,6 +275,16 @@ def load(root=None, ignore_override=None):
         if problems:
             raise ModelsError("; ".join(problems))
     return table, over, path, (opath if over is not None else None)
+
+
+def codex(root=None, ignore_override=None):
+    """{model, effort, source (repo | override)} of the Codex family; the table's when it names none (gpt-6-astra
+    at xhigh, the setting before the table held it)."""
+    table, over, _, _ = load(root, ignore_override)
+    entry = dict(table.get("codex") or {"model": "gpt-6-astra", "effort": "xhigh"})
+    mine = (over or {}).get("codex") or {}
+    entry.update({k: mine[k] for k in ("model", "effort") if k in mine})
+    return {"model": entry["model"], "effort": entry["effort"], "source": "override" if mine else "repo"}
 
 
 def resolve(route, root=None, ignore_override=None):
@@ -468,12 +502,13 @@ def main(argv):
         table, path, opath = loaded[0], loaded[2], loaded[3]
         rows = [pick(route, *loaded) for route in table["routes"]]
         shadows = {r["route"]: shadow_entry(r["route"], loaded[1], opath) for r in rows}
+        cx = codex()
     except ModelsError as exc:
         print(f"models: {exc}", file=sys.stderr)
         return 1
     if as_json:
         print(json.dumps({"table": str(path), "override": str(opath) if opath else None,
-                          "override_ignored": override_ignored(), "escalate": table["escalate"],
+                          "override_ignored": override_ignored(), "escalate": table["escalate"], "codex": cx,
                           "routes": {r["route"]: r for r in rows},
                           "shadows": {k: v for k, v in shadows.items() if v}}, indent=2))
     else:
@@ -481,6 +516,8 @@ def main(argv):
             print(describe(r))
             if shadows.get(r["route"]):
                 print(describe_shadow(shadows[r["route"]]))
+        print(f"codex (code-verifier's Codex family): model {cx['model']}, effort {cx['effort']}, from "
+              + ("the personal override" if cx["source"] == "override" else "the repository table"))
         print(f"escalate: {table['escalate']['model']} {table['escalate']['effort']}; table {path}; "
               + (f"override {opath}" if opath else "override ignored" if override_ignored() else "no personal override"))
     return 0

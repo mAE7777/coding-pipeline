@@ -60,7 +60,7 @@ class TableTest(HomeCase):
         self.assertEqual(table["escalate"], {"model": "claude-opus-5-5", "effort": "xhigh"})
         for route in CHECKERS + ("probe",):
             r = models.resolve(route)
-            self.assertEqual((r["model"], r["effort"], r["source"]), ("default", "xhigh", "repo"), route)
+            self.assertEqual((r["model"], r["effort"], r["source"]), ("claude-opus-5-5", "xhigh", "repo"), route)
         for route in BUILDER:
             r = models.resolve(route)
             self.assertEqual((r["model"], r["effort"]), ("session", "inherit"), route)
@@ -90,23 +90,36 @@ class TableTest(HomeCase):
         self.assertIn("is missing", str(cm.exception))
 
 
+class CodexTest(HomeCase):
+    def test_the_codex_entry_is_read_checked_and_overridable(self):
+        self.assertEqual(models.codex(), {"model": "gpt-6-astra", "effort": "xhigh", "source": "repo"})
+        self.override({}, codex={"effort": "high"})
+        self.assertEqual(models.codex(), {"model": "gpt-6-astra", "effort": "high", "source": "override"})
+        for bad, why in (({"model": "claude-opus-5-5"}, "not a Codex model ID"), ({"model": "fable-x"}, "not a Codex"),
+                         ({"effort": "huge"}, "must be one of"), ({"model": "gpt-6-astra", "speed": 1}, "unknown field")):
+            self.override({}, codex=bad)
+            with self.assertRaises(models.ModelsError) as ctx:
+                models.codex()
+            self.assertIn(why, str(ctx.exception), bad)
+
+
 class OverrideTest(HomeCase):
     def test_a_partial_override_changes_only_what_it_names(self):
         self.override({"gate-judge": {"effort": "high"}, "code-verifier.demo": {"model": "claude-sonnet-5-5",
                                                                                "effort": "high"}})
         judge = models.resolve("gate-judge")
-        self.assertEqual((judge["model"], judge["effort"], judge["source"]), ("default", "high", "override"))
+        self.assertEqual((judge["model"], judge["effort"], judge["source"]), ("claude-opus-5-5", "high", "override"))
         self.assertEqual(judge["override_fields"], ["effort"])
         demo = models.resolve("code-verifier.demo")
         self.assertEqual((demo["model"], demo["effort"]), ("claude-sonnet-5-5", "high"))
         review = models.resolve("code-verifier.review")
-        self.assertEqual((review["model"], review["source"]), ("default", "repo"), "an unnamed route keeps the table")
+        self.assertEqual((review["model"], review["source"]), ("claude-opus-5-5", "repo"), "an unnamed route keeps the table")
 
     def test_the_ignore_variable_measures_the_repository_table(self):
         self.override({"gate-judge": {"model": "claude-opus-5-5", "effort": "high"}})
         with mock.patch.dict(os.environ, {"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"}):
             r = models.resolve("gate-judge")
-        self.assertEqual((r["model"], r["effort"], r["source"]), ("default", "xhigh", "repo"))
+        self.assertEqual((r["model"], r["effort"], r["source"]), ("claude-opus-5-5", "xhigh", "repo"))
         self.assertEqual(models.resolve("gate-judge")["source"], "override", "without the variable it applies")
         self.assertEqual(models.resolve("gate-judge", ignore_override=True)["source"], "repo")
 
@@ -214,7 +227,7 @@ class ShadowTest(HomeCase):
                          ("claude-opus-5-5", "high", "override", "candidate"))
         self.assertIsNone(models.shadow("code-verifier.demo"), "a route without a shadow has none")
         r = models.resolve("gate-judge")
-        self.assertEqual((r["model"], r["effort"]), ("default", "xhigh"), "the shadow never changes the route")
+        self.assertEqual((r["model"], r["effort"]), ("claude-opus-5-5", "xhigh"), "the shadow never changes the route")
         (self.home / ".claude/.pipeline-models.json").write_text(json.dumps(
             {"shadow": {"code-verifier.demo": {"model": "claude-sonnet-5-5", "effort": "high"}}}))
         self.assertEqual(models.shadow("code-verifier.demo")["model"], "claude-sonnet-5-5",
@@ -364,9 +377,9 @@ class CliTest(HomeCase):
         out = self.cli("resolve", "gate-judge", "--json")
         self.assertEqual(out.returncode, 0, out.stderr)
         r = json.loads(out.stdout)
-        self.assertEqual((r["model"], r["effort"], r["source"]), ("default", "high", "override"))
+        self.assertEqual((r["model"], r["effort"], r["source"]), ("claude-opus-5-5", "high", "override"))
         out = self.cli("resolve", "gate-judge")
-        self.assertIn("gate-judge: model default", out.stdout)
+        self.assertIn("gate-judge: model claude-opus-5-5", out.stdout)
         self.assertIn("personal override (effort)", out.stdout)
         out = self.cli("list", "--json")
         self.assertEqual(out.returncode, 0, out.stderr)

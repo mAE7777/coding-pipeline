@@ -102,9 +102,11 @@ system's sandbox. A script renders its inputs from files, and no checker sees th
 | `change-reviewer` | A change to the pipeline that turns its reproduction green while the cause survives, loosens a check, hides a failure, or skips the owner's ruling. |
 
 The routing table, `skills/_shared/models.json`, sets each checker's model and effort, per mode where the
-modes judge different things (`python3 ~/.claude/skills/_shared/scripts/models.py list` shows it). A route
-changes only after the measurements in [`docs/model-routing.md`](docs/model-routing.md) pass and the owner
-approves. `spend.py report` shows what each milestone, round, and checker cost, in tokens and dollars.
+modes judge different things, and the Codex reviewer's model in its `codex` entry
+(`python3 ~/.claude/skills/_shared/scripts/models.py list` shows it). Every checker runs on Opus 5.5 at xhigh
+today. A route changes only after the measurements in [`docs/model-routing.md`](docs/model-routing.md) pass and
+the owner approves. That document also recommends the main session's setting per kind of work; the pipeline
+never switches it. `spend.py report` shows what each milestone, round, and checker cost, in tokens and dollars.
 
 ## The build record
 

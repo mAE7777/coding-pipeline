@@ -12,7 +12,7 @@ Every candidate gets the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric, 3-6 concrete gradeable criteria for what success looks like on *this* task. It is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Use the `architect-runner` role in `_shared/models.json`: one runner on Opus 5.5 at `xhigh` and one on Sonnet 5.5 at `high`. Spawn more runners, within the session's concurrency limits, when the arena covers multiple design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive. Brief each runner per `../brief.md`.
+3. Pick the runners. Use the `architect-runner` role in `_shared/models.json`: one runner on Opus 5.5 at `xhigh` and one on Sonnet 5.5 at `high`, each spawned with the Agent tool's `model` and `effort` set to that pair, never left to the session's own. Spawn more runners, within the session's concurrency limits, when the arena covers multiple design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive. Brief each runner per `../brief.md`.
 4. Give each candidate its own output location (a git worktree where possible, otherwise `/tmp/arena-<slug>/candidate-<n>/`), per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out
@@ -43,4 +43,4 @@ Verify the synthesized artifact like any other output, per the **prove-it-works*
 
 ## Outputs
 
-One synthesized artifact, with a short synthesis note alongside naming the base and why, the cross-judge's verdict, each graft with its source candidate, what was rejected and why, any convergence or dropouts, and the verification result.
+One synthesized artifact, with a short synthesis note alongside naming each runner's model and effort, the base and why, the cross-judge's verdict, each graft with its source candidate, what was rejected and why, any convergence or dropouts, and the verification result.

@@ -653,10 +653,13 @@ class RoutingTest(unittest.TestCase):
     def test_model_flag_only_when_a_model_is_named(self):
         out, s = self.run_ri("loyal-evaluator", "--dry-run")
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertNotIn("--model", s["cmd"], "the default route leaves the Claude Code default")
+        self.assertEqual(s["cmd"][s["cmd"].index("--model") + 1], "claude-opus-5-5", "the table names the model")
         self.assertEqual(s["cmd"][s["cmd"].index("--effort") + 1], "xhigh")
         self.assertEqual((s["route"], s["requested_model"], s["requested_effort"], s["model_source"]),
-                         ("loyal-evaluator", "default", "xhigh", "repo"))
+                         ("loyal-evaluator", "claude-opus-5-5", "xhigh", "repo"))
+        self.override({"loyal-evaluator": {"model": "default"}})
+        out, s = self.run_ri("loyal-evaluator", "--dry-run")
+        self.assertNotIn("--model", s["cmd"], "default leaves the Claude Code default")
         out, s = self.run_ri("loyal-evaluator", "--dry-run", "--model", "claude-sonnet-5-5", "--effort", "low")
         self.assertEqual(s["cmd"][s["cmd"].index("--model") + 1], "claude-sonnet-5-5")
         self.assertEqual(s["cmd"][s["cmd"].index("--effort") + 1], "low")
@@ -674,7 +677,8 @@ class RoutingTest(unittest.TestCase):
                          ("code-verifier.demo", "override", "derived from the role and mode"))
         out, s = self.run_ri("code-verifier", "--dry-run", "--mode", "demo",
                              env={"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"})
-        self.assertNotIn("--model", s["cmd"], "the benchmarks measure the repository table")
+        self.assertEqual(s["cmd"][s["cmd"].index("--model") + 1], "claude-opus-5-5",
+                         "the benchmarks measure the repository table")
         out, s = self.run_ri("code-verifier", "--dry-run", "--route", "code-verifier.review")
         self.assertEqual((s["route"], s["route_from"]), ("code-verifier.review", "--route"))
 
@@ -724,6 +728,21 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual((s["route"], s["route_applies"]), ("code-verifier.review", False))
         self.assertIn("Fable or Mythos", s["route_error"], "but it stays on record")
 
+    def test_the_codex_family_runs_on_the_tables_codex_entry(self):
+        (self.bin / "codex").write_text(FAKE_CODEX_OK)
+        os.chmod(self.bin / "codex", 0o755)
+        out, s = self.run_ri("code-verifier", "--dry-run", "--family", "codex")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        cmd = s["cmd"]
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-astra")
+        self.assertEqual((s["codex_model"], s["codex_effort"], s["codex_source"]), ("gpt-6-astra", "xhigh", "repo"))
+        (self.home / ".claude/.pipeline-models.json").write_text(json.dumps({"codex": {"model": "gpt-6-nova"}}))
+        out, s = self.run_ri("code-verifier", "--dry-run", "--family", "codex", "--effort", "high")
+        cmd = s["cmd"]
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-6-nova", "the personal override names another model")
+        self.assertIn('model_reasoning_effort="high"', cmd, "--effort still wins")
+        self.assertEqual(s["codex_source"], "override")
+
     def test_the_summary_records_what_was_asked_and_what_served(self):
         out, s = self.run_ri("loyal-evaluator", "--model", "claude-sonnet-5-5")
         self.assertEqual(s["status"], "OK", out.stderr[-500:])
@@ -734,7 +753,7 @@ class RoutingTest(unittest.TestCase):
         self.assertIn("asked for claude-sonnet-5-5, served by claude-opus-5-5", out.stderr)
         out, s = self.run_ri("loyal-evaluator", env={"FAKE_SERVED": "claude-opus-5-5-20261001"})
         self.assertEqual((s["requested_model"], s["served_model"], s["model_mismatch"]),
-                         ("default", "claude-opus-5-5-20261001", False))
+                         ("claude-opus-5-5", "claude-opus-5-5-20261001", False))
         prompt = json.loads((self.d / "ev/loyal-evaluator.agents.json").read_text())["loyal-evaluator"]["prompt"]
         self.assertEqual(s["prompt_sha256"], ri.hashlib.sha256(prompt.encode()).hexdigest())
         self.assertEqual(len(s["agent_sha256"]), 64)
@@ -872,6 +891,7 @@ class ShadowRunTest(unittest.TestCase):
         self.env.update({"HOME": str(self.home), "PATH": f"{self.bin}:{os.environ['PATH']}",
                          "HEAVY_LOCK_DIR": str(self.d / "lock"), "FAKE_CALLS": str(self.calls)})
         self.log = self.home / ".claude/.pipeline-shadow.jsonl"
+        self.override({})
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -891,7 +911,10 @@ class ShadowRunTest(unittest.TestCase):
         return [json.loads(x) for x in self.calls.read_text().splitlines()] if self.calls.is_file() else []
 
     def override(self, shadow):
-        (self.home / ".claude/.pipeline-models.json").write_text(json.dumps({"shadow": shadow}))
+        # The routes keep the CLI default here, so the stand-in tells the routed run from the shadow by --model.
+        routes = {r: {"model": "default"} for r, v in json.loads((ROOT / "skills/_shared/models.json").read_text())
+                  ["routes"].items() if v["model"] != "session"}
+        (self.home / ".claude/.pipeline-models.json").write_text(json.dumps({"routes": routes, "shadow": shadow}))
 
     def test_no_shadow_by_default(self):
         proc, s, ev = self.run_ri("gate-judge")
