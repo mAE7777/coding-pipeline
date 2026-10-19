@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Update the installed pipeline from its repository in one command, and tell every open session when the skill
-text it already read is out of date. Nothing here pulls or installs in the background.
+text it already read is out of date. The fast workflow (its manifest ~/.claude/.pipeline-fast-install.json) is
+updated and watched the same way when it is installed. Nothing here pulls or installs in the background.
 
 Usage:
-  pipeline_sync.py update [--no-pull] [--json]   pull the repository, install it, register its hooks
-  pipeline_sync.py status [--json]               what is installed, what the repository holds, runs in progress
+  pipeline_sync.py update [--no-pull] [--json]   pull the repository, install it, register its hooks; then fast
+  pipeline_sync.py status [--json]               what is installed, what the repositories hold, runs in progress
   pipeline_sync.py session-start                 SessionStart hook (matcher startup|resume|clear|fork)
   pipeline_sync.py prompt                        UserPromptSubmit hook
 
@@ -24,25 +25,38 @@ apply that did not install, a failed settings patch, or a failing check exits 1 
 result is written to ~/.claude/.pipeline-sync.json (time, before, after, result, changed, and the history of
 installs), which the prompt hook reads to name what changed without running git. One update runs at a time.
 
+The fast workflow, after the pipeline's own update or its refusal (one part's refusal never stops the other):
+when the fast manifest exists and names its repository ("repo"), update runs `install.py update --json` there
+(with --no-pull when given; it refuses, pulls, and installs by the same rules) and reports it on its own lines:
+"fast: current", "fast: updated <before> -> <after> (<n> commits)" with the commits, or "fast: refused: <reason>;
+<what to do>". A manifest without "repo" was written by an older fast install.py: "fast: installed by an older
+version; run python3 install.py apply once in the fast repository". The fast result is recorded under "fast" in
+~/.claude/.pipeline-sync.json. update exits 1 when either part was refused or failed.
+
 status. The installed revision and time, the repository's HEAD and branch, how far it is ahead of or behind its
-upstream as of the last fetch (no network), uncommitted changes, the last update, and runs in progress.
+upstream as of the last fetch (no network), uncommitted changes, the last update, and runs in progress; and for
+the fast workflow when installed, its revision, time, repository, and commits there not installed.
 
 Runs in progress. gate_run.py and run_isolated.py write ~/.claude/.pipeline-runs/<pid>.json ({pid, script,
 project, started}) when they start and remove it when they end (a run stopped by a signal too). update counts an
 entry whose process is alive and still runs that script as busy, and removes the others.
 
-session-start (SessionStart). Records the revision installed now for this session in
-~/.claude/.pipeline-sessions/<session_id>.json (a resumed or forked session keeps the revision it already has on
-record, since its conversation holds the text it read then), and when the repository's local HEAD (no network)
-is not the installed revision, prints a message for the owner: "The pipeline repository has <n> commit(s) not
-installed (<before>..<after>). Type /pipeline update." Records older than 14 days are removed.
+session-start (SessionStart). Records the revisions installed now (the pipeline's and fast's) for this session in
+~/.claude/.pipeline-sessions/<session_id>.json (a resumed or forked session keeps the revisions it already has on
+record, since its conversation holds the text it read then), and when a repository's local HEAD (no network)
+is not its installed revision, prints a message for the owner: "The pipeline repository has <n> commit(s) not
+installed (<before>..<after>). Type /pipeline update." (the fast workflow's repository likewise, in the same
+message). Records older than 14 days are removed.
 
-prompt (UserPromptSubmit). Two small file reads, no git, no network. When the manifest's revision differs from
+prompt (UserPromptSubmit). Three small file reads, no git, no network. When a manifest's revision differs from
 the one recorded for this session, it adds a notice to the session's context once: the skill text read earlier
 in the session is out of date, re-read the SKILL.md of the skill in use (or invoke it again) and the references
 the next step relies on; with the skills and shared references that changed when the update history reaches
-back to the session's revision. Then the new revision is recorded for the session. A session with no record
-(started before this hook existed) records the current revision silently.
+back to the session's revision. The notice speaks of the fast skills when only fast's revision changed, and of
+both when both did. Then the new revisions are recorded for the session. A session with no record (started
+before this hook existed) records the current revisions silently, and a record without fast's revision (written
+before fast was watched) records fast's silently; so does a fast install that appears after the session began. A
+short fast revision (an older fast install.py's) and the full sha it starts are one revision, never a change.
 
 The hooks never block and never fail a session: an internal error becomes a one-line message, or nothing.
 Exit 0 on success (and always for the hooks), 1 when update refused or failed, 2 on bad usage.
@@ -63,6 +77,10 @@ HISTORY = 20
 # The paths install.py installs from; the private/ overlay is local by design and never committed.
 INSTALLED_FROM = ("skills/", "agents/", "hooks/")
 SUFFIX = "+local-changes"  # install.py's revision for a work tree with changes
+FAST_TIMEOUT = 600  # fast's install.py update: one fetch (60 s at most) and a copy of its skills
+FAST_REAPPLY = "run python3 install.py apply once in the fast repository"
+FAST_RESULTS = ("current", "updated", "refused", "failed")
+SESSION_START_SECONDS = 8  # every git call of the SessionStart hook together (it is registered with 10 s)
 
 
 def claude_dir():
@@ -103,6 +121,18 @@ def plain(rev):
     """The commit a manifest revision names, without install.py's local-changes mark."""
     rev = str(rev or "")
     return rev[:-len(SUFFIX)] if rev.endswith(SUFFIX) else rev
+
+
+def same_revision(a, b):
+    """True when two revisions name one commit: equal, or one is the short sha (7 to 39 hex characters) of the
+    other's full one. An older fast install.py recorded the short sha, and its first update records the full one
+    of the same commit, which is no change."""
+    a, b = plain(a), plain(b)
+    if not a or not b or a == b:
+        return bool(a) and a == b
+    s, full = sorted((a, b), key=len)
+    return (re.fullmatch(r"[0-9a-f]{7,39}", s) is not None and re.fullmatch(r"[0-9a-f]{40}", full) is not None
+            and full.startswith(s))
 
 
 def git(repo, *args, timeout=30):
@@ -209,6 +239,16 @@ def sync_path():
     return claude_dir() / ".pipeline-sync.json"
 
 
+def fast_manifest_path():
+    return claude_dir() / ".pipeline-fast-install.json"
+
+
+def fast_revision():
+    """The fast workflow's installed revision, or None when it is not installed or its manifest is unreadable."""
+    rev = (read_json(fast_manifest_path()) or {}).get("revision")
+    return rev if isinstance(rev, str) and rev else None
+
+
 def changed_parts(before, after):
     """What differs between two manifests' file hashes, grouped the way an owner thinks of the install."""
     claude = claude_dir()
@@ -261,9 +301,13 @@ def write_sync(result):
         if result.get("installed"):
             history.append({"time": now(), "before": result.get("before"), "after": result.get("after"),
                             "changed": result.get("changed")})
+        fast = result.get("fast")
         write_json(sync_path(), {"time": now(), "before": result.get("before"), "after": result.get("after"),
                                  "result": result["result"], "reason": result.get("reason"),
-                                 "changed": result.get("changed"), "history": history[-HISTORY:]})
+                                 "changed": result.get("changed"), "history": history[-HISTORY:],
+                                 "fast": None if fast is None else
+                                 {"time": now(), **{k: fast.get(k) for k in ("result", "before", "after", "count",
+                                                                             "reason", "todo")}}})
     except Exception as exc:
         result.setdefault("notes", []).append(f"could not write {sync_path()}: {exc}")
 
@@ -353,14 +397,107 @@ def fail_lines(*outputs):
 
 def update(no_pull=False):
     result = {"result": None, "reason": None, "todo": None, "before": None, "after": None, "installed": False,
-              "notes": [], "log": [], "log_more": 0, "changed": None, "repo": None}
+              "notes": [], "log": [], "log_more": 0, "changed": None, "repo": None, "fast": None}
     me = register_run("pipeline_sync.py update")  # one update at a time: a second one finds this entry
     try:
         code = _update(no_pull, result)
+        try:  # whatever the pipeline's own part did
+            result["fast"] = fast_update(no_pull)
+        except Exception as exc:  # the pipeline's own result is still reported
+            result["fast"] = {**fast_result(), "result": "failed", "reason": f"the fast part hit an internal error: "
+                                                                             f"{exc.__class__.__name__}: {exc}"}
     finally:
         unregister_run(me)
     write_sync(result)
+    fast = result["fast"]
+    if fast is not None and fast["result"] not in ("current", "updated"):
+        code = 1
     return code, result
+
+
+def fast_result():
+    return {"result": None, "before": None, "after": None, "commits": [], "count": 0, "notes": [], "reason": None,
+            "todo": None, "repo": None, "older": False}
+
+
+def fast_refused(out, reason, todo):
+    out.update(result="refused", reason=reason, todo=todo)
+    return out
+
+
+def fast_update(no_pull):
+    """The fast workflow's part of the update: None when it is not installed, else {result, before, after, commits,
+    count, notes, reason, todo, repo, older, output}."""
+    out = fast_result()
+    path = fast_manifest_path()
+    if not path.exists():
+        return None
+    manifest = read_json(path)
+    if manifest is None:
+        return fast_refused(out, f"the fast workflow's install manifest {path} is unreadable", FAST_REAPPLY)
+    out["before"] = manifest.get("revision")
+    repo = manifest.get("repo")
+    if not isinstance(repo, str) or not repo:
+        out["older"] = True  # written by a fast install.py from before update existed
+        return fast_refused(out, "installed by an older version", FAST_REAPPLY)
+    out["repo"] = repo
+    repo = Path(repo)
+    if not (repo / "install.py").is_file():
+        return fast_refused(out, f"the fast workflow was installed from {repo}, which no longer holds its repository "
+                                 "(no install.py there)", "clone the fast repository and " + FAST_REAPPLY)
+    others = [r for r in live_runs(skip_pid=os.getpid()) if r["script"] == "pipeline_sync.py update"]
+    if others:
+        return fast_refused(out, "another /pipeline update is running: " + describe_runs(others),
+                            "wait for it to finish, then type /pipeline update again")
+    args = [sys.executable, str(repo / "install.py"), "update", "--home", str(Path.home()), "--json"]
+    try:
+        r = subprocess.run(args + (["--no-pull"] if no_pull else []), capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, cwd=str(repo), timeout=FAST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        out.update(result="failed", reason=f"the fast workflow's install.py update did not finish within "
+                                            f"{FAST_TIMEOUT} s", todo=f"run python3 install.py update in {repo}")
+        return out
+    except OSError as exc:
+        out.update(result="failed", reason=f"the fast workflow's install.py could not start: {exc}")
+        return out
+    got = last_json_object(r.stdout)
+    if got is None or got.get("result") not in FAST_RESULTS:
+        out.update(result="failed", reason=f"the fast workflow's install.py update gave no result this script can "
+                                            f"read (exit {r.returncode}); its install.py may predate update --json",
+                   todo=f"pull the fast repository at {repo}, then " + FAST_REAPPLY,
+                   output=tail((r.stdout or "") + "\n" + (r.stderr or ""), 8))
+        return out
+    for k in ("before", "after", "reason", "todo"):
+        if isinstance(got.get(k), str) and got[k]:
+            out[k] = got[k]
+    out["result"] = got["result"]
+    out["commits"] = [c for c in got.get("commits") or [] if isinstance(c, str)]
+    out["notes"] = [n for n in got.get("notes") or [] if isinstance(n, str)]
+    if r.returncode != 0 and out["result"] in ("current", "updated"):
+        out["notes"].append(f"install.py update said {out['result']} but exited {r.returncode}")
+        out.update(result="failed", reason=f"the fast workflow's install.py update exited {r.returncode}")
+    if out["result"] == "failed" and (r.stderr or "").strip():
+        out["output"] = tail(r.stderr, 8)
+    out["count"] = len(out["commits"])
+    if out["result"] == "updated" and out["before"] and out["after"]:
+        code, count, _ = git(repo, "rev-list", "--count", f"{plain(out['before'])}..{plain(out['after'])}")
+        if code == 0 and count.isdigit() and int(count) >= out["count"]:
+            out["count"] = int(count)  # the list stops at 15
+    return out
+
+
+def last_json_object(text):
+    """The last JSON object printed in text (it may follow other lines), or None."""
+    text = text or ""
+    starts = [0] + [m.start() + 1 for m in re.finditer(r"\n\{", text)]
+    for start in reversed(starts):
+        try:
+            got = json.loads(text[start:])
+        except ValueError:
+            continue
+        if isinstance(got, dict):
+            return got
+    return None
 
 
 def _update(no_pull, result):
@@ -481,6 +618,31 @@ def print_update(r):
             print(r["output"])
     for note in r.get("notes") or []:
         print(f"note: {note}")
+    print_fast_update(r.get("fast"))
+
+
+def print_fast_update(f):
+    """The fast workflow's part, on its own lines; nothing when fast is not installed."""
+    if f is None:
+        return
+    if f.get("older"):
+        print(f"fast: installed by an older version; {FAST_REAPPLY}")
+    elif f["result"] == "current":
+        print("fast: current")
+    elif f["result"] == "updated":
+        n = f.get("count") or len(f["commits"])
+        print(f"fast: updated {short(f['before'])} -> {short(f['after'])} ({n} commit{'' if n == 1 else 's'})")
+        for line in f["commits"]:
+            print(f"  {line}")
+        if n > len(f["commits"]) and f["commits"]:
+            print(f"  ... and {n - len(f['commits'])} more")
+    else:
+        print(f"fast: {f['result']}: {f.get('reason') or 'no reason given'}" + (f"; {f['todo']}" if f.get("todo")
+                                                                                 else ""))
+        if f.get("output"):
+            print(f["output"])
+    for note in f.get("notes") or []:
+        print(f"fast note: {note}")
 
 
 # ---------------------------------------------------------------- status
@@ -521,6 +683,36 @@ def status():
             out["uncommitted"] = len(dirty.splitlines()) if code == 0 else None
             code, untracked, _ = git(repo, "ls-files", "--others", "--exclude-standard", "--", *INSTALLED_FROM)
             out["untracked"] = len(untracked.splitlines()) if code == 0 else None
+    out["fast"] = fast_status((sync or {}).get("fast"))
+    return out
+
+
+def fast_status(last_update):
+    """The fast workflow's install as status shows it (no network), or None when it is not installed."""
+    path = fast_manifest_path()
+    if not path.exists():
+        return None
+    out = {"installed": None, "installed_at": None, "repo": None, "head": None, "ahead": None, "not_installed": None,
+           "older": False, "last_update": last_update if isinstance(last_update, dict) else None, "problems": []}
+    manifest = read_json(path)
+    if manifest is None:
+        out["problems"].append(f"the fast install manifest {path} is unreadable: {FAST_REAPPLY}")
+        return out
+    out.update(installed=manifest.get("revision"), installed_at=manifest.get("installed"))
+    repo = manifest.get("repo")
+    if not isinstance(repo, str) or not repo:
+        out["older"] = True
+        return out
+    out["repo"] = repo
+    code, head, err = git(repo, "rev-parse", "HEAD")
+    if code != 0 or not head:
+        out["problems"].append(f"the fast repository {repo} is not a readable git repository ({err or 'git failed'})")
+        return out
+    out["head"] = head
+    out["ahead"] = not same_revision(out["installed"], head)
+    if out["ahead"]:
+        code, count, _ = git(repo, "rev-list", "--count", f"{plain(out['installed'])}..{head}")
+        out["not_installed"] = int(count) if code == 0 and count.isdigit() else None
     return out
 
 
@@ -548,6 +740,27 @@ def print_status(s):
               f"{short(lu.get('after'))})" + (f": {lu['reason']}" if lu.get("reason") else ""))
     print(f"runs in progress: {describe_runs(s['runs']) if s['runs'] else 'none'}")
     for p in s["problems"]:
+        print(f"problem: {p}")
+    f = s.get("fast")
+    if f is None:
+        return
+    print(f"fast: installed {short(f['installed'])}" + (f" at {f['installed_at']}" if f["installed_at"] else "")
+          + (f" from {f['repo']}" if f["repo"] else ""))
+    if f["older"]:
+        print(f"fast: installed by an older version, which recorded no repository; {FAST_REAPPLY}")
+    elif f["head"]:
+        if not f["ahead"]:
+            print(f"fast repository: HEAD {short(f['head'])}, the installed revision")
+        else:
+            n = f["not_installed"]
+            print(f"fast repository: HEAD {short(f['head'])}; "
+                  + (f"{n} commit(s) not installed" if n else "HEAD is not the installed revision")
+                  + ": type /pipeline update")
+    lu = f["last_update"]
+    if lu:
+        print(f"fast last update: {lu.get('result')} at {lu.get('time')} ({short(lu.get('before'))} -> "
+              f"{short(lu.get('after'))})" + (f": {lu['reason']}" if lu.get("reason") else ""))
+    for p in f["problems"]:
         print(f"problem: {p}")
 
 
@@ -581,17 +794,21 @@ def installed_revision():
 def session_start():
     data = read_hook_input()
     manifest = read_json(manifest_path())
-    if manifest is None:
+    fast = read_json(fast_manifest_path())
+    if manifest is None and fast is None:
         return None
-    rev = manifest.get("revision")
+    rev = (manifest or {}).get("revision")
+    fast_rev = (fast or {}).get("revision")
+    rev, fast_rev = (r if isinstance(r, str) and r else None for r in (rev, fast_rev))
     path = session_file(data)
-    if path is not None and isinstance(rev, str):
+    if path is not None and (rev or fast_rev):
         rec = read_json(path)
         # A resumed or forked conversation still holds the text it read before: its record stays.
-        keep = data.get("source") in ("resume", "fork") and rec and isinstance(rec.get("revision"), str)
+        keep = data.get("source") in ("resume", "fork") and rec and (isinstance(rec.get("revision"), str)
+                                                                     or isinstance(rec.get("fast_revision"), str))
         if not keep:
             try:
-                write_json(path, {"revision": rev, "recorded": now()})
+                write_json(path, {"revision": rev, "fast_revision": fast_rev, "recorded": now()})
             except OSError:
                 pass  # the prompt hook records it later
     cutoff = time.time() - SESSION_DAYS * 86400
@@ -601,18 +818,25 @@ def session_start():
                 old.unlink()
         except OSError:
             pass
-    repo = manifest.get("repo")
-    if not isinstance(repo, str) or not repo or not Path(repo).is_dir():
+    deadline = time.monotonic() + SESSION_START_SECONDS
+    found = [line for line in (not_installed("The pipeline repository", (manifest or {}).get("repo"), rev, deadline),
+                               not_installed("The fast workflow's repository", (fast or {}).get("repo"), fast_rev,
+                                             deadline)) if line]
+    return " ".join(found) + " Type /pipeline update." if found else None
+
+
+def not_installed(label, repo, rev, deadline):
+    """The sentence naming what repo's local HEAD holds beyond the installed revision rev, or None (no network)."""
+    if not isinstance(repo, str) or not repo or not rev or not Path(repo).is_dir():
         return None
-    code, head, _ = git(repo, "rev-parse", "HEAD", timeout=5)
-    if code != 0 or not head or plain(rev) == head:
+    code, head, _ = git(repo, "rev-parse", "HEAD", timeout=max(0.5, min(5, deadline - time.monotonic())))
+    if code != 0 or not head or same_revision(rev, head):
         return None
-    code, count, _ = git(repo, "rev-list", "--count", f"{plain(rev)}..{head}", timeout=5)
+    code, count, _ = git(repo, "rev-list", "--count", f"{plain(rev)}..{head}",
+                         timeout=max(0.5, min(5, deadline - time.monotonic())))
     if code == 0 and count.isdigit() and int(count) > 0:
-        return (f"The pipeline repository has {count} commit(s) not installed ({short(plain(rev))}..{short(head)}). "
-                "Type /pipeline update.")
-    return (f"The pipeline repository's HEAD ({short(head)}) is not the revision installed in ~/.claude "
-            f"({short(rev)}). Type /pipeline update to install it.")
+        return f"{label} has {count} commit(s) not installed ({short(plain(rev))}..{short(head)})."
+    return f"{label}'s HEAD ({short(head)}) is not the revision installed in ~/.claude ({short(rev)})."
 
 
 def changed_since(since, current):
@@ -637,7 +861,23 @@ def changed_since(since, current):
     return {k: sorted(v) for k, v in found.items()} if cur == since else None
 
 
-def notice(before, after):
+def notice(before, after, fast=None):
+    """The out-of-date notice: the pipeline's when before and after are given, the fast workflow's when fast is
+    (before, after), both in one text when both changed."""
+    if before is None:
+        return (f"The fast skills in ~/.claude were updated ({short(fast[0])} -> {short(fast[1])}) after this session "
+                "read their instructions. Fast skill text you read earlier in this session is out of date: before the "
+                "next step, re-read the SKILL.md of the fast skill in use (~/.claude/skills/<name>-fast/SKILL.md). "
+                "fast.py already runs the new version. If this session has used no fast skill, nothing needs doing.")
+    text = pipeline_notice(before, after)
+    if fast is None:
+        return text + " If this session has used no pipeline skill, nothing needs doing."
+    return (text + f" The fast skills were updated too ({short(fast[0])} -> {short(fast[1])}): re-read the SKILL.md "
+                   "of a fast skill in use as well (~/.claude/skills/<name>-fast/SKILL.md). If this session has used "
+                   "neither pipeline's skills, nothing needs doing.")
+
+
+def pipeline_notice(before, after):
     text = (f"The coding pipeline in ~/.claude was updated ({short(before)} -> {short(after)}) after this session read "
             "its instructions. Skill text you read earlier in this session is out of date: before the next pipeline "
             "step, re-read the SKILL.md of the skill in use (~/.claude/skills/<name>/SKILL.md) and any reference that "
@@ -651,7 +891,7 @@ def notice(before, after):
     if ch is None or ch["skill_md"]:
         text += (" A skill's own hooks (its SKILL.md frontmatter) are registered when it is invoked, so for a skill "
                  "whose SKILL.md changed, invoke it again (for example /dev resume) rather than only re-reading it.")
-    return text + " If this session has used no pipeline skill, nothing needs doing."
+    return text
 
 
 def prompt():
@@ -659,21 +899,29 @@ def prompt():
     path = session_file(data)
     if path is None:
         return None
-    rev = installed_revision()
-    if rev is None:
+    rev, fast_rev = installed_revision(), fast_revision()
+    if rev is None and fast_rev is None:
         return None
     rec = read_json(path)
     recorded = rec.get("revision") if rec else None
-    if recorded == rev:
+    recorded_fast = rec.get("fast_revision") if rec else None
+    has_fast = rec is not None and "fast_revision" in rec  # an older record has no fast field: recorded silently
+    same_fast = fast_rev is None or recorded_fast == fast_rev or same_revision(recorded_fast, fast_rev)
+    if (rev is None or recorded == rev) and has_fast and same_fast:
         try:
             if path.stat().st_mtime < time.time() - 86400:
                 os.utime(path)  # a session still open is never pruned as old
         except OSError:
             pass
         return None
-    text = notice(recorded, rev) if isinstance(recorded, str) else None  # no record: started before this hook
-    try:
-        write_json(path, {"revision": rev, "recorded": now()})
+    # No record (started before this hook) or a revision not recorded as text (none installed then): silently.
+    full = rev is not None and isinstance(recorded, str) and recorded != rev
+    fast = fast_rev is not None and isinstance(recorded_fast, str) and not same_fast
+    text = notice(recorded if full else None, rev, (recorded_fast, fast_rev) if fast else None) \
+        if full or fast else None
+    try:  # an unreadable manifest (None) keeps what was recorded, so its next change is still noticed
+        write_json(path, {"revision": rev if rev is not None else recorded,
+                          "fast_revision": fast_rev if fast_rev is not None else recorded_fast, "recorded": now()})
     except OSError:
         pass  # the notice is still given; it comes again at the next prompt
     return text

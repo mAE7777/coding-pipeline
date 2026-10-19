@@ -167,6 +167,14 @@ or `hooks/` (an edit in progress is never installed half-done) and while a gate 
 `/pipeline status` shows what is installed and what the repository holds. Nothing pulls or installs in the
 background.
 
+When the fast workflow (mAE7777/coding-pipeline-fast) is installed, `/pipeline update` updates it too: after the
+pipeline's own part, it runs `install.py update` in the repository fast's manifest
+(`~/.claude/.pipeline-fast-install.json`) names, which refuses, pulls, and installs by the same rules, and reports
+it on its own `fast:` lines. One part's refusal never stops the other; the command exits 1 when either was
+refused or failed. A fast install made before fast's `update` existed records no repository: run
+`python3 install.py apply` once in the fast repository. `/pipeline status` and the two notices below cover fast
+as well.
+
 What a running session keeps: Claude Code gives the next invocation of a skill its changed SKILL.md, but a skill
 already invoked stays in the conversation as the text it read then, and its frontmatter hooks stay as they were
 registered at that invocation. Scripts, hook scripts, and checker agents are read from `~/.claude` at each call,
@@ -174,8 +182,9 @@ so they run the new version at once. Two hooks close the gap. At session start, 
 repository holds commits not installed yet. At the first prompt after an update, every open session is told,
 once, that the skill text it read is out of date: re-read the SKILL.md of the skill in use and the references
 the next step relies on, or invoke the skill again (which also registers its new hooks); the changed skills are
-named. Claude Code's settings watcher usually picks up new hook registrations in open sessions; a restart does
-when it does not.
+named (the notice speaks of the fast skills when only fast changed). Claude Code's settings watcher usually picks
+up new hook registrations in open sessions; a restart does when it does not. Codex sessions get neither notice,
+since Codex has no such hook: after an update, start a new Codex session or re-read the skill in use.
 
 Once, on a machine whose installed copy predates this: run `python3 install.py apply` and
 `python3 settings_patch.py --apply` from the repository. From then on `/pipeline update` does both.
