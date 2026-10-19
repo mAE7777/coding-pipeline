@@ -40,7 +40,7 @@ def summary(folder, name, mtime=None, **fields):
 class SpendTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        d = Path(self.tmp.name)
+        d = Path(self.tmp.name).resolve()
         self.home, self.project = d / "home", d / "work/proj"
         self.project.mkdir(parents=True)
         self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_CODE_SESSION_ID": SID}

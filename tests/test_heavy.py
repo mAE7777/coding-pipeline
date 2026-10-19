@@ -206,9 +206,9 @@ class HeavyLeaseTest(HeavyTestBase):
 # ERR so a test can vary it, and the exit code from CODE.
 NOISY = ("import os, sys\n"
          "for i in range(300):\n"
-         "    print(f'progress {i} ok')\n"
+         "    print(f'progress {i} ok', flush=True)\n"
          "    if i == 10:\n"
-         "        print('FAIL src/early.test.ts')\n"
+         "        print('FAIL src/early.test.ts', flush=True)\n"
          "print('Traceback (most recent call last):', file=sys.stderr)\n"
          "print(os.environ.get('ERR', 'ValueError: bad total'), file=sys.stderr)\n"
          "sys.exit(int(os.environ.get('CODE', '1')))\n")

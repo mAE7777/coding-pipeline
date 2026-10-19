@@ -43,7 +43,7 @@ APP = "items = []\n\n\ndef add(x):\n    items.append(x)\n"
 class RegateScopeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.p = Path(self.tmp.name) / "proj"
+        self.p = Path(self.tmp.name).resolve() / "proj"
         docs = self.p / "docs/project"
         docs.mkdir(parents=True)
         (docs / "milestones.md").write_text(MS)

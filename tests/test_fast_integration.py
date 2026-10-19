@@ -25,7 +25,7 @@ HAVE_FAST = (FAST_REPO / "install.py").is_file() and (FAST_REPO / "skills/_fast/
 class BothPipelines(SyncBase):
     def setUp(self):
         super().setUp()
-        d = Path(self.tmp.name)
+        d = Path(self.tmp.name).resolve()
         # The fast repository's committed files (git archive: the owner's uncommitted work never leaks in, and a
         # shallow clone works too) as one commit, with a bare origin, the installed clone, and a second clone that
         # stands in for upstream pushes.

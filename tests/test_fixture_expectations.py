@@ -1579,7 +1579,7 @@ class FastReviewerHarnessTest(unittest.TestCase):
     """run_one and main for the fast-reviewer fixtures with a stand-in runner: no model, no spending."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         for name, value in (("WORK", self.tmp / "work"), ("REPO", self.tmp / "repo")):
             patcher = mock.patch.object(agent_fixtures, name, value)
