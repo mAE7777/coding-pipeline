@@ -196,6 +196,50 @@ python3 tests/agent_fixtures.py --only probe-explain-grounding --runs 8 --model 
 The candidate passes when its problems over all runs are no more than today's and it costs less; the owner
 weighs the numbers, then the change goes through `/evolve` like any other.
 
+## The fast reviewer (the fast pipeline's /gate-fast)
+
+The fast pipeline (mAE7777/coding-pipeline-fast) has no routing table: `/gate-fast` names its reviewer's model in
+its own text, and the default is **opus at xhigh** (fast plan 9.2). The `fast-reviewer-` fixtures measure that
+reviewer's prompt (the blockquote in the fast repository's `skills/gate-fast/SKILL.md`, read from the checkout
+at `FAST_REPO`, by default `../coding-pipeline-fast`; without it the fixtures are skipped) on four planted
+fixtures (8 items a run: tally-defects' four, the import's dropped duplicate line, the refix's doubled archive
+header, and two faked Done-when items) and three clean controls (tally-clean, structure-clean, refix-works).
+Each run reviews a git copy of the fixture with the change uncommitted, as a fast project stands at
+`/gate-fast`, inside the code-verifier sandbox. The probe answers two questions before fast plan 4.2's two
+"measured" reviewer lines or a cheaper model ship: does sonnet catch as much as the opus default, and do the
+two candidate lines (`tests/fixtures/agents/fast-reviewer/candidate-lines.md`) help.
+
+Four sides, 5 runs each (40 planted item-trials and 15 clean runs a side). A run replaces
+`.evidence/fixtures/`, so copy it aside after each side; the effort stays xhigh on both models, so only the model
+differs (without the flags the fixtures run on fast's default, opus at xhigh):
+
+```
+python3 tests/agent_fixtures.py --only fast-reviewer --runs 5 --model claude-opus-5-5 --effort xhigh
+python3 tests/agent_fixtures.py --only fast-reviewer --runs 5 --model claude-sonnet-5-5 --effort xhigh
+FAST_REVIEWER_EXTRA=tests/fixtures/agents/fast-reviewer/candidate-lines.md \
+  python3 tests/agent_fixtures.py --only fast-reviewer --runs 5 --model claude-opus-5-5 --effort xhigh
+FAST_REVIEWER_EXTRA=tests/fixtures/agents/fast-reviewer/candidate-lines.md \
+  python3 tests/agent_fixtures.py --only fast-reviewer --runs 5 --model claude-sonnet-5-5 --effort xhigh
+```
+
+What to compare, side by side: the `pooled:` line each run prints (the problems over the planted item-trials,
+which are the pooled misses; the clean runs that failed, each a false block or a last line that is not "Matches
+the goal: yes"; the dollars), and in each run's `fixture-result.json` the `served_models` (a side served by
+another model than it asked for does not count) and `fast_prompt` (the fast revision, whether its SKILL.md had
+uncommitted edits, and the prompt's sha256, so both sides are known to carry the same text). Measure the
+candidate lines once the fast repository's new `fast.py diff` prints its file table: before that, the pack
+holds `git diff --stat` in its place and says so, which measures a different line.
+
+What each outcome decides:
+- **The model.** The reviewer stays on opus at xhigh. It moves to sonnet only when, on the prompt that ships,
+  sonnet's pooled misses are no higher than opus's and no clean sonnet run fails; the dollars say what the move
+  saves. The move is a change to fast's gate-fast text, the owner's decision with these numbers.
+- **The two lines.** They ship (fast plan 4.2) only when, on the reviewer's model, the prompt with them misses no
+  more than today's prompt and fails no clean run; the first line's purpose is the dollars (no second run of the
+  suite), so a side that costs no less has not earned it. Otherwise they stay out, or ship marked unmeasured
+  (fast plan section 1, the admission test).
+- A close result (within two misses of 40) is noise at 5 runs: run both sides again at `--runs 10`.
+
 ## Prices, and what they are worth
 
 `spend.py` prices each run by the model that served it, per million tokens, as of 2026-10-06 (plan 6.1):

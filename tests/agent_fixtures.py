@@ -5,7 +5,9 @@ Usage: agent_fixtures.py [--only <prefix>[,<prefix>...]] [--runs N] [--parallel 
                          [--model <model id>]
 
 Each fixture folder holds a project (a small product with its docs/project build record). The harness
-copies it to a fresh work folder under ~/.gate-copies/fixtures/, prepares the checker's directory the way
+copies it to a fresh work folder under ~/.gate-copies/fixtures/ (with a .coding-pipeline.json that says
+managed: true, since run_isolated.py runs only for a managed project; no copy a checker reads holds that file),
+prepares the checker's directory the way
 the gate does (gate_copies.py review or blind copy, a verdict folder, or a documents folder), renders the
 pack with render_pack.py, runs the checker with run_isolated.py (the agent file from this repository unless
 --installed; --model <id> and --effort <level> passed on to run_isolated.py, for both passes of a two-pass
@@ -40,11 +42,41 @@ copy of the project (absolute paths, as a gate round's are) and renders with --m
 
 A probe fixture (role "probe") measures how a model follows a pipeline text rather than how a checker judges:
 its pack embeds files of the pipeline under test with {repo:<path>} (read from this repository, so each
-version is measured with its own text and the same question), and its agent file is named by the fixture's
-"agent" (a path in this repository; probes are never installed).
+version is measured with its own text and the same question). A fixture of any role that names "agent" (a path
+in this repository) runs with that agent file, with or without --installed; probes always name one.
+
+A fast-reviewer fixture ("fast_plan", "serves": "fast-reviewer") measures the reviewer prompt of the fast
+pipeline (mAE7777/coding-pipeline-fast), the one /gate-fast gives a fresh subagent at its step 3. The fast
+repository is FAST_REPO, else the folder coding-pipeline-fast beside this repository; when it is missing, these
+fixtures are skipped with that reason (nothing runs, nothing is recorded, and a run that selected only them
+exits 1). The prompt is the blockquote of its skills/gate-fast/SKILL.md that ends the review with "Matches the
+goal"; with FAST_REVIEWER_EXTRA=<file>, that file's lines (each line's "> " dropped) are appended, so the owner
+measures today's prompt against one with candidate lines. A missing skill, a missing block, an unreadable extra
+file, or a part in angle brackets the harness cannot fill stops the run before anything is spent. The fixture
+runs as role code-verifier (it needs Bash for git and the tests; run_isolated.py's sandbox and the review copy
+apply), on the fixture's own model and effort ("model", "effort") unless --model or --effort is given, and its
+agent file is generated in the run's evidence folder from the fixture's "agent" frame (a subagent the builder
+started; its description names the prompt's sha256). The review copy is made a git repository: the fixture's
+base committed (only the files the copy holds, as the base had them; an empty commit without a base), the
+fixture's change left over it uncommitted, its plan (a file under tests/fixtures/agents/) at .fast/plan.md with
+"Started at" set to the base and .fast/ in the local exclude file, as fast.py init leaves a project, and a
+snapshot of the tree kept by refs/fast/review, as fast takes one. The pack is the prompt with its angle brackets
+filled: <project path> the copy, <Goal>, "Done when: <items>", and "Not doing: <items>" from the plan, <review
+diff command> `git -C <copy> diff <base> <snapshot>`; in candidate lines, <step 1 results> the plan's labeled test
+command run in the copy (which it must leave as it was) and <file table> the table `fast.py diff` prints in the
+copy when the fast repository's fast.py prints one, else `git diff --stat`, saying so. The answer is text, read by
+the fixture's expectation (no JSON block); fixture-result.json adds "fast_prompt" (the skill, its revision and
+whether it has uncommitted changes, the prompt's sha256, the extra file and its sha256, the base, the snapshot,
+and the diff command).
+
+The last lines pool the runs: the problems over the planted item-trials, the clean runs that failed, and the
+dollars, the numbers a comparison of two settings or two prompts reads.
 """
 import concurrent.futures
+import datetime
+import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -81,8 +113,8 @@ def run(cmd, **kw):
 
 def reviews(spec):
     """True for a code-verifier review fixture (not demo, not re-verify): its pack shows the change since the
-    milestone baseline."""
-    return spec["role"] == "code-verifier" and spec.get("mode") not in ("demo", "reverify")
+    milestone baseline. A fast-reviewer fixture is not one: its change is shown by git in its copy."""
+    return spec["role"] == "code-verifier" and spec.get("mode") not in ("demo", "reverify") and not spec.get("fast_plan")
 
 
 def point_scope(spec, project):
@@ -102,7 +134,8 @@ def point_scope(spec, project):
 def make_project(spec, work):
     """The run's copy of the fixture's project, at <work>/project: its base first when it names one, then its own
     folder over it; a review fixture's milestone baseline recorded after the base (or, without one, after the
-    copy), and a re-verify fixture's scope pointed at this copy."""
+    copy), and a re-verify fixture's scope pointed at this copy. The copy is a project the workflow manages
+    (run_isolated.py refuses any other); the product fingerprint, and so every checker's copy, leaves that file out."""
     project = Path(work) / "project"
     mid = spec.get("milestone", "M1")
     record = [sys.executable, str(SCRIPTS / "baseline.py"), "record", str(project), mid]
@@ -117,6 +150,8 @@ def make_project(spec, work):
             run(record)
     if spec.get("scope"):
         point_scope(spec, project)
+    (project / ".coding-pipeline.json").write_text(json.dumps({"version": 1, "managed": True}) + "\n",
+                                                   encoding="utf-8")
     return project
 
 
@@ -169,6 +204,267 @@ def browser_missing():
                                           "browser (pip install playwright; python3 -m playwright install chromium)"
 
 
+# ---------- the fast pipeline's reviewer (gate-fast step 3) ----------
+
+FAST_SKILL = "skills/gate-fast/SKILL.md"
+FAST_PY = "skills/_fast/fast.py"
+# The parts in angle brackets the harness fills; any other one in the prompt stops the run.
+FAST_PARTS = ("<project path>", "<Goal>", "Done when: <items>", "Not doing: <items>", "<review diff command>",
+              "<step 1 results>", "<file table>")
+GIT_ID = {"GIT_AUTHOR_NAME": "fixture", "GIT_AUTHOR_EMAIL": "fixture@localhost", "GIT_COMMITTER_NAME": "fixture",
+          "GIT_COMMITTER_EMAIL": "fixture@localhost"}
+
+
+class FastPromptError(Exception):
+    """The fast reviewer's prompt, a fixture's plan, or its review copy cannot be read, filled, or prepared."""
+
+
+def fast_repo():
+    """The fast repository: FAST_REPO, else the folder coding-pipeline-fast beside this repository."""
+    return Path(os.environ.get("FAST_REPO") or REPO.parent / "coding-pipeline-fast").expanduser().resolve()
+
+
+def unquote(lines):
+    return [line[2:] if line.startswith("> ") else line[1:] if line.startswith(">") else line for line in lines]
+
+
+def quote_blocks(text):
+    """Each run of blockquote lines in a Markdown text, without the quote markers."""
+    blocks, cur = [], None
+    for line in text.splitlines():
+        if line.startswith(">"):
+            if cur is None:
+                cur = []
+                blocks.append(cur)
+            cur.append(line)
+        else:
+            cur = None
+    return ["\n".join(unquote(b)) for b in blocks]
+
+
+def sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def git_out(where, *args):
+    """A git command's output in a folder, or None when it fails (no git, or not a repository)."""
+    try:
+        r = subprocess.run(["git", "-C", str(where), *args], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def reviewer_prompt(fast=None):
+    """(the prompt, its record): gate-fast's reviewer prompt from the fast repository, with FAST_REVIEWER_EXTRA's
+    lines appended; FastPromptError when the skill, its prompt, or the extra file is missing, or when a part in
+    angle brackets is one the harness cannot fill."""
+    fast = Path(fast or fast_repo())
+    skill = fast / FAST_SKILL
+    try:
+        text = skill.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FastPromptError(f"no gate-fast skill at {skill} ({exc.strerror or exc})") from None
+    found = [b for b in quote_blocks(text) if "Matches the goal" in b]
+    if not found:
+        raise FastPromptError(f"{skill} holds no reviewer prompt: no blockquote that ends the review with "
+                              "\"Matches the goal: ...\"")
+    prompt = found[0].strip("\n")
+    if "<review diff command>" not in prompt:
+        raise FastPromptError(f"the reviewer prompt in {skill} names no <review diff command>, so the reviewer "
+                              "would not be given the change")
+    top = git_out(fast, "rev-parse", "--show-toplevel")
+    own = top is not None and Path(top).resolve() == fast.resolve()  # not a folder inside some other repository
+    dirty = git_out(fast, "status", "--porcelain", "--", FAST_SKILL) if own else None
+    info = {"skill": str(skill), "revision": git_out(fast, "rev-parse", "HEAD") if own else None,
+            "skill_dirty": None if dirty is None else bool(dirty), "prompt_sha256": sha256(prompt), "extra": None}
+    named = os.environ.get("FAST_REVIEWER_EXTRA")
+    if named:
+        path = Path(named).expanduser()
+        try:
+            extra = "\n".join(unquote(path.read_text(encoding="utf-8").splitlines())).strip("\n")
+        except OSError as exc:
+            raise FastPromptError(f"FAST_REVIEWER_EXTRA names {path}, which cannot be read "
+                                  f"({exc.strerror or exc})") from None
+        if not extra.strip():
+            raise FastPromptError(f"FAST_REVIEWER_EXTRA names {path}, which holds no lines")
+        prompt += "\n" + extra
+        info.update(extra=str(path.resolve()), extra_sha256=sha256(extra))
+    rest = prompt
+    for part in FAST_PARTS:
+        rest = rest.replace(part, "")
+    left = sorted(set(re.findall(r"<[^<>\n]+>", rest)))
+    if left:
+        raise FastPromptError(f"the reviewer prompt has parts the harness cannot fill: {', '.join(left)}")
+    info["sha256"] = sha256(prompt)
+    return prompt, info
+
+
+def plan_sections(text):
+    """{name: lines} of a plan's "## name" sections, as fast.py reads them."""
+    out, name = {}, None
+    for line in text.splitlines():
+        m = re.match(r"^## (.+?)\s*$", line)
+        if m:
+            name = m.group(1)
+            out[name] = []
+        elif name:
+            out[name].append(line)
+    return out
+
+
+def plan_items(lines):
+    """The items of a plan section: its list lines without the marker or the checkbox, placeholders left out."""
+    items = [re.sub(r"^\s*[-*]\s+(\[[ xX]\]\s+)?", "", line).strip() for line in lines if re.match(r"^\s*[-*]\s", line)]
+    return [i for i in items if i and not i.startswith("<")]
+
+
+def plan_prose(lines):
+    return " ".join(line.strip() for line in lines if line.strip() and not line.strip().startswith(("<!--", "<")))
+
+
+def plan_commands(lines):
+    """{label: command} of the plan's Commands section ("- test: python3 -m unittest"); empty labels left out."""
+    out = {}
+    for line in lines:
+        m = re.match(r"^\s*[-*]?\s*`?([a-z][a-z0-9 _-]{1,24})`?:\s*`?(.*?)`?\s*$", line, flags=re.I)
+        if m and m.group(2):
+            out[m.group(1).strip().lower()] = m.group(2).strip()
+    return out
+
+
+def git_in(copy, *args, env=None, stdin=None):
+    """A git command in the review copy, its output; FastPromptError when it fails."""
+    r = subprocess.run(["git", "-C", str(copy), *args], capture_output=True, text=True, input=stdin,
+                       env={**os.environ, **GIT_ID, **(env or {})})
+    if r.returncode != 0:
+        raise FastPromptError(f"git {' '.join(args[:2])} failed in the review copy: {r.stderr.strip()[-300:]}")
+    return r.stdout.rstrip()
+
+
+def fast_copy(spec, copy, plan):
+    """Make the review copy a git repository: the fixture's base committed (the files the copy holds, with the
+    base's content; an empty commit when the fixture has no base), the change left over it uncommitted, the plan at
+    .fast/plan.md (Started at: the base) and kept out of git, and a snapshot of the tree, as fast takes one, kept by
+    refs/fast/review. Returns (base, snapshot)."""
+    copy = Path(copy)
+    if (copy / ".git").exists():
+        raise FastPromptError(f"the review copy {copy} already holds a .git folder")
+    files = sorted(p.relative_to(copy).as_posix() for p in copy.rglob("*") if p.is_file() and not p.is_symlink())
+    git_in(copy, "-c", "init.defaultBranch=main", "init", "-q")
+    base_dir = FIX / spec["base"] if spec.get("base") else None
+    rows = [(rel, base_dir / rel) for rel in files if base_dir and (base_dir / rel).is_file()]
+    if rows:
+        shas = git_in(copy, "hash-object", "-w", "--no-filters", "--stdin-paths",
+                      stdin="".join(f"{src}\n" for _, src in rows)).split()
+        git_in(copy, "update-index", "--index-info", stdin="".join(
+            f"{'100755' if os.access(src, os.X_OK) else '100644'} {sha}\t{rel}\n" for (rel, src), sha in zip(rows, shas)))
+    base = git_in(copy, "commit-tree", git_in(copy, "write-tree"), "-m", "the project before the change",
+                  "--no-gpg-sign")
+    git_in(copy, "update-ref", "HEAD", base)
+    started = f"Started at: {base[:12]} {datetime.date.today().isoformat()}"
+    (copy / ".fast").mkdir()
+    (copy / ".fast/plan.md").write_text(re.sub(r"^Started at:.*$", started, plan, count=1, flags=re.M), encoding="utf-8")
+    exclude = copy / ".git/info/exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+    exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + ".fast/\n", encoding="utf-8")
+    index = copy / ".git/fast-review.index"
+    if (copy / ".git/index").is_file():
+        shutil.copyfile(copy / ".git/index", index)
+    env = {"GIT_INDEX_FILE": str(index)}
+    try:
+        git_in(copy, "add", "-A", env=env)
+        snap = git_in(copy, "commit-tree", git_in(copy, "write-tree", env=env), "-p", base, "-m", "fast snapshot",
+                      "--no-gpg-sign", env=env)
+    finally:
+        index.unlink(missing_ok=True)
+    git_in(copy, "update-ref", "refs/fast/review", snap)
+    return base, snap
+
+
+def step1_results(copy, sections):
+    """The line <step 1 results> stands for: the plan's labeled test command, run in the review copy, its exit code
+    and its last lines. FastPromptError when the plan names none, or the run changed the copy."""
+    command = plan_commands(sections.get("Commands", [])).get("test")
+    if not command:
+        raise FastPromptError("the plan names no test command (a \"test:\" line under Commands), which "
+                              "<step 1 results> needs")
+    before = git_in(copy, "status", "--porcelain", "--untracked-files=all")
+    try:
+        r = subprocess.run(command, shell=True, cwd=str(copy), capture_output=True, text=True, timeout=900,
+                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    except subprocess.TimeoutExpired:
+        raise FastPromptError(f"the test command `{command}` ran past 900 seconds in the review copy") from None
+    after = git_in(copy, "status", "--porcelain", "--untracked-files=all")
+    if after != before:
+        raise FastPromptError(f"the test command `{command}` changed the review copy:\n{after}")
+    tail = [line.strip() for line in (r.stdout.rstrip() + "\n" + r.stderr.rstrip()).splitlines() if line.strip()][-2:]
+    return f"test (`{command}`): exit {r.returncode}" + (f"; {'; '.join(tail)}" if tail else "")
+
+
+def file_table(copy, base, snap, fast):
+    """The text <file table> stands for: the file table `fast.py diff` prints in the copy, when the fast repository's
+    fast.py prints one (a line naming a changed file, beyond its diff command lines); else `git diff --stat`, saying
+    so."""
+    changed = set(git_in(copy, "diff", "--name-only", base, snap).splitlines())
+    script = Path(fast) / FAST_PY
+    why = f"{script} is missing"
+    if script.is_file():
+        try:
+            r = subprocess.run([sys.executable, str(script), "diff", str(copy)], capture_output=True, text=True,
+                               timeout=120, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        except subprocess.TimeoutExpired:
+            r = None
+        rows = [line.rstrip() for line in (r.stdout if r and r.returncode == 0 else "").splitlines() if line.strip()
+                and not line.startswith(("review diff:", "file list:", "no earlier snapshot"))]
+        if any(tok.strip("`|,:()") in changed for line in rows for tok in line.split()):
+            return "\n".join(rows)
+        why = f"fast.py diff in {fast} prints no file table" if r and r.returncode == 0 else \
+            f"fast.py diff in {fast} failed (exit {r.returncode if r else 'timeout'})"
+    return f"({why}, so this is git diff --stat)\n" + git_in(copy, "diff", "--stat", base, snap)
+
+
+def fast_pack(spec, copy, fast=None):
+    """(the pack, its record) of a fast-reviewer fixture: the review copy prepared (fast_copy), and the reviewer
+    prompt with every part in angle brackets filled from the fixture's plan and the copy."""
+    fast = Path(fast or fast_repo())
+    prompt, info = reviewer_prompt(fast)
+    plan_path = FIX / spec["fast_plan"]
+    plan = plan_path.read_text(encoding="utf-8")
+    sections = plan_sections(plan)
+    goal, done = plan_prose(sections.get("Goal", [])), plan_items(sections.get("Done when", []))
+    if not goal or not done:
+        raise FastPromptError(f"{plan_path} has no Goal or no Done when items")
+    base, snap = fast_copy(spec, copy, plan)
+    command = f"git -C {copy} diff {base[:12]} {snap[:12]}"
+    values = {"<project path>": str(copy), "<Goal>": goal.rstrip("."),
+              "Done when: <items>": "Done when: " + "; ".join(d.rstrip(".") for d in done),
+              "Not doing: <items>": "Not doing: " + ("; ".join(i.rstrip(".") for i in
+                                                            plan_items(sections.get("Not doing", []))) or "nothing named"),
+              "<review diff command>": command}
+    if "<step 1 results>" in prompt:
+        values["<step 1 results>"] = step1_results(copy, sections)
+    if "<file table>" in prompt:
+        values["<file table>"] = file_table(copy, base, snap, fast)
+    for part, value in values.items():
+        prompt = prompt.replace(part, value)
+    info.update(plan=spec["fast_plan"], base=base, snapshot=snap, diff_command=command)
+    return prompt + "\n", info
+
+
+def fast_agent(spec, ev, info):
+    """The run's agent file: the fixture's frame (a subagent the builder started), its description naming the prompt
+    it is given, written into the evidence folder."""
+    frame = (REPO / spec["agent"]).read_text(encoding="utf-8")
+    note = f" Given gate-fast's reviewer prompt, sha256 {info['sha256'][:12]}" + \
+        (f", with the lines of {Path(info['extra']).name}." if info.get("extra") else ".")
+    path = Path(ev) / "fast-reviewer.agent.md"
+    path.write_text(re.sub(r"^(description:.*?)\s*$", lambda m: m.group(1) + note, frame, count=1, flags=re.M),
+                    encoding="utf-8")
+    return path
+
+
 def run_usage(ev):
     """(raw usage by served model, served models, escalated) over every summary of one run (both passes): each
     summary's usage under its served model (served_model, else model, else "unknown"; a Codex run's under
@@ -204,27 +500,35 @@ def dollars_of(usage):
         return None
 
 
+def empty_answer(ctx):
+    """The context of an empty answer: no result text (an expectation that reads the text, such as a fast
+    reviewer's, finds every item missed), the run's summary kept."""
+    return {"summary": (ctx or {}).get("summary") or {}, "result": ""}
+
+
 def problem_count(spec, problems, judged, ctx):
     """The run's problems as evolve.py pools them: what the expectation reported, or, for a run that gave no
-    verdict of its own, one plus every problem the expectation finds in an empty verdict (it missed them all)."""
-    if judged or spec.get("no_json"):
+    verdict of its own (a text answer included), one plus every problem the expectation finds in an empty answer
+    (it missed them all)."""
+    if judged:
         return len(problems)
-    return 1 + len(spec["expect"]({}, ctx))
+    return 1 + len(spec["expect"]({}, empty_answer(ctx)))
 
 
 def planted_items(spec, ctx):
-    """How many planted items a run of this fixture checks: every problem the expectation finds in an empty verdict
+    """How many planted items a run of this fixture checks: every problem the expectation finds in an empty answer
     (it misses each one), for a planted fixture; 0 for the others. None when that cannot be read."""
     if spec.get("kind") != "planted":
         return 0
     try:
-        return len(spec["expect"]({}, ctx))
+        return len(spec["expect"]({}, empty_answer(ctx)))
     except Exception:  # an expectation that cannot judge an empty verdict: the count is unknown, never a guess
         return None
 
 
-def record(name, spec, n, ev, problems, judged, summary, result_text=""):
-    """Write the run's fixture-result.json and return (name, run, problems, summary, record)."""
+def record(name, spec, n, ev, problems, judged, summary, result_text="", extra=None):
+    """Write the run's fixture-result.json (with extra's fields, such as a fast reviewer's prompt) and return (name,
+    run, problems, summary, record)."""
     usage, models, escalated = run_usage(ev)
     if escalated:
         problems = problems + ["escalated: the run was retried on another model, and a retried run fails (the retry "
@@ -234,7 +538,7 @@ def record(name, spec, n, ev, problems, judged, summary, result_text=""):
     rec = {"fixture": name, "run": n, "kind": spec.get("kind", "other"), "pass": not problems, "problems": problems,
            "problem_count": problem_count(spec, problems, judged, ctx), "items": planted_items(spec, ctx),
            "status": (summary or {}).get("status"), "escalated": escalated, "served_models": models, "usage": usage,
-           "dollars": dollars_of(usage)}
+           "dollars": dollars_of(usage), **(extra or {})}
     (Path(ev) / "fixture-result.json").write_text(json.dumps(rec, indent=2))
     return name, n, problems, summary, rec
 
@@ -253,11 +557,25 @@ def run_one(name, spec, n, installed, effort, model=None):
         workdir, _ = prepare(spec, project, work)
     except RuntimeError as exc:
         return record(name, spec, n, ev, [str(exc)], False, None)
+    # A fixture without a route of its own (a fast reviewer) runs on its own default unless a flag names another.
+    model, effort = model or spec.get("model"), effort or spec.get("effort")
     # No shadow runs here (a fixture measures one setting), and the route's effort unless --effort was given, so
     # an effort change in models.json is measured like a model change.
     cmd = [sys.executable, str(SCRIPTS / "run_isolated.py"), spec["role"], "--dir", str(workdir), "--out", str(ev),
            "--project", str(project), "--no-shadow"] + (["--effort", effort] if effort else [])
-    if spec.get("pack"):
+    agent = REPO / spec["agent"] if spec.get("agent") else None
+    extra = None
+    if spec.get("fast_plan"):
+        try:
+            text, info = fast_pack(spec, workdir)
+        except FastPromptError as exc:  # nothing is spent on a prompt that cannot be measured as it stands
+            return record(name, spec, n, ev, [f"fast reviewer: {exc}"], False, None)
+        extra = {"fast_prompt": info}
+        packed = ev / "fixture-pack.md"
+        packed.write_text(text, encoding="utf-8")
+        agent = fast_agent(spec, ev, info)
+        cmd += ["--pack", str(packed)]
+    elif spec.get("pack"):
         packed = ev / "fixture-pack.md"
         packed.write_text(embedded_pack(spec, project))
         (project / spec["pack"]).unlink()
@@ -269,8 +587,8 @@ def run_one(name, spec, n, installed, effort, model=None):
     cmd += judge_captures(spec, workdir)
     if spec.get("mode"):
         cmd += ["--mode", spec["mode"]]
-    if spec.get("agent"):
-        cmd += ["--agent-file", str(REPO / spec["agent"])]
+    if agent:
+        cmd += ["--agent-file", str(agent)]
     elif not installed:
         cmd += ["--agent-file", str(REPO / "agents" / f"{spec['role']}.md")]
     if model:
@@ -280,7 +598,7 @@ def run_one(name, spec, n, installed, effort, model=None):
     try:
         summary = json.loads((ev / f"{stem}.summary.json").read_text())
     except (OSError, ValueError):
-        return record(name, spec, n, ev, ["no summary written"], False, None)
+        return record(name, spec, n, ev, ["no summary written"], False, None, extra=extra)
     problems = []
     if summary["status"] != "OK":
         problems.append(f"runner status {summary['status']}: {summary.get('reason') or summary.get('canary_hits') or ''} "
@@ -315,7 +633,7 @@ def run_one(name, spec, n, installed, effort, model=None):
     else:
         (ev / "verdict.json").write_text(json.dumps(verdict, indent=2))
         problems += spec["expect"](verdict, ctx)
-    out = record(name, spec, n, ev, problems, judged, summary, result_text)
+    out = record(name, spec, n, ev, problems, judged, summary, result_text, extra=extra)
     if not out[2]:
         shutil.rmtree(work, ignore_errors=True)
     return out
@@ -331,10 +649,29 @@ def main(argv):
         print("agent_fixtures: --model takes a model id, such as claude-sonnet-5-5", file=sys.stderr)
         return 2
     installed = "--installed" in argv
-    WORK.mkdir(parents=True, exist_ok=True)
     prefixes = [x for x in (only or "").split(",") if x]
     jobs = [(name, spec, n) for name, spec in FIXTURES.items() if not prefixes or name.startswith(tuple(prefixes))
             for n in range(1, runs + 1)]
+    fast_names = sorted({name for name, spec, _ in jobs if spec.get("fast_plan")})
+    skipped = []
+    if fast_names:
+        fast = fast_repo()
+        if not fast.is_dir():  # no fast pipeline on this machine: nothing to measure, and nothing failed
+            why = f"no fast repository at {fast} (set FAST_REPO to its folder)"
+            for name in fast_names:
+                print(f"SKIP  {name:<34} {why}", flush=True)
+            skipped = [j for j in jobs if j[1].get("fast_plan")]
+            jobs = [j for j in jobs if not j[1].get("fast_plan")]
+        else:
+            try:
+                reviewer_prompt(fast)
+            except FastPromptError as exc:
+                print(f"agent_fixtures: the fast reviewer fixtures cannot run: {exc}", file=sys.stderr)
+                return 1
+    if skipped and not jobs:
+        print(f"agent-fixtures: SKIP (nothing ran: {len(skipped)} run(s) skipped)")
+        return 1
+    WORK.mkdir(parents=True, exist_ok=True)
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(parallel, 3))) as pool:
         futures = [pool.submit(run_one, nm, sp, n, installed, effort, model) for nm, sp, n in jobs]
@@ -347,8 +684,23 @@ def main(argv):
                   f"  problems={rec['problem_count']}  {cost}  model={','.join(rec['served_models']) or '-'}"
                   f"  {'; '.join(problems)[:300]}", flush=True)
     failed = sum(1 for r in results if r[2])
-    print(f"agent-fixtures: {'PASS' if not failed else 'FAIL'} ({len(results) - failed}/{len(results)} runs passed)")
+    print(pooled([r[4] for r in results]))
+    print(f"agent-fixtures: {'PASS' if not failed else 'FAIL'} ({len(results) - failed}/{len(results)} runs passed"
+          + (f", {len(skipped)} skipped" if skipped else "") + ")")
     return 1 if failed else 0
+
+
+def pooled(records):
+    """One line over the runs: the problems over the planted item-trials (as evolve.py pools them), the clean runs
+    that failed, and the dollars."""
+    planted = [r for r in records if r["kind"] == "planted"]
+    clean = [r for r in records if r["kind"] == "clean"]
+    items = sum(r["items"] or 0 for r in planted)
+    unknown = " (some item counts unknown)" if any(r["items"] is None for r in planted) else ""
+    cost = [r["dollars"] for r in records if r["dollars"] is not None]
+    return (f"pooled: {sum(r['problem_count'] for r in planted)} problem(s) over {items} planted item-trial(s){unknown}; "
+            f"{sum(1 for r in clean if not r['pass'])}/{len(clean)} clean run(s) failed; "
+            + (f"${sum(cost):.2f}" if cost else "$-"))
 
 
 if __name__ == "__main__":

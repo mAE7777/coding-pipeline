@@ -10,7 +10,14 @@ answers are counted one by one (explorer recall, explain grounding) is planted: 
 
 "serves" names the models.json route(s) a fixture measures (comma-separated; the harness ignores it). A probe
 runs on the probe route with the model agent_fixtures.py --model names, so it measures a builder-side route
-(explorer, scout-map, explain) only through that flag.
+(explorer, scout-map, explain) only through that flag. UNROUTED names what a fixture may serve outside the
+table: "fast-reviewer", the fast pipeline's /gate-fast reviewer, whose model its own skill text names (opus at
+xhigh by default, the fixture's "model" and "effort"; --model and --effort measure another).
+A fast-reviewer fixture is answered in text, not JSON ("no_json"): its expectation reads the reviewer's findings
+(each one opened by a line with high, medium, or low and, on that line or the ones after, a file:line) and its
+last line ("Matches the goal: yes/no, because ..."). A planted item is caught when a high or medium finding names
+its file and its key words; a clean fixture passes when no high or medium finding is raised and the last line
+says "Matches the goal: yes".
 A spec with "browser": true needs a machine where browse.py can start a headless browser (Playwright); the
 harness reports such a run as missed, without spending, when it cannot.
 A spec with "base" starts from that folder and lays its own folder over it (a review of a later milestone, or a
@@ -25,6 +32,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 BLOCKING = {"correctness", "requirement", "security", "wiring", "silent-degradation", "quality-substitution",
             "placeholder-unconsented", "interface"}
+UNROUTED = {"fast-reviewer"}
 
 
 def blob(obj):
@@ -877,6 +885,198 @@ def explain_grounding(v, ctx=None):
     return problems
 
 
+# ---------- the fast pipeline's reviewer (gate-fast step 3), answered in text ----------
+
+SEVERITY = r"(high|medium|low|critical)"
+# A file:line reference: app.py:22, tally/dedupe.py:31-40, app.py, line 22, app.py#L22.
+FILE_LINE = re.compile(r"[\w./-]*\w\.[a-z0-9]+(?::|,? line |#l)\d+", re.I)
+# Leading markup, numbering, and a "Finding 2:" lead before a severity that opens a line.
+LEAD = re.compile(r"^[\s>*_#|`~+.\[\](){}\d-]*(?:(?:finding|issue|problem|bug|defect)\b\s*#?\d*[\s:.)*_-]*)?", re.I)
+# A severity as a line's label: followed by markup or punctuation, a spaced dash, the end, or "severity" ("high
+# severity", "High-severity findings"), never "high-level" or "high confidence".
+LABEL = re.compile(SEVERITY + r"\b(?=\s*[^\w\s-]|\s+-|\s*$|[\s-]+(?:severity|priority|impact)\b)", re.I)
+FIELD = re.compile(r"\b(?:severity|priority)\b\W{0,8}" + SEVERITY + r"\b", re.I)
+ANYWHERE = re.compile(r"\b" + SEVERITY + r"\b(?!-(?!severity|priority|impact)[a-z])", re.I)
+RULE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
+VERDICT_LINE = re.compile(r"^matches the goal\W{0,6}", re.I)
+
+
+def severity_of(word):
+    word = word.lower()
+    return "high" if word == "critical" else word
+
+
+def finding_start(line):
+    """The severity a line opens a finding with, or None: a "severity: high" field, a severity labeling the line's
+    start ("1. **High** - ...", "[medium] ...", "| 2 | low | ..."), or a severity beside a file:line."""
+    field = FIELD.search(line)
+    if field:
+        return severity_of(field.group(1))
+    label = LABEL.match(LEAD.sub("", line, count=1))
+    if label:
+        return severity_of(label.group(1))
+    anywhere = ANYWHERE.search(line)
+    if anywhere and FILE_LINE.search(line):
+        return severity_of(anywhere.group(1))
+    return None
+
+
+def fast_findings(text):
+    """The reviewer's findings, in order: {"severity", "first" (the line that opened it), "text" (it and the lines
+    after it, lowercased)}. A finding runs to the next one, a heading or rule that opens none, or the "Matches the
+    goal" line; a line inside a code block never opens one. A heading that opened none, right before a finding
+    (its title, when the severity is a field below it), belongs to that finding. A severity heading over plain
+    items ("## High", then "1. app.py:27 ...") is one finding holding them all. Only a finding that holds a
+    file:line counts (the prompt asks each one for it): "### High" over "None." is no finding."""
+    findings, cur, fence, title = [], None, False, None
+    for line in (text or "").splitlines():
+        if line.strip().startswith(("```", "~~~")):
+            fence = not fence
+            if cur is not None:
+                cur["lines"].append(line)
+            continue
+        if not fence:
+            if VERDICT_LINE.match(LEAD.sub("", line, count=1).lstrip("*_\"' ")):
+                break
+            sev = finding_start(line)
+            if sev:
+                cur = {"severity": sev, "first": line.strip(), "lines": ([title] if title else []) + [line]}
+                findings.append(cur)
+                title = None
+                continue
+            if line.lstrip().startswith("#") or RULE.match(line):
+                cur, title = None, line if line.lstrip().startswith("#") else None
+                continue
+            if line.strip():
+                title = None
+        if cur is not None:
+            cur["lines"].append(line)
+    return [{"severity": f["severity"], "first": f["first"], "text": "\n".join(f["lines"]).lower()} for f in findings
+            if any(FILE_LINE.search(line) for line in f["lines"])]
+
+
+def blocking_findings(text):
+    return [f for f in fast_findings(text) if f["severity"] in ("high", "medium")]
+
+
+def last_line(text):
+    """The answer's last line that holds a word, without its leading markup and quotes."""
+    lines = [line for line in (text or "").splitlines() if re.search(r"[A-Za-z]", line)]
+    return re.sub(r"^[\s>*_`\"'#-]+", "", lines[-1]) if lines else ""
+
+
+def matches_goal(text):
+    """True when the answer's last line says "Matches the goal: yes"."""
+    return bool(re.match(r"^matches the goal[\s:*_]*yes\b", last_line(text), re.I))
+
+
+def names_file(finding, files):
+    return any(f.lower() in finding["text"] or f.rsplit("/", 1)[-1].lower() in finding["text"] for f in files)
+
+
+def fast_caught(items, ctx):
+    """One problem per planted item no high or medium finding names: its file and, for every group, one of the
+    group's words."""
+    found = blocking_findings((ctx or {}).get("result"))
+    return [f"not caught: {label}" for label, (files, groups) in items.items()
+            if not any(names_file(f, files) and all(any(w in f["text"] for w in g) for g in groups) for f in found)]
+
+
+UNREADABLE = ("corrupt", "unreadable", "broken", "malformed", "invalid json", "jsondecodeerror", "decode",
+              "cannot be read", "can't be read", "not valid json", "bad json", "garbage", "parse error")
+DESTROYED = ("overwr", "empty", "lost", "lose", "silent", "swallow", "destroy", "replac", "wipe", "erase", "clobber",
+             "data loss", "[]")
+NOT_WIRED = ("unwired", "not wired", "isn't wired", "never wired", "not registered", "no subparser", "no subcommand",
+             "no export command", "no `export`", "invalid choice", "unreachable", "not reachable", "never called",
+             "not called", "not exposed", "dead code", "not hooked", "no way to", "cannot be run", "can't be run",
+             "missing", "not available", "doesn't exist", "does not exist", "not a command")
+FAST_TALLY = {
+    "the total ignores the category (every expense is summed under the category's name)":
+        (("app.py",), (("total",), ("categor",), ("ignor", "regardless", "grand total", "52.5", "every expense",
+                                                  "all expenses", "every item", "all items", "every entry", "all entries",
+                                                  "not filter", "n't filter", "never filter", "no filter", "without filter",
+                                                  "unfiltered", "sums all", "sum of all", "sums every", "across all",
+                                                  "all categories", "every category", "any category"))),
+    "an unreadable expenses.json is read as empty and then overwritten":
+        (("app.py",), (UNREADABLE, DESTROYED)),
+    "sample data loaded on the product path (a fresh folder shows invented expenses)":
+        (("app.py", "sample_data.py"), (("sample",),)),
+    "the export command built but never wired into the command line":
+        (("app.py",), (("export",), NOT_WIRED)),
+}
+FAST_IMPORT = {
+    "two identical spending lines of one statement recorded once (tally/dedupe.py counts the second as already "
+    "recorded)": (("tally/dedupe.py",), (IDENTICAL, LOST)),
+}
+FAST_REFIX = {
+    "the month archive (tally/archive.py, a caller of export.csv_lines) now writes the header twice":
+        (("tally/archive.py", "tally/export.py"), (("archive",), ("header",),
+                                                    ("twice", "double", "two header", "duplicat", "repeated", "again",
+                                                     "second header", "2 header"))),
+}
+FAST_FAKED = {
+    "status's month spending is a hard-coded table (MONTH_SPENT), not the ledger's expenses":
+        (("tally/status.py",), (("hard-coded", "hardcoded", "hard coded", "hard-wired", "hardwired", "literal",
+                                 "canned", "baked", "fixed values", "fixed numbers", "fixed table", "fixed dict",
+                                 "made-up", "made up", "invented", "demo data", "demo values", "demo numbers",
+                                 "month_spent", "not computed", "never computed", "ignores the ledger",
+                                 "ignores its ledger", "ignores the expenses", "not from the ledger",
+                                 "never reads the ledger", "doesn't read the ledger", "does not read the ledger",
+                                 "ledger is never", "ledger is unused", "unused ledger"),)),
+    "status never marks a category over its budget (budgets.over() is a stub that returns False)":
+        (("tally/budgets.py",), (("over(", " over ", "\"over\"", "'over'", "`over`", "over budget", "over-budget",
+                                  "over its", "over the"),
+                                 ("always false", "return false", "returns false", "always returns", "stub",
+                                  "not implemented", "unimplemented", "todo", "placeholder", "never true",
+                                  "never flag", "never mark", "never say", "never show", "never report", "never print",
+                                  "never detect", "can never", "cannot be over", "no comparison", "doesn't compare",
+                                  "does not compare", "never compares", "hard-coded false", "hardcoded false"))),
+}
+
+
+def fast_tally_defects(v, ctx=None):
+    """tally-defects under the fast reviewer: four planted items in app.py, each its own finding to catch."""
+    return fast_caught(FAST_TALLY, ctx)
+
+
+def fast_outside_excerpt(v, ctx=None):
+    """The import change: two identical spending lines of one statement are recorded once (tally/dedupe.py)."""
+    return fast_caught(FAST_IMPORT, ctx)
+
+
+def fast_refix_breaks_other(v, ctx=None):
+    """The fixes are right, but moving the header into export.csv_lines doubles it in every month archive."""
+    return fast_caught(FAST_REFIX, ctx)
+
+
+def fast_faked_done(v, ctx=None):
+    """Budgets over tally-m1: two Done-when items look done but are faked (status's spending is a hard-coded table
+    that matches the plan's example; the over check is a stub)."""
+    return fast_caught(FAST_FAKED, ctx)
+
+
+def fast_clean(v, ctx=None):
+    """A clean control: no high or medium finding (each one is a false block), and the last line says "Matches the
+    goal: yes"."""
+    text = (ctx or {}).get("result") or ""
+    problems = [f"a {f['severity']} finding on a clean control (a false block): {f['first'][:100]}"
+                for f in blocking_findings(text)]
+    if not matches_goal(text):
+        problems.append(f"the last line does not say \"Matches the goal: yes\": {last_line(text)[:100]!r}")
+    return problems
+
+
+def fast_reviewer_fixture(kind, plan, folder, expect, base=None, canaries=()):
+    """A run of gate-fast's reviewer prompt on a fixture's change (its folder over its base), with the plan under
+    fast-reviewer/plans/; opus at xhigh, fast's default reviewer, unless --model or --effort is given."""
+    spec = {"kind": kind, "role": "code-verifier", "serves": "fast-reviewer", "folder": folder, "dir": "review",
+            "fast_plan": f"fast-reviewer/plans/{plan}", "agent": "tests/fixtures/agents/fast-reviewer/reviewer-agent.md",
+            "model": "claude-opus-5-5", "effort": "xhigh", "no_json": True, "canaries": list(canaries), "expect": expect}
+    if base:
+        spec["base"] = base
+    return spec
+
+
 JUDGE_INPUTS = ("layer1.json", "code-verifier.result.md", "loyal-evaluator.result.md", "loyal-evaluator-pass2.result.md",
                 "code-verifier-demo.result.md")
 
@@ -1045,4 +1245,19 @@ FIXTURES = {
                                   "files": ["docs/project/sources/SRC-1-chores/transcript.md"],
                                   "render": ["--mode", "extract", "--docs", "docs/project/sources/SRC-1-chores/transcript.md"],
                                   "expect": extract_clean},
+    "fast-reviewer-tally-defects": fast_reviewer_fixture("planted", "tally.md", "tally-defects", fast_tally_defects),
+    "fast-reviewer-outside-excerpt": fast_reviewer_fixture("planted", "import.md", "outside-excerpt",
+                                                           fast_outside_excerpt, base="tally-m1",
+                                                           canaries=["CANARY-REVIEW-STATE-3391"]),
+    "fast-reviewer-refix-breaks-other": fast_reviewer_fixture("planted", "refix.md", "refix/breaks-other",
+                                                              fast_refix_breaks_other, base="refix/base",
+                                                              canaries=["CANARY-REFIX-STATE-6620"]),
+    "fast-reviewer-faked-done": fast_reviewer_fixture("planted", "budgets.md", "fast-reviewer/faked-done",
+                                                      fast_faked_done, base="tally-m1",
+                                                      canaries=["CANARY-REVIEW-STATE-3391"]),
+    "fast-reviewer-tally-clean": fast_reviewer_fixture("clean", "tally.md", "tally-clean", fast_clean),
+    "fast-reviewer-structure-clean": fast_reviewer_fixture("clean", "monthly.md", "structure-clean", fast_clean,
+                                                           base="tally-m1", canaries=["CANARY-REVIEW-STATE-3391"]),
+    "fast-reviewer-refix-works": fast_reviewer_fixture("clean", "refix.md", "refix/works", fast_clean,
+                                                       base="refix/base", canaries=["CANARY-REFIX-STATE-6620"]),
 }
