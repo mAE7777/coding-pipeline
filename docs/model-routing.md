@@ -206,8 +206,10 @@ weighs the numbers, then the change goes through `/evolve` like any other.
 | claude-sonnet-5-5 | 2.00 | 2.50 | 0.20 | 10.00 |
 | claude-haiku-5-5 | 0.10 | 0.125 (assumed) | 0.01 (assumed) | 0.50 |
 
-Haiku costs $0.50 input and $2.50 output for prompts over 100K tokens; `spend.py` ignores that, since it sums
-usage per run and does not know each prompt's size. Cache reads cost the same on Opus and Sonnet, so moving a
+Haiku costs $0.50 input and $2.50 output for prompts over 100K tokens; `spend.py` applies that rate to each
+transcript call whose prompt is over 100K, and keeps the base rate for an isolated run's summed usage, whose
+prompt sizes it does not know. A 1-hour cache write costs 2x input (a 5-minute one 1.25x) when the usage names
+it (`cache_creation.ephemeral_1h_input_tokens`, or `cache_write_1h` in a run's summary). Cache reads cost the same on Opus and Sonnet, so moving a
 cache-heavy role saves less than the input prices suggest. These are list prices: the owner's plan limits may
 not follow their ratios, so the dollars are estimates. The table lives in `spend.py` (`PRICES`), and
 `evolve.py` computes cost when it compares, from stored raw usage, so a price change moves both sides alike.

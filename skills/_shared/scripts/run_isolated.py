@@ -433,6 +433,10 @@ def parse_claude_stream(lines):
             for k, src in (("input", "input_tokens"), ("cache_write", "cache_creation_input_tokens"),
                            ("cache_read", "cache_read_input_tokens"), ("output", "output_tokens")):
                 usage[k] += u.get(src, 0) or 0
+            hour = (u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") \
+                if isinstance(u.get("cache_creation"), dict) else None
+            if isinstance(hour, int) and not isinstance(hour, bool):  # kept only when known (spend.py prices it)
+                usage["cache_write_1h"] = usage.get("cache_write_1h", 0) + hour
             usage["cost_usd"] = ev.get("total_cost_usd")  # a running total for the session
             if ev.get("duration_ms") is not None:
                 usage["duration_ms"] = (usage["duration_ms"] or 0) + ev["duration_ms"]

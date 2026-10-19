@@ -297,6 +297,24 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(info["tools_seen"], ["Read", "Bash"])
         self.assertEqual(len(info["denials"]), 1)
 
+    def test_one_hour_cache_writes_are_recorded_only_when_the_usage_breaks_them_down(self):
+        def result(usage):
+            return json.dumps({"type": "result", "result": "DONE", "num_turns": 1, "usage": usage})
+        base = {"input_tokens": 3, "cache_creation_input_tokens": 40, "cache_read_input_tokens": 9, "output_tokens": 7}
+        info = ri.parse_claude_stream([result({**base, "cache_creation": {"ephemeral_1h_input_tokens": 30,
+                                                                          "ephemeral_5m_input_tokens": 10}})] * 2)
+        self.assertEqual(info["usage"]["cache_write_1h"], 60, "summed over the result events, like the rest")
+        self.assertEqual(info["usage"]["cache_write"], 80)
+        for odd in ({}, {"cache_creation": None}, {"cache_creation": {"ephemeral_1h_input_tokens": "30"}},
+                    {"cache_creation": {"ephemeral_1h_input_tokens": True}}):
+            info = ri.parse_claude_stream([result({**base, **odd})])
+            self.assertNotIn("cache_write_1h", info["usage"], odd)
+        sys.path.insert(0, str(RI.parent))
+        import spend
+        u = ri.parse_claude_stream([result({**base, "cache_creation": {"ephemeral_1h_input_tokens": 40}})])["usage"]
+        self.assertAlmostEqual(spend.dollars("claude-opus-5-5", u)[0] - spend.dollars(
+            "claude-opus-5-5", {**u, "cache_write_1h": 0})[0], 40 * (8.00 - 5.00) / 1e6)
+
     def test_an_answer_continued_past_the_output_limit_is_kept_whole(self):
         def say(text, mid):
             return json.dumps({"type": "assistant", "message": {"id": mid, "content": [{"type": "text", "text": text}]}})

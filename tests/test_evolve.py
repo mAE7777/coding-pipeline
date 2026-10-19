@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -710,6 +711,20 @@ class Instrument(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_one_hour_cache_writes_are_kept_in_stored_usage_when_a_run_recorded_them(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        (d / "a.summary.json").write_text(json.dumps({"served_model": OPUS, "usage": {
+            "input": 1, "cache_write": 100, "cache_read": 0, "output": 2, "cache_write_1h": 60}}))
+        (d / "b.summary.json").write_text(json.dumps({"served_model": OPUS, "usage": {
+            "input": 1, "cache_write": 50, "cache_read": 0, "output": 2}}))  # an older run: no breakdown
+        (d / "c.summary.json").write_text(json.dumps({"served_model": SONNET, "usage": {"output": 5}}))
+        usage, models = evolve.summary_usage(sorted(d.glob("*.summary.json")))
+        self.assertEqual(usage[OPUS], {"input": 2, "cache_write": 150, "cache_read": 0, "output": 4,
+                                       "cache_write_1h": 60})
+        self.assertNotIn("cache_write_1h", usage[SONNET], "absent when no run recorded it")
+        self.assertAlmostEqual(evolve.run_cost(usage)[1], (2 * 4 + 90 * 5 + 60 * 8 + 4 * 20 + 5 * 10) / 1e6)
 
     def test_bench_reads_raw_usage_and_the_runs_records_with_the_override_ignored(self):
         tree = self.d / "tree"
