@@ -4,7 +4,7 @@ description: "Turn an idea, a capture dossier, documents, or an existing codebas
 argument-hint: "[adopt | amend | convert] [notes, files, or paths]"
 ---
 
-**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
+**Workflow choice, first.** Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json`. OFF or no choice: when the status names the fast workflow, use its matching /<name>-fast skill if it lists one; otherwise do the requested work directly from the existing documents, code, and tests, with no formal step, record, or End chain. ON: the rules below apply; recheck the choice before each next step. Only the owner's explicit on or off, through /pipeline, changes it. Contract: `~/.claude/skills/_shared/references/project-control.md`.
 
 # /plan
 
@@ -88,7 +88,8 @@ before the lock, and the lock playback names every unit that became a non-goal o
 A project that exists without a complete record: the procedure is `references/adopt.md`, and `adopt.py
 check` lists what it refuses before the lock (every file accounted for, the dossier checked, M0 with a demo
 you ran, a current characterization, discrepancies in the brief). The lock puts discrepancies first. The
-owner's acceptance of M0 is the baseline every later milestone builds on.
+owner's acceptance of M0 is the baseline every later milestone builds on. A fast-workflow project's
+`.fast/plan.md` is a document source whose points are candidates, never owner rulings (adopt.md, step 2).
 
 ## /plan amend
 

@@ -37,6 +37,32 @@ def unadopted(d):
     return root
 
 
+FAST_PLAN_TEXT = """# Lists
+
+## Goal
+"Share a grocery list between two phones without an account."
+
+## Done when
+- [x] Adding an item on one phone shows it on the other
+
+## Not doing
+- Accounts (the owner wants none)
+
+## Commands
+- test: python3 -m pytest
+
+## Notes
+- 2026-10-01: sync over the local network first
+
+## Progress
+Started at: abc1234
+Verified at: none
+
+## Open
+- the export has no empty state
+"""
+
+
 class AdoptTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -69,6 +95,57 @@ class AdoptTest(unittest.TestCase):
         self.assertNotIn("| package-lock.json |", ledger, "pre-accounted files are grouped, not read")
         self.assertIn("docs/architecture.md", (d / "reading-plan.md").read_text())
         self.assertEqual(inv["git"]["commits"], "1")
+
+    def test_the_fast_workflows_plan_is_listed_though_git_excludes_it_and_is_imported_as_a_document(self):
+        (self.root / ".fast").mkdir()
+        (self.root / ".fast/plan.md").write_text(FAST_PLAN_TEXT)
+        (self.root / ".git/info/exclude").write_text(".fast/\n")
+        hidden = subprocess.run(["git", "-C", str(self.root), "ls-files", "--others", "--exclude-standard"],
+                                capture_output=True, text=True, check=True).stdout
+        self.assertNotIn(".fast", hidden, "the premise: git does not list it")
+        out = self.adopt("inventory")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        d = self.root / "docs/project/research/adoption"
+        inv = json.loads((d / "inventory.json").read_text())
+        self.assertEqual(inv["fast_plan"], ".fast/plan.md")
+        self.assertEqual([r["class"] for r in inv["files"] if r["path"] == ".fast/plan.md"], ["doc"])
+        ledger = (d / "coverage.md").read_text()
+        self.assertIn(f"| .fast/plan.md | doc | {FAST_PLAN_TEXT.count(chr(10))} | todo | the fast workflow's plan: its points are candidates for "
+                      "the lock, never owner rulings (adopt.md) |", ledger)
+        self.assertIn("| src/app.py | code | 3 | todo | |", ledger, "other rows are as before")
+        plan = (d / "reading-plan.md").read_text()
+        self.assertIn("## The fast workflow's plan\n- .fast/plan.md: a document source", plan)
+        self.assertIn("Notes [proposed] decisions, Open inbox items", plan)
+        self.assertIn(".fast/plan.md: not accounted for yet (the fast workflow's plan", self.adopt("check").stdout)
+        cap = subprocess.run([sys.executable, str(ROOT / "skills/_shared/scripts/capture.py"), "add", str(self.root),
+                              "--inventory"], capture_output=True, text=True, env=self.env)
+        self.assertEqual(cap.returncode, 0, cap.stdout + cap.stderr)
+        row = next(line for line in (d / "coverage.md").read_text().splitlines() if "| .fast/plan.md |" in line)
+        self.assertRegex(row, r"\| captured \| SRC-\d+ \|$")
+        src = next(m.parent for m in (self.root / "docs/project/sources").glob("SRC-*/meta.json")
+                   if json.loads(m.read_text()).get("title") == ".fast/plan.md")
+        turns = [json.loads(t) for t in (src / "turns.jsonl").read_text().splitlines()]
+        self.assertGreaterEqual(len(turns), 5, "one turn per section")
+        self.assertEqual({t["role"] for t in turns}, {"document"}, "the plan speaks as a document, never as the owner")
+        self.assertTrue(any(t["text"].startswith("## Goal") for t in turns))
+
+    def test_the_fast_plan_outside_git_is_listed_once_and_a_project_without_one_is_unchanged(self):
+        loose = Path(self.tmp.name) / "loose"
+        (loose / ".fast").mkdir(parents=True)
+        (loose / ".fast/plan.md").write_text(FAST_PLAN_TEXT)
+        (loose / "tool.py").write_text("print('hi')\n")
+        (loose / ".coding-pipeline.json").write_text('{"version":1,"managed":true}')
+        out = subprocess.run([sys.executable, str(ADOPT), "inventory", str(loose)], capture_output=True, text=True,
+                             env=self.env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        inv = json.loads((loose / "docs/project/research/adoption/inventory.json").read_text())
+        self.assertEqual(inv["file_source"], "walk")
+        self.assertEqual([r["path"] for r in inv["files"]].count(".fast/plan.md"), 1)
+        self.adopt("inventory")
+        d = self.root / "docs/project/research/adoption"
+        self.assertIsNone(json.loads((d / "inventory.json").read_text())["fast_plan"])
+        self.assertNotIn("fast", (d / "reading-plan.md").read_text())
+        self.assertNotIn(".fast", (d / "coverage.md").read_text())
 
     def test_check_fails_until_everything_is_accounted_and_built(self):
         self.adopt("inventory")

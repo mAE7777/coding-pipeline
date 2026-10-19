@@ -15,6 +15,9 @@ inventory writes docs/project/research/adoption/:
                     and the entry points are read first
   coverage.md       the ledger: one row per document and code file ("todo"), with lock files, vendored,
                     generated, binary, and asset files pre-accounted as "skipped (<class>)"
+A fast-workflow project's .fast/plan.md is listed as a document (and named in the reading plan and as fast_plan in
+inventory.json) even though git's local exclude hides it, so capture.py add --inventory imports it as a source:
+what it says is a candidate for the lock, never an owner ruling (/plan's adopt.md).
 Ledger statuses: captured (SRC-<n>: imported by capture.py add --inventory, read by an independent extraction
 and cleared by an audit) · read (a document, citing SRC-<n>) · mapped (<how>: code and tests, understood through
 the code map, the reading of the modules that matter, and the characterization) · registered (<summary>: data,
@@ -66,6 +69,8 @@ AUTHORITY = re.compile(r"(prd|spec|requirement|architecture|design|adr|rfc|decis
                        r"plan|contract|readme|agents|claude)", re.I)
 RECORD = ("intent.md", "brief.md", "milestones.md", "interfaces.md", "decisions.md", "state.md", "gate.md")
 BIG_AREA_LINES = 4000
+FAST_PLAN = ".fast/plan.md"  # the fast workflow's one state file, kept out of git by the local exclude file
+FAST_NOTE = "the fast workflow's plan: its points are candidates for the lock, never owner rulings (adopt.md)"
 
 
 def out_dir(project):
@@ -162,6 +167,9 @@ def inventory(project):
     source = "git"
     if files is None:
         files, source = walk_files(project), "walk"
+    fast_plan = FAST_PLAN if (project / FAST_PLAN).is_file() else None
+    if fast_plan and fast_plan not in files:  # git's exclude hides it; adoption still reads it
+        files = sorted(set(files) | {fast_plan})
     rows = []
     for rel in files:
         p = project / rel
@@ -197,7 +205,8 @@ def inventory(project):
         a["lines"] += r["lines"]
     inv_out = subprocess.run([sys.executable, str(HERE / "inventory.py"), str(project)], capture_output=True, text=True).stdout
     commits = git(project, "rev-list", "--count", "HEAD").strip()
-    data = {"project": str(project), "file_source": source, "created": datetime.date.today().isoformat(),
+    data = {"project": str(project), "file_source": source, "fast_plan": fast_plan,
+            "created": datetime.date.today().isoformat(),
             "counts": {c: sum(1 for r in rows if r["class"] == c) for c in sorted({r["class"] for r in rows})},
             "files": rows, "documents_ranked": [{k: d.get(k) for k in ("path", "lines", "last_change", "authority_signal")}
                                                 for d in docs],
@@ -216,7 +225,13 @@ def inventory(project):
             "Documents are read by an independent extraction and audited (/capture's reading); read the highest in "
             "this list yourself as well. Code is understood through the map: read the entry points and every module "
             "that carries a documented mechanism in full, the rest where the map leaves its role open, and write what "
-            "you learn to areas/<area>.md as you go; never read a file twice.", "", "## Documents (by authority signal)"]
+            "you learn to areas/<area>.md as you go; never read a file twice.", ""]
+    if fast_plan:
+        plan += ["## The fast workflow's plan", f"- {fast_plan}: a document source (capture.py add --inventory "
+                 "imports it). Its Goal quotes are candidates the owner confirms at the lock, never owner rulings; Done "
+                 "when becomes candidate done examples, Not doing candidate non-goals, Notes [proposed] decisions, Open "
+                 "inbox items (adopt.md, step 2).", ""]
+    plan += ["## Documents (by authority signal)"]
     plan += [f"- {d['path']} · {d['lines']} lines · last change {d.get('last_change') or 'unknown'}" for d in docs] or ["- none"]
     plan += ["", "## Areas", "| Area | Files | Lines | How |", "|---|---|---|---|"]
     for key, a in sorted(areas.items(), key=lambda kv: -kv[1]["lines"]):
@@ -234,7 +249,8 @@ def inventory(project):
             continue
         if r["class"] == "record":
             continue
-        ledger.append(f"| {r['path']} | {r['class']} | {r['lines']} | todo | |")
+        note = f" {FAST_NOTE} " if r["path"] == fast_plan else " "
+        ledger.append(f"| {r['path']} | {r['class']} | {r['lines']} | todo |{note}|")
     for (top, cls), n in sorted(skipped_groups.items()):
         ledger.append(f"| {top}/ ({n} {cls} files) | {cls} | - | skipped ({cls}) | |")
     (d / "coverage.md").write_text("\n".join(ledger) + "\n")

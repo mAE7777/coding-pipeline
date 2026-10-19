@@ -412,6 +412,69 @@ class HeavyTailTest(HeavyTestBase):
                          "the cross mark names the failing test, so it is the signature's line")
 
 
+class HeavyFastProjectTest(HeavyTestBase):
+    """A fast-workflow project (a folder holding .fast/plan.md) is a project for --tail's log and failure record."""
+
+    def setUp(self):
+        super().setUp()
+        self.proj = Path(self.tmp.name) / "fastproj"
+        (self.proj / ".fast").mkdir(parents=True)
+        (self.proj / ".fast/plan.md").write_text("# tool\n\n## Goal\nA small tool.\n")
+        (self.proj / "app.py").write_text("x = 1\n")
+        (self.proj / "src").mkdir()
+        (self.proj / "src/noisy.py").write_text(NOISY)
+
+    def run_tail(self, cwd):
+        return subprocess.run([PY, str(HEAVY), "run", "--owner", "A", "--tail", "5", "--", PY, "noisy.py"],
+                              capture_output=True, text=True, env=self.env, cwd=cwd)
+
+    def failures(self, proj):
+        path = proj / ".evidence/failures.jsonl"
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.is_file() else []
+
+    def survives_two_fixes(self, cwd):
+        """Fail on three product states (the first failure and two fixes); the third run's output."""
+        outs = []
+        for n in (1, 2, 3):
+            (self.proj / "app.py").write_text(f"x = {n}\n")
+            outs.append(self.run_tail(cwd))
+        return outs
+
+    def test_outside_git_the_log_and_the_survived_notice_go_to_the_fast_project(self):
+        outs = self.survives_two_fixes(self.proj / "src")
+        self.assertEqual(len(list((self.proj / ".evidence/logs").glob("*-noisy-py*.log"))), 3)
+        self.assertFalse((self.proj / "src/.evidence").exists(), "the subfolder is not the project")
+        self.assertEqual(len(self.failures(self.proj)), 3)
+        self.assertNotIn("survived", outs[1].stdout)
+        self.assertIn("This failure has survived 2 fixes", outs[2].stdout)
+
+    def test_in_git_with_fast_excluded_the_project_is_the_same(self):
+        subprocess.run(["git", "init", "-q", str(self.proj)], check=True)
+        (self.proj / ".git/info/exclude").write_text(".fast/\n.evidence/\n")
+        outs = self.survives_two_fixes(self.proj / "src")
+        self.assertIn("This failure has survived 2 fixes", outs[2].stdout)
+        prints = {r["fingerprint"] for r in self.failures(self.proj)}
+        self.assertEqual(len(prints), 3, "each fix is a new product state")
+        (self.proj / ".fast/plan.md").write_text("# tool\n\n## Goal\nA small tool, edited.\n")
+        self.run_tail(self.proj / "src")
+        self.assertEqual(self.failures(self.proj)[-1]["fingerprint"], self.failures(self.proj)[-2]["fingerprint"],
+                         "editing the plan is not a product change")
+
+    def test_a_full_pipeline_project_above_wins_and_fast_without_a_plan_is_no_project(self):
+        outer = Path(self.tmp.name)
+        (outer / "docs/project").mkdir(parents=True)
+        self.run_tail(self.proj / "src")
+        self.assertTrue(list((outer / ".evidence/logs").glob("*.log")), "docs/project/ is looked for first")
+        self.assertFalse((self.proj / ".evidence").exists())
+        lone = outer / "elsewhere"
+        (lone / ".fast").mkdir(parents=True)
+        (lone / "noisy.py").write_text(NOISY)
+        (outer / "docs/project").rmdir()
+        out = self.run_tail(lone)
+        self.assertEqual(len(list((lone / ".evidence/logs").glob("*.log"))), 1, out.stdout)
+        self.assertFalse((lone / ".evidence/failures.jsonl").exists(), ".fast/ without plan.md is no project")
+
+
 def guard(payload, env=None, cwd=None):
     payload = dict(payload)
     if not payload.get("cwd"):

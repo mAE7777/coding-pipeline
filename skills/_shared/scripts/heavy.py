@@ -36,14 +36,16 @@ never a silent skip. --timeout ends the job's whole process group after that man
 
 Bounded output (run --tail <n>). The command's whole output (standard output and error together) goes to
 <project>/.evidence/logs/<UTC time>-<command slug>.log, where the project is the nearest folder at or above the
-working folder holding docs/project/, else the working folder. What is printed is only: the exit code and the
-log's path, up to 40 lines that look like a failure (FAIL, FAILED, Error, error:, ERROR, Traceback, panic:, the
+working folder holding docs/project/, else the nearest holding .fast/plan.md (a fast-workflow project), else the
+working folder. What is printed is only: the exit code and the log's path, up to 40 lines that look like a
+failure (FAIL, FAILED, Error, error:, ERROR, Traceback, panic:, the
 Jest, Node, and vitest cross marks and Jest's bullet before a failing test, AssertionError, expected ...
 received, tsc's error TS<n>, ESLint's <line>:<col> error, cargo's error[E<n>]; a line the tail shows is not
 repeated), and the last <n> lines. Without --tail the command's output passes through unchanged, as it always
 has (gate_run.py and other scripts read it).
-Failure signatures. When a --tail run exits non-zero inside a project (a folder holding docs/project/), a
-record goes to <project>/.evidence/failures.jsonl: the time, the signature (sha1 of the normalized command and
+Failure signatures. When a --tail run exits non-zero inside a project (a folder holding docs/project/ or
+.fast/plan.md), a record goes to <project>/.evidence/failures.jsonl: the time, the signature (sha1 of the
+normalized command and
 the line that names the failure), the command, that line, and the product fingerprint (fingerprint.py). The
 line is the first that names a failing test (pytest's FAILED x::t, Jest's bullet, a cross mark, Go's --- FAIL:),
 else the first pytest "E   ..." line, else the first failing line that is not a banner (=== FAILURES ===), a
@@ -361,10 +363,14 @@ def cut(line):
 
 
 def project_of(start):
-    """(the nearest folder at or above start holding docs/project/, True), else (start, False)."""
+    """(the nearest folder at or above start holding docs/project/, True), else (the nearest holding .fast/plan.md,
+    a fast-workflow project, True), else (start, False)."""
     start = Path(start).resolve()
     for c in (start, *start.parents):
         if (c / "docs/project").is_dir():
+            return c, True
+    for c in (start, *start.parents):
+        if (c / ".fast/plan.md").is_file():
             return c, True
     return start, False
 

@@ -135,6 +135,25 @@ class FingerprintTest(unittest.TestCase):
             self.assertEqual(before_product, fp(d))
             self.assertNotEqual(before_all, fp(d, "all"))
 
+    def test_the_fast_workflows_plan_is_planning_outside_git_and_in_it(self):
+        for kind in ("walk", "git with the exclude line", "git without it"):
+            with tempfile.TemporaryDirectory() as d:
+                (Path(d) / "app.py").write_text("print('hi')\n")
+                plan = Path(d) / ".fast/plan.md"
+                plan.parent.mkdir()
+                plan.write_text("# tool\n## Goal\nv1\n")
+                if kind != "walk":
+                    subprocess.run(["git", "init", "-q", d], check=True)
+                if kind == "git with the exclude line":
+                    (Path(d) / ".git/info/exclude").write_text(".fast/\n")
+                before_product, before_all = fp(d), fp(d, "all")
+                plan.write_text("# tool\n## Goal\nv2, edited\n")
+                self.assertEqual(before_product, fp(d), kind)
+                if kind != "git with the exclude line":
+                    self.assertNotEqual(before_all, fp(d, "all"), f"{kind}: scope all still counts it")
+                (Path(d) / "app.py").write_text("print('changed')\n")
+                self.assertNotEqual(before_product, fp(d), f"{kind}: the product still counts")
+
     def test_git_untracked_contents_count(self):
         with tempfile.TemporaryDirectory() as d:
             project(d)

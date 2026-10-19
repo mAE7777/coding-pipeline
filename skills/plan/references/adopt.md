@@ -27,6 +27,14 @@ checking loop ends when a pass finds nothing material, never at a count.
      decisions often live. `capture.py add <project> --tracker`: the GitHub issues and pull requests with their
      comments; when it cannot be read (no access, no GitHub remote), write `Tracker: not read (<reason>)` in
      the brief so the owner sees it at the lock. The owner's chats, notes, and recordings join the same way.
+   - A project the fast workflow built has `.fast/plan.md`. Git's local exclude hides it, but `adopt.py inventory`
+     lists it and `capture.py add <project> --inventory` imports it as a document source (alone:
+     `capture.py add <project> <project>/.fast/plan.md`). A builder wrote it, so nothing in it is an owner
+     ruling, quotes included. Its Goal quotes are candidates the owner confirms at the lock; Done when becomes
+     candidate done examples and Not doing candidate non-goals (each labeled `[capture SRC-<n> T<nnn>]` until
+     the owner confirms it); each Notes line becomes a `decisions.py add --proposed` entry; each Open line an
+     inbox item (`inbox.py add <project> --from "the fast plan" --kind <kind> --source "SRC-<n> T<nnn>"`). Its
+     Commands are candidates for AGENTS.md, proven by `adopt.py commands`; Progress and Next are context.
    - The sources are read the `/capture` way (its steps 2 to 4): an isolated extraction drafts the dossier, you
      edit it, and isolated audits check it until an audit finds nothing material; `capture.py check` passing is
      the proof. The highest-authority documents in the reading plan you also read yourself.
@@ -81,7 +89,8 @@ checking loop ends when a pass finds nothing material, never at a count.
    after the lock, as the baseline the next milestone builds on.
 9. **The lock**, once `adopt.py check` passes in full, discrepancies first: what the documents claim that the code does not do, what the code does
    that nothing documents, conflicting documents and the proposed authority order, failing commands, stand-ins
-   found. The owner confirms or corrects; the intent is locked (`/plan` step 8) and the owner's acceptance of
+   found; then each candidate from a `.fast/plan.md` (Goal quotes, done examples, non-goals), which becomes
+   `[owner <date>]` only once confirmed. The owner confirms or corrects; the intent is locked (`/plan` step 8) and the owner's acceptance of
    M0 is recorded as the baseline.
 
 ## Enough context, within the budget

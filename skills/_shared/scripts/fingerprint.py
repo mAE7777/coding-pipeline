@@ -9,10 +9,12 @@ file set is tracked files plus untracked files that are not ignored; elsewhere i
 common dependency and build folders.
 
 Scope "product" (the default) leaves out the project's planning and evidence files (docs/project/,
-.evidence/, truth/, narrative/, and every AGENTS.md and CLAUDE.md, nested ones included), so editing a plan
-never makes product evidence stale. Scope "all" includes them. Operating-system clutter (.DS_Store,
-Thumbs.db) and browser-tool output (.playwright-cli/ snapshots, test-results/, playwright-report/) are never
-counted: looking at the product must not change its fingerprint.
+.evidence/, truth/, narrative/, the fast workflow's .fast/, and every AGENTS.md and CLAUDE.md, nested ones
+included), so editing a plan never makes product evidence stale. (In git, .fast/ is usually kept out already by
+the local exclude file fast.py writes; outside git, or without that line, this list keeps it out.) Scope "all"
+includes them. Operating-system clutter (.DS_Store, Thumbs.db) and browser-tool output (.playwright-cli/
+snapshots, test-results/, playwright-report/) are never counted: looking at the product must not change its
+fingerprint.
 
 Prints one line: "<scope>:<16 hex chars>" (with --list, the per-file hashes too). Exit 2 on bad usage.
 """
@@ -25,7 +27,7 @@ from pathlib import Path
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", ".next", "out", "target",
              "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "coverage", ".turbo",
              ".cache", "DerivedData", ".gradle", ".idea", ".vscode", ".evidence"}
-PLANNING = ("docs/project/", ".evidence/", "truth/", "narrative/")
+PLANNING = ("docs/project/", ".evidence/", "truth/", "narrative/", ".fast/")
 PLANNING_NAMES = ("AGENTS.md", "CLAUDE.md")
 CLUTTER = (".DS_Store", "Thumbs.db", "desktop.ini")
 TOOL_OUTPUT = (".playwright-cli", "test-results", "playwright-report")
