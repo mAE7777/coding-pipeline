@@ -29,10 +29,16 @@ are per million tokens, as of 2026-10-06:
   claude-opus-5-5     input 4.00   cache write 5.00    cache read 0.20   output 20.00
   claude-sonnet-5-5   input 2.00   cache write 2.50    cache read 0.20   output 10.00
   claude-haiku-5-5    input 0.10   cache write 0.125   cache read 0.01   output 0.50
-Haiku's cache prices are assumed at 1.25 and 0.1 times its input price. Haiku's higher price for prompts over
-100K tokens is ignored: usage is summed per call or per run, so the size of each prompt is not known. A model
-id that is missing or not in the table is priced as claude-opus-5-5 (never as free) and counted as
-unpriced_model, with its ids named. Codex usage is never priced.
+Haiku's cache prices are assumed at 1.25 and 0.1 times its input price. A cache write is priced by how long it
+lives when the usage says so (usage.cache_creation.ephemeral_1h_input_tokens, in a transcript line or a run's
+stream): a 1-hour write at 2 times the model's input price, the rest at its cache write price (1.25 times); usage
+without that breakdown (an isolated run's summary, unless it records cache_write_1h) prices every write at the
+cache write price, as before. Haiku charges more for a call whose prompt (input, cache writes, and cache reads together) is
+over 100K tokens: input 0.50, cache write 0.625, cache read 0.05, output 2.50. That rate is applied per call
+where the prompt's size is known (a conversation's transcript line); summed usage keeps the base rate. Neither
+changes the units: a cache write weighs 1.25 however long it lives. A model id that is missing or not in the
+table is priced as claude-opus-5-5 (never as free) and counted as unpriced_model, with its ids named. Codex
+usage is never priced.
 
 report sums every isolated run summary under the project's .evidence (gate and loyal rounds, the dev
 understanding check, plan cold reads, capture, scout, and any other folder), grouped by milestone, round, and
@@ -72,6 +78,9 @@ PRICES = {
     "claude-haiku-5-5": {"input": 0.10, "cache_write": 0.125, "cache_read": 0.01, "output": 0.50},
 }
 PRICED_AS = "claude-opus-5-5"  # an unknown or missing model is priced as the dearest, never as free
+CACHE_WRITE_1H = 2.0  # a 1-hour cache write, in times the input price
+LONG_PROMPT = 100_000  # a call whose prompt is over this many tokens is priced at LONG_PRICES where the model has one
+LONG_PRICES = {"claude-haiku-5-5": {"input": 0.50, "cache_write": 0.625, "cache_read": 0.05, "output": 2.50}}
 CODEX = "codex"  # usage keyed by this name, or by "codex:<model>", is Codex's: shown apart, never priced
 # Reading a source costs about this many units per token of source: an extraction read (the source as input,
 # its load-bearing points as output), an audit read (the source and the units citing it), a share of re-audits,
@@ -116,24 +125,48 @@ def model_key(model):
     return re.sub(r"-\d{8}$", "", m)
 
 
-def dollars(model, u):
-    """(US dollars, priced): one usage's tokens at the list price of the model that served them; a model that is
+def dollars(model, u, prompt=None):
+    """(US dollars, priced): one usage's tokens at the list price of the model that served them, its 1-hour cache
+    writes (cache_write_1h, a part of cache_write) at CACHE_WRITE_1H times the input price, and, when prompt (one
+    call's prompt tokens) is over LONG_PROMPT, at the model's long-prompt rates where it has them; a model that is
     missing or not in the table at claude-opus-5-5's price, with priced False."""
-    rate = PRICES.get(model_key(model))
-    return sum((u.get(k) or 0) * (rate or PRICES[PRICED_AS])[k] for k in WEIGHTS) / 1e6, rate is not None
+    key = model_key(model)
+    rate = PRICES.get(key)
+    r = rate or PRICES[PRICED_AS]
+    if rate and prompt is not None and prompt > LONG_PROMPT and key in LONG_PRICES:
+        r = LONG_PRICES[key]
+    hour = min(u.get("cache_write_1h") or 0, u.get("cache_write") or 0)
+    total = sum((u.get(k) or 0) * r[k] for k in WEIGHTS) + hour * (CACHE_WRITE_1H * r["input"] - r["cache_write"])
+    return total / 1e6, rate is not None
 
 
-def tally_add(tally, model, u, entries=1):
-    """Add usage (input, cache_write, cache_read, output) to a tally of {model: tokens by type and entries}."""
-    t = tally.setdefault(model or "", {**{k: 0 for k in WEIGHTS}, "entries": 0})
+def api_usage(u):
+    """The usage record of an API usage object; cache_write_1h only when it breaks its cache writes down."""
+    u = u if isinstance(u, dict) else {}
+    out = {"input": u.get("input_tokens", 0) or 0, "cache_write": u.get("cache_creation_input_tokens", 0) or 0,
+           "cache_read": u.get("cache_read_input_tokens", 0) or 0, "output": u.get("output_tokens", 0) or 0}
+    hour = (u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") \
+        if isinstance(u.get("cache_creation"), dict) else None
+    if isinstance(hour, (int, float)) and not isinstance(hour, bool):
+        out["cache_write_1h"] = min(hour, out["cache_write"])
+    return out
+
+
+def tally_add(tally, model, u, entries=1, usd=None):
+    """Add usage (input, cache_write, cache_read, output, and cache_write_1h when known) to a tally of {model: tokens
+    by type, dollars, and entries}. usd is what it cost when it was priced call by call (dollars() of the sum
+    otherwise)."""
+    t = tally.setdefault(model or "", {**{k: 0 for k in WEIGHTS}, "cache_write_1h": 0, "usd": 0.0, "entries": 0})
     for k in WEIGHTS:
         t[k] += u.get(k) or 0
+    t["cache_write_1h"] += u.get("cache_write_1h") or 0
+    t["usd"] += dollars(model, u)[0] if usd is None else usd
     t["entries"] += entries
 
 
 def tally_merge(into, other):
     for model, t in other.items():
-        tally_add(into, model, t, t.get("entries", 1))
+        tally_add(into, model, t, t.get("entries", 1), usd=t.get("usd"))
     return into
 
 
@@ -153,7 +186,7 @@ def tally_price(tally):
         if is_codex(model):
             continue
         d, known = dollars(model, t)
-        usd += d
+        usd += t["usd"] if isinstance(t.get("usd"), float) else d
         if not known and any(t.get(k) for k in WEIGHTS):
             unpriced += t.get("entries", 1)
             ids.add(model or "missing")
@@ -204,11 +237,9 @@ def transcript_usage(path, since, project):
             if msg.get("id") in seen:
                 continue
             seen.add(msg.get("id"))
-            u = msg.get("usage") or {}
-            tally_add(tally, msg.get("model"), {"input": u.get("input_tokens", 0),
-                                                "cache_write": u.get("cache_creation_input_tokens", 0),
-                                                "cache_read": u.get("cache_read_input_tokens", 0),
-                                                "output": u.get("output_tokens", 0)})
+            u = api_usage(msg.get("usage"))
+            prompt = u["input"] + u["cache_write"] + u["cache_read"]  # one call's prompt: its size is known here
+            tally_add(tally, msg.get("model"), u, usd=dollars(msg.get("model"), u, prompt)[0])
     return tally, bool(inside)
 
 
@@ -241,9 +272,7 @@ def stream_usage(stream):
                 e = json.loads(line)
             except ValueError:
                 continue
-            u = e.get("usage") or {}
-            return {"input": u.get("input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
-                    "cache_read": u.get("cache_read_input_tokens", 0), "output": u.get("output_tokens", 0)}
+            return api_usage(e.get("usage"))
     return None
 
 

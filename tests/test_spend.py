@@ -157,6 +157,61 @@ class SpendTest(unittest.TestCase):
         # The units stay model-blind: the allowance and its caps keep their meaning.
         self.assertEqual(spend.WEIGHTS, {"input": 1.0, "cache_write": 1.25, "cache_read": 0.1, "output": 5.0})
 
+    def test_one_hour_cache_writes_and_haikus_long_prompts_are_priced(self):
+        # A 1-hour cache write costs twice the input price; the rest of the writes the cache write price.
+        u = {"cache_write": 1_000_000, "cache_write_1h": 400_000}
+        self.assertAlmostEqual(spend.dollars(OPUS, u)[0], 0.6 * 5.00 + 0.4 * 8.00)
+        self.assertAlmostEqual(spend.dollars(SONNET, u)[0], 0.6 * 2.50 + 0.4 * 4.00)
+        self.assertAlmostEqual(spend.dollars(HAIKU, u)[0], 0.6 * 0.125 + 0.4 * 0.20)
+        self.assertEqual(spend.dollars(OPUS, {"cache_write": 1_000_000}), (5.00, True), "no breakdown: as before")
+        self.assertAlmostEqual(spend.dollars(OPUS, {"cache_write": 10, "cache_write_1h": 50})[0], 10 * 8.00 / 1e6,
+                               "a breakdown larger than the writes counts no more than the writes")
+        # Haiku's rate for a call whose prompt is over 100K tokens, when the prompt's size is known.
+        self.assertAlmostEqual(spend.dollars(HAIKU, MTOK, prompt=100_001)[0], 0.50 + 0.625 + 0.05 + 2.50)
+        self.assertAlmostEqual(spend.dollars(HAIKU, MTOK, prompt=100_000)[0], 0.10 + 0.125 + 0.01 + 0.50)
+        self.assertAlmostEqual(spend.dollars(HAIKU, MTOK)[0], 0.10 + 0.125 + 0.01 + 0.50, "size unknown: base rate")
+        self.assertEqual(spend.dollars(OPUS, MTOK, prompt=900_000), spend.dollars(OPUS, MTOK), "only Haiku has one")
+        self.assertEqual(spend.dollars("claude-mystery-1", MTOK, prompt=900_000), (spend.dollars(OPUS, MTOK)[0], False))
+        self.assertAlmostEqual(spend.LONG_PRICES[HAIKU]["cache_write"], 1.25 * spend.LONG_PRICES[HAIKU]["input"])
+        self.assertAlmostEqual(spend.LONG_PRICES[HAIKU]["cache_read"], 0.1 * spend.LONG_PRICES[HAIKU]["input"])
+        # The API's usage object: the breakdown is read when it is there, and only then.
+        self.assertEqual(spend.api_usage({"input_tokens": 5, "cache_creation_input_tokens": 10, "output_tokens": 2,
+                                          "cache_creation": {"ephemeral_5m_input_tokens": 4,
+                                                             "ephemeral_1h_input_tokens": 6}}),
+                         {"input": 5, "cache_write": 10, "cache_read": 0, "output": 2, "cache_write_1h": 6})
+        self.assertNotIn("cache_write_1h", spend.api_usage({"cache_creation_input_tokens": 10}))
+        self.assertNotIn("cache_write_1h", spend.api_usage({"cache_creation": "odd", "input_tokens": None}))
+        self.assertEqual(spend.WEIGHTS["cache_write"], 1.25, "units do not change")
+
+    def test_transcripts_are_priced_call_by_call_and_summed_runs_keep_the_base_rate(self):
+        started = self.start()
+        key = spend.claude_folder_key(self.project)
+        after = "2099-01-01T00:00:00Z"
+
+        def line(mid, model, inp=0, out=0, write=0, hour=None):
+            u = {"input_tokens": inp, "output_tokens": out, "cache_read_input_tokens": 0,
+                 "cache_creation_input_tokens": write}
+            if hour is not None:
+                u["cache_creation"] = {"ephemeral_5m_input_tokens": write - hour, "ephemeral_1h_input_tokens": hour}
+            return json.dumps({"type": "assistant", "timestamp": after, "cwd": str(self.project),
+                               "message": {"id": mid, "model": model, "usage": u}})
+
+        main = self.transcript(key, "s1", [line("m1", HAIKU, inp=50_000, out=1000),
+                                           line("m2", OPUS, write=1_000_000, hour=400_000),
+                                           line("m3", OPUS, write=1_000_000)])
+        (main.parent / "s1/subagents").mkdir(parents=True)
+        (main.parent / "s1/subagents/a.jsonl").write_text(line("h1", HAIKU, inp=150_000, out=1000) + "\n")
+        summary(self.project / ".evidence/scout/r1", "scout", served_model=HAIKU, usage={"input": 300_000})
+        m = self.in_home(spend.measure, self.project, spend.parse_time(started))
+        long_call = 150_000 * 0.50 / 1e6 + 1000 * 2.50 / 1e6  # a helper's call, carried through the merge
+        short_call = 50_000 * 0.10 / 1e6 + 1000 * 0.50 / 1e6
+        self.assertAlmostEqual(m["dollars"]["conversations"], long_call + short_call + (0.6 * 5.00 + 0.4 * 8.00) + 5.00)
+        self.assertAlmostEqual(m["dollars"]["isolated"], 300_000 * 0.10 / 1e6, "a run's summed usage: base rate")
+        self.assertEqual(m["conversations"], 200_000 + 2_000_000 * 1.25 + 2000 * 5, "units are unchanged")
+        rep = self.in_home(spend.report, self.project, None, spend.parse_time(started))
+        self.assertAlmostEqual(rep["sessions"]["dollars"], m["dollars"]["conversations"])
+        self.assertAlmostEqual(rep["total"]["dollars"], m["dollars"]["conversations"] + m["dollars"]["isolated"])
+
     def test_dollars_by_the_model_each_call_came_from(self):
         started = self.start()
         key = spend.claude_folder_key(self.project)
