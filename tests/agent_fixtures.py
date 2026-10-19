@@ -5,11 +5,12 @@ Usage: agent_fixtures.py [--only <prefix>[,<prefix>...]] [--runs N] [--parallel 
                          [--model <model id>]
 
 Each fixture folder holds a project (a small product with its docs/project build record). The harness
-copies it to a fresh work folder under ~/.gate-copies/fixtures/ (with a .coding-pipeline.json that says
-managed: true, since run_isolated.py runs only for a managed project; no copy a checker reads holds that file),
-prepares the checker's directory the way
-the gate does (gate_copies.py review or blind copy, a verdict folder, or a documents folder), renders the
-pack with render_pack.py, runs the checker with run_isolated.py (the agent file from this repository unless
+copies it to a fresh work folder under ~/.gate-copies/fixtures/ (a random name, so no path a checker is shown
+names the fixture, whose name describes its planted defect; fixture-result.json records the folder as "work", and
+a run that passes removes it), with a .coding-pipeline.json that says managed: true (run_isolated.py runs only for
+a managed project; no copy a checker reads holds that file), prepares the checker's directory the way the gate
+does (gate_copies.py review or blind copy, a verdict folder, or a documents folder), renders the pack with
+render_pack.py, runs the checker with run_isolated.py (the agent file from this repository unless
 --installed; --model <id> and --effort <level> passed on to run_isolated.py, for both passes of a two-pass
 checker; without them each checker runs on its models.json route, so a routing change is what gets measured;
 never with a shadow run),
@@ -22,8 +23,9 @@ Results go to <repo>/.evidence/fixtures/<name>/run-<n>/ and a table is printed. 
 every run passes. Exit 0 if all pass, 1 otherwise.
 
 Each run also writes fixture-result.json beside its summaries: the fixture's kind (planted, clean, other), the
-problems and their count, the runner status, the served models, the raw token usage by served model, and its
-dollars at list prices (by this tree's spend.py; null when it has no price table). A run whose summary says
+problems and their count, the runner status, the served models, the raw token usage by served model, its
+dollars at list prices (by this tree's spend.py; null when it has no price table), and its work folder ("work";
+null when none was made). A run whose summary says
 escalated: true fails: a retry on another model never rescues the model under test. The problem count is the
 number of problems the expectation reported (a runner status other than OK is one of them); a run that gave
 no verdict of its own (no summary, no verdict block, or escalated) missed everything, so it counts one plus
@@ -59,8 +61,8 @@ agent file is generated in the run's evidence folder from the fixture's "agent" 
 started; its description names the prompt's sha256). The review copy is made a git repository: the fixture's
 base committed (only the files the copy holds, as the base had them; an empty commit without a base), the
 fixture's change left over it uncommitted, its plan (a file under tests/fixtures/agents/) at .fast/plan.md with
-"Started at" set to the base and .fast/ in the local exclude file, as fast.py init leaves a project, and a
-snapshot of the tree kept by refs/fast/review, as fast takes one. The pack is the prompt with its angle brackets
+"Started at" set to the base and .fast/ and .evidence/ in the local exclude file, as fast.py init leaves a
+project, and a snapshot of the tree kept by refs/fast/review, as fast takes one. The pack is the prompt with its angle brackets
 filled: <project path> the copy, <Goal>, "Done when: <items>", and "Not doing: <items>" from the plan, <review
 diff command> `git -C <copy> diff <base> <snapshot>`; in candidate lines, <step 1 results> the plan's labeled test
 command run in the copy (which it must leave as it was) and <file table> the table `fast.py diff` prints in the
@@ -78,10 +80,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -345,7 +347,8 @@ def git_in(copy, *args, env=None, stdin=None):
 def fast_copy(spec, copy, plan):
     """Make the review copy a git repository: the fixture's base committed (the files the copy holds, with the
     base's content; an empty commit when the fixture has no base), the change left over it uncommitted, the plan at
-    .fast/plan.md (Started at: the base) and kept out of git, and a snapshot of the tree, as fast takes one, kept by
+    .fast/plan.md (Started at: the base), .fast/ and .evidence/ in the local exclude file as fast.py init writes them
+    (so fast.py prints no line putting one back), and a snapshot of the tree, as fast takes one, kept by
     refs/fast/review. Returns (base, snapshot)."""
     copy = Path(copy)
     if (copy / ".git").exists():
@@ -368,7 +371,9 @@ def fast_copy(spec, copy, plan):
     exclude = copy / ".git/info/exclude"
     exclude.parent.mkdir(parents=True, exist_ok=True)
     text = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
-    exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + ".fast/\n", encoding="utf-8")
+    have = {line.strip() for line in text.splitlines()}
+    missing = "".join(f"{line}\n" for line in (".fast/", ".evidence/") if line not in have)  # as fast.py init writes
+    exclude.write_text(text + ("" if not text or text.endswith("\n") else "\n") + missing, encoding="utf-8")
     index = copy / ".git/fast-review.index"
     if (copy / ".git/index").is_file():
         shutil.copyfile(copy / ".git/index", index)
@@ -417,7 +422,7 @@ def file_table(copy, base, snap, fast):
         except subprocess.TimeoutExpired:
             r = None
         rows = [line.rstrip() for line in (r.stdout if r and r.returncode == 0 else "").splitlines() if line.strip()
-                and not line.startswith(("review diff:", "file list:", "no earlier snapshot"))]
+                and not line.startswith(("review diff:", "file list:", "no earlier snapshot", "kept out of git:"))]
         if any(tok.strip("`|,:()") in changed for line in rows for tok in line.split()):
             return "\n".join(rows)
         why = f"fast.py diff in {fast} prints no file table" if r and r.returncode == 0 else \
@@ -546,19 +551,20 @@ def record(name, spec, n, ev, problems, judged, summary, result_text="", extra=N
 
 
 def run_one(name, spec, n, installed, effort, model=None):
-    work = WORK / f"{name}-{n}-{int(time.time() * 1000) % 10**9}"
+    work = WORK / secrets.token_hex(8)  # a neutral name: the fixture's name describes its planted defect
     ev = REPO / ".evidence/fixtures" / name / f"run-{n}"
     if ev.exists():
         shutil.rmtree(ev)
     ev.mkdir(parents=True)
     no_browser = spec.get("browser") and browser_missing()
     if no_browser:  # a run that cannot drive the page is a miss, never a paid run
-        return record(name, spec, n, ev, [no_browser], False, None)
+        return record(name, spec, n, ev, [no_browser], False, None, extra={"work": None})
     project = make_project(spec, work)
+    extra = {"work": str(work)}
     try:
         workdir, _ = prepare(spec, project, work)
     except RuntimeError as exc:
-        return record(name, spec, n, ev, [str(exc)], False, None)
+        return record(name, spec, n, ev, [str(exc)], False, None, extra=extra)
     # A fixture without a route of its own (a fast reviewer) runs on its own default unless a flag names another.
     model, effort = model or spec.get("model"), effort or spec.get("effort")
     # No shadow runs here (a fixture measures one setting), and the route's effort unless --effort was given, so
@@ -566,13 +572,12 @@ def run_one(name, spec, n, installed, effort, model=None):
     cmd = [sys.executable, str(SCRIPTS / "run_isolated.py"), spec["role"], "--dir", str(workdir), "--out", str(ev),
            "--project", str(project), "--no-shadow"] + (["--effort", effort] if effort else [])
     agent = REPO / spec["agent"] if spec.get("agent") else None
-    extra = None
     if spec.get("fast_plan"):
         try:
             text, info = fast_pack(spec, workdir)
         except FastPromptError as exc:  # nothing is spent on a prompt that cannot be measured as it stands
-            return record(name, spec, n, ev, [f"fast reviewer: {exc}"], False, None)
-        extra = {"fast_prompt": info}
+            return record(name, spec, n, ev, [f"fast reviewer: {exc}"], False, None, extra=extra)
+        extra["fast_prompt"] = info
         packed = ev / "fixture-pack.md"
         packed.write_text(text, encoding="utf-8")
         agent = fast_agent(spec, ev, info)

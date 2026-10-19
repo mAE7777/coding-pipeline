@@ -14,10 +14,10 @@ runs on the probe route with the model agent_fixtures.py --model names, so it me
 table: "fast-reviewer", the fast pipeline's /gate-fast reviewer, whose model its own skill text names (opus at
 xhigh by default, the fixture's "model" and "effort"; --model and --effort measure another).
 A fast-reviewer fixture is answered in text, not JSON ("no_json"): its expectation reads the reviewer's findings
-(each one opened by a line with high, medium, or low and, on that line or the ones after, a file:line) and its
-last line ("Matches the goal: yes/no, because ..."). A planted item is caught when a high or medium finding names
-its file and its key words; a clean fixture passes when no high or medium finding is raised and the last line
-says "Matches the goal: yes".
+(each one labeled high, medium, or low, on its own line or by the severity section it sits in, with a file:line;
+fast_findings says how) and its last line ("Matches the goal: yes/no, because ..."). A planted item is caught when
+one high or medium finding names its file and its key words; a clean fixture passes when no high or medium
+finding is raised and the last line says "Matches the goal: yes".
 A spec with "browser": true needs a machine where browse.py can start a headless browser (Playwright); the
 harness reports such a run as missed, without spending, when it cannot.
 A spec with "base" starts from that folder and lays its own folder over it (a review of a later milestone, or a
@@ -888,15 +888,35 @@ def explain_grounding(v, ctx=None):
 # ---------- the fast pipeline's reviewer (gate-fast step 3), answered in text ----------
 
 SEVERITY = r"(high|medium|low|critical)"
-# A file:line reference: app.py:22, tally/dedupe.py:31-40, app.py, line 22, app.py#L22.
-FILE_LINE = re.compile(r"[\w./-]*\w\.[a-z0-9]+(?::|,? line |#l)\d+", re.I)
-# Leading markup, numbering, and a "Finding 2:" lead before a severity that opens a line.
-LEAD = re.compile(r"^[\s>*_#|`~+.\[\](){}\d-]*(?:(?:finding|issue|problem|bug|defect)\b\s*#?\d*[\s:.)*_-]*)?", re.I)
+SEV = r"(?:high|medium|low|critical)"
+# A file:line reference: app.py:22, tally/dedupe.py:31-40, app.py#L22, `app.py`, line 22, app.py lines 12-16,
+# app.py L30, app.py (line 8), app.py at line 9.
+FILE_LINE = re.compile(r"[\w./-]*\w\.[a-z0-9]*[a-z][a-z0-9]*[`'\"*_]*"
+                       r"(?::|#l|,?\s*\(?\s*(?:(?:at|on)\s+)?(?:lines?\b|ln\b|l)\.?\s*)\d+", re.I)
+# Leading markup, numbering, and a "Finding 2:" or "Finding 4 (" lead before a severity that opens a line.
+LEAD = re.compile(r"^[\s>*_#|`~+.\[\](){}\d-]*(?:(?:finding|issue|problem|bug|defect)\b\s*#?\d*[\s:.()\[\]*_-]*)?",
+                  re.I)
 # A severity as a line's label: followed by markup or punctuation, a spaced dash, the end, or "severity" ("high
 # severity", "High-severity findings"), never "high-level" or "high confidence".
 LABEL = re.compile(SEVERITY + r"\b(?=\s*[^\w\s-]|\s+-|\s*$|[\s-]+(?:severity|priority|impact)\b)", re.I)
 FIELD = re.compile(r"\b(?:severity|priority)\b\W{0,8}" + SEVERITY + r"\b", re.I)
-ANYWHERE = re.compile(r"\b" + SEVERITY + r"\b(?!-(?!severity|priority|impact)[a-z])", re.I)
+# A severity written as a label inside a line, the marked forms first ("(low)", "[medium]", "**High**", "`high`",
+# "| high |", "- high -"), then "high:".
+TAGS = (re.compile(r"\(\s*" + SEV + r"(?:[\s-]+(?:severity|priority))?\s*\)|\[\s*" + SEV + r"\s*\]|(?:\*\*|__)\s*"
+                   + SEV + r"\s*:?\s*(?:\*\*|__)|`" + SEV + r"`|\|\s*" + SEV + r"\s*\||(?<!\S)[-\u2013\u2014]+\s*"
+                   + SEV + r"\s*[-\u2013\u2014]+(?!\S)", re.I),
+        re.compile(r"\b" + SEV + r"\s*:", re.I))
+NEGATED = re.compile(r"\b(?:no|not|nothing|none|without)\s*[*_`(\[|]*$", re.I)  # "no **high** issue"
+# What, right after a label, says there is nothing at that severity: "High: none", "**High:** 0", "High - n/a".
+NONE_AFTER = re.compile(r"[\W_]*(?:(?:none|nothing)\b(?!\s+of\b)|n/a\b|no\s+(?:findings?|issues?|problems?|bugs?|"
+                        r"defects?)\b|(?:0|zero)(?:\s+(?:findings?|issues?))?(?=\s*(?:[,;|)]|\.(?!\d)|$)))", re.I)
+# A line that is only a severity label: a section over the findings below it ("## High", "### Low (1)", "Low:",
+# "**High**", "High-severity findings:").
+SECTION = re.compile(SEVERITY + r"(?:[\s-]+(?:severity|priority|impact))?(?:\s+(?:findings?|issues?|problems?))?"
+                     r"(?:\s*\(\d+\))?[\W_]*$", re.I)
+HEADING = re.compile(r"^ {0,3}(#{1,6})(?:\s|$)")
+ITEM = re.compile(r"^\s*(?:([-*+])\s|(\d{1,3}[.)])\s|(\|))")  # a bullet, a numbered item, a table row
+LABEL_LINE = re.compile(r"^[\W_]*[a-z][\w /'-]{0,40}:[\W_]*$", re.I)  # "Not checked:", "**Notes:**"
 RULE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
 VERDICT_LINE = re.compile(r"^matches the goal\W{0,6}", re.I)
 
@@ -906,53 +926,171 @@ def severity_of(word):
     return "high" if word == "critical" else word
 
 
-def finding_start(line):
-    """The severity a line opens a finding with, or None: a "severity: high" field, a severity labeling the line's
-    start ("1. **High** - ...", "[medium] ...", "| 2 | low | ..."), or a severity beside a file:line."""
+def labeled(line):
+    """The severity a line is labeled with: a "severity: high" field, or a severity labeling the line's start
+    ("1. **High** - ...", "[medium] ...", "| 2 | low | ..."); "" for a label that what follows it negates ("High:
+    none", "High: 0"); None for no label."""
     field = FIELD.search(line)
     if field:
-        return severity_of(field.group(1))
-    label = LABEL.match(LEAD.sub("", line, count=1))
+        return "" if NONE_AFTER.match(line, field.end()) else severity_of(field.group(1))
+    rest = LEAD.sub("", line, count=1)
+    label = LABEL.match(rest)
     if label:
-        return severity_of(label.group(1))
-    anywhere = ANYWHERE.search(line)
-    if anywhere and FILE_LINE.search(line):
-        return severity_of(anywhere.group(1))
+        return "" if NONE_AFTER.match(rest, label.end()) else severity_of(label.group(1))
     return None
+
+
+def finding_start(line):
+    """The severity a line outside a severity section opens a finding with, or None: its label (labeled), or, on a
+    line that holds a file:line, a severity marked as a label inside it ("app.py:52 - ... (low)", "[medium]",
+    "**High**", "| high |", "high:") that is not negated ("no **high** issue at app.py:40"). A severity word in
+    prose ("a very high amount at app.py:52", "No high or medium findings in app.py:1-138") opens none."""
+    sev = labeled(line)
+    if sev is not None:
+        return sev or None
+    if not FILE_LINE.search(line):
+        return None
+    for tags in TAGS:
+        for tag in tags.finditer(line):
+            if not NEGATED.search(line[:tag.start()]) and not NONE_AFTER.match(line, tag.end()):
+                return severity_of(re.search(SEVERITY, tag.group(0), re.I).group(1))
+    return None
+
+
+def section_of(line):
+    """The severity of a line that is only a severity label and so heads a section, or None."""
+    m = None if FILE_LINE.search(line) else SECTION.match(re.sub(r"^[\W_]+", "", line))
+    return severity_of(m.group(1)) if m else None
+
+
+def indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def item_kind(line):
+    """0 for a bullet, 1 for a numbered item, 2 for a table row, None for any other line."""
+    m = ITEM.match(line)
+    return next(i for i in range(3) if m.group(i + 1)) if m else None
+
+
+def located(finding):
+    return any(FILE_LINE.search(line) for line in finding["lines"])
 
 
 def fast_findings(text):
     """The reviewer's findings, in order: {"severity", "first" (the line that opened it), "text" (it and the lines
-    after it, lowercased)}. A finding runs to the next one, a heading or rule that opens none, or the "Matches the
-    goal" line; a line inside a code block never opens one. A heading that opened none, right before a finding
-    (its title, when the severity is a field below it), belongs to that finding. A severity heading over plain
-    items ("## High", then "1. app.py:27 ...") is one finding holding them all. Only a finding that holds a
-    file:line counts (the prompt asks each one for it): "### High" over "None." is no finding."""
-    findings, cur, fence, title = [], None, False, None
+    after it, lowercased)}. Only a finding that holds a file:line counts (the prompt asks each one for it); a line
+    inside a code block never opens one, and the "Matches the goal" line ends the findings.
+
+    Under a severity section (a heading or a line that is only a severity label: "## High", "Low:", "**High**";
+    it runs to the next heading of its level or above, a rule, or another section, and a plain-line section also
+    to a "Notes:" line) each list item or table row, each subheading (with what is under it), and each paragraph
+    that names its own file:line is one finding, with the section's severity unless its first line has a label of
+    its own; one whose first line says none ("None.", "No findings.") is none. The section's own line belongs to
+    its finding when it holds just one. A severity word inside an entry's prose never changes its severity.
+
+    Elsewhere a finding opens at a line its label opens (finding_start) and runs to the next one, a heading, a
+    rule, or a section; one opened by a list item also ends at an unlabeled item beside it (an entry with no
+    severity of its own). A heading that opened none, right before a finding, belongs to it (its title, when the
+    severity is a field below it); a labeled heading ("### 1. High - ...") that holds no file:line yet takes a
+    severity field under it ("**Severity:** high") as its own."""
+    found, fence, title, blank = [], False, None, False
+    cur = section = None
+
+    def start(sev, line, by, heads=()):
+        nonlocal cur
+        cur = {"severity": sev, "first": line.strip(), "lines": [h for h in heads if h] + [line], "by": by,
+               "kind": item_kind(line), "indent": indent(line)}
+        found.append(cur)
+        if section is not None:
+            section["entries"].append(cur)
+
+    def end_section():
+        nonlocal section
+        if section is not None:
+            own = [e for e in section["entries"] if e["severity"] and located(e)]
+            if len(own) == 1:
+                own[0]["lines"][:0] = [h for h in section["heads"] if h]
+        section = None
+
     for line in (text or "").splitlines():
         if line.strip().startswith(("```", "~~~")):
             fence = not fence
+        if fence or line.strip().startswith(("```", "~~~")):
             if cur is not None:
                 cur["lines"].append(line)
             continue
-        if not fence:
-            if VERDICT_LINE.match(LEAD.sub("", line, count=1).lstrip("*_\"' ")):
-                break
-            sev = finding_start(line)
+        if VERDICT_LINE.match(LEAD.sub("", line, count=1).lstrip("*_\"' ")):
+            break
+        if not line.strip():
+            blank = True
+            if cur is not None:
+                cur["lines"].append(line)
+            continue
+        after_blank, blank = blank, False
+        heading = HEADING.match(line)
+        if heading or RULE.match(line):
+            level = len(heading.group(1)) if heading else 0
+            if section is not None and level <= section["level"]:
+                end_section()
+            cur, pending, title = None, title, None
+            if not heading:
+                continue
+            sev = section_of(line)
             if sev:
-                cur = {"severity": sev, "first": line.strip(), "lines": ([title] if title else []) + [line]}
-                findings.append(cur)
-                title = None
+                end_section()
+                section = {"severity": sev, "level": level, "heads": [pending, line], "entries": []}
+            elif section is not None:  # a subheading: one finding with everything under it
+                own = labeled(line)
+                start(section["severity"] if own is None else own or None, line, "heading")
+            else:
+                sev = finding_start(line)
+                if sev:
+                    start(sev, line, "heading", [pending])
+                else:
+                    title = line
+            continue
+        sev = section_of(line)
+        if sev:
+            end_section()
+            cur, section = None, {"severity": sev, "level": 7, "heads": [title, line], "entries": []}
+            title = None
+            continue
+        if section is not None and section["level"] == 7 and not indent(line) and LABEL_LINE.match(line) \
+                and item_kind(line) is None:  # "Not checked:" ends a section that no heading opened
+            end_section()
+            cur = None
+        if section is not None:
+            if cur is not None and cur["by"] == "heading":
+                cur["lines"].append(line)
                 continue
-            if line.lstrip().startswith("#") or RULE.match(line):
-                cur, title = None, line if line.lstrip().startswith("#") else None
-                continue
-            if line.strip():
-                title = None
+            own = labeled(line)
+            if cur is None or indent(line) <= cur["indent"] and (
+                    item_kind(line) is not None or own is not None or after_blank and FILE_LINE.search(line)
+                    and located(cur)):
+                none = NONE_AFTER.match(LEAD.sub("", line, count=1))
+                start(None if none or own == "" else own or section["severity"], line, "entry")
+            else:
+                cur["lines"].append(line)
+            continue
+        sev = finding_start(line)
+        if sev:
+            if cur is not None and cur["by"] == "heading" and not located(cur) and FIELD.search(line):
+                cur["severity"] = sev
+                cur["lines"].append(line)
+            else:
+                start(sev, line, "line", [title])
+            title = None
+            continue
+        title = None
         if cur is not None:
+            if cur["kind"] is not None and item_kind(line) == cur["kind"] and indent(line) <= cur["indent"]:
+                cur = None  # an item beside the one that opened the finding, with no label of its own
+                continue
             cur["lines"].append(line)
-    return [{"severity": f["severity"], "first": f["first"], "text": "\n".join(f["lines"]).lower()} for f in findings
-            if any(FILE_LINE.search(line) for line in f["lines"])]
+    end_section()
+    return [{"severity": f["severity"], "first": f["first"], "text": "\n".join(f["lines"]).lower()} for f in found
+            if f["severity"] and located(f)]
 
 
 def blocking_findings(text):
@@ -971,7 +1109,10 @@ def matches_goal(text):
 
 
 def names_file(finding, files):
-    return any(f.lower() in finding["text"] or f.rsplit("/", 1)[-1].lower() in finding["text"] for f in files)
+    """True when the finding names one of the files, by its path or its name, at a path boundary: tally/budgets.py
+    or budgets.py, never test_budgets.py or budgets.pyc."""
+    return any(re.search(r"(?<![\w.-])" + re.escape(name.lower()) + r"(?![\w-]|\.\w)", finding["text"])
+               for f in files for name in (f, f.rsplit("/", 1)[-1]))
 
 
 def fast_caught(items, ctx):

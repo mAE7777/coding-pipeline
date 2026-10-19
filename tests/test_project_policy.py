@@ -345,6 +345,25 @@ class FastRoutingTest(unittest.TestCase):
         self.install_fast(["dev", "gate"])
         self.assertTrue(self.status().rstrip().endswith("skill (/dev-fast, /gate-fast)."))
 
+    def test_an_invalid_policy_file_is_named_and_never_routed_to_fast(self):
+        # fast.py reads {"managed": true} alone as managed and stops there, so routing to it would be a dead end.
+        self.install_fast()
+        for text in ('{"managed": true}', "broken", '{"version": 2, "managed": true}'):
+            with self.subTest(text):
+                (self.project / policy.NAME).write_text(text)
+                out = self.status()
+                self.assertEqual(len(out.splitlines()), 1, out)
+                self.assertTrue(out.startswith("Coding workflow OFF"), out)
+                self.assertIn(" the policy file is invalid or unreadable (", out)
+                self.assertIn("); /pipeline on or /pipeline off rewrites it ", out)
+                info = json.loads(self.status(None, "--json"))
+                self.assertEqual((info["managed"], info["fast_workflow"]), (False, False))
+                self.assertNotIn("fast_workflow_note", info)
+                self.assertTrue(info["invalid"])
+        policy.set_mode(self.project, False)
+        self.assertEqual(self.status().splitlines()[1], self.LINE, "a rewritten file routes to fast again")
+        self.assertNotIn("invalid", json.loads(self.status(None, "--json")))
+
     def test_a_managed_project_is_never_routed_to_fast_and_a_worktree_follows_its_checkout(self):
         self.install_fast()
         subprocess.run(["git", "init", "-q", str(self.project)], check=True)

@@ -31,7 +31,9 @@ when the fast manifest exists and names its repository ("repo"), update runs `in
 "fast: current", "fast: updated <before> -> <after> (<n> commits)" with the commits, or "fast: refused: <reason>;
 <what to do>". A manifest without "repo" was written by an older fast install.py: "fast: installed by an older
 version; run python3 install.py apply once in the fast repository". The fast result is recorded under "fast" in
-~/.claude/.pipeline-sync.json. update exits 1 when either part was refused or failed.
+~/.claude/.pipeline-sync.json. The pipeline's own part is printed and recorded before the fast part starts (fast's
+entry says "started" until its result replaces it), and fast's install.py gets 300 s, so a fast part stopped by
+the shell's time limit loses only its own lines and result. update exits 1 when either part was refused or failed.
 
 status. The installed revision and time, the repository's HEAD and branch, how far it is ahead of or behind its
 upstream as of the last fetch (no network), uncommitted changes, the last update, and runs in progress; and for
@@ -77,7 +79,9 @@ HISTORY = 20
 # The paths install.py installs from; the private/ overlay is local by design and never committed.
 INSTALLED_FROM = ("skills/", "agents/", "hooks/")
 SUFFIX = "+local-changes"  # install.py's revision for a work tree with changes
-FAST_TIMEOUT = 600  # fast's install.py update: one fetch (60 s at most) and a copy of its skills
+# fast's install.py update: one fetch (60 s at most) and a copy of its skills; well inside the 600 s a shell
+# command may take, which the pipeline's own part shares.
+FAST_TIMEOUT = 300
 FAST_REAPPLY = "run python3 install.py apply once in the fast repository"
 FAST_RESULTS = ("current", "updated", "refused", "failed")
 SESSION_START_SECONDS = 8  # every git call of the SessionStart hook together (it is registered with 10 s)
@@ -302,12 +306,13 @@ def files_of(manifest):
     return files if isinstance(files, dict) else {}
 
 
-def write_sync(result):
-    """The update's result for the prompt hook and for status; installs also go into the history."""
+def write_sync(result, history_too=True):
+    """The update's result for the prompt hook and for status; installs also go into the history (once: the
+    rewrite that adds the fast part's result passes history_too=False)."""
     try:
         old = read_json(sync_path()) or {}
         history = [h for h in old.get("history") or [] if isinstance(h, dict)]
-        if result.get("installed"):
+        if result.get("installed") and history_too:
             history.append({"time": now(), "before": result.get("before"), "after": result.get("after"),
                             "changed": result.get("changed")})
         fast = result.get("fast")
@@ -404,20 +409,32 @@ def fail_lines(*outputs):
     return seen
 
 
-def update(no_pull=False):
+FAST_STARTED = ("it had not finished when this was recorded; if no update is running now, it was stopped first "
+                "(type /pipeline update again)")
+
+
+def update(no_pull=False, report=None):
+    """(exit code, result). The pipeline's own part is recorded in ~/.claude/.pipeline-sync.json, and passed to
+    report when given, before the fast part starts; the record is rewritten with fast's result when it ends. So a
+    fast part stopped by the shell's time limit loses only its own result."""
     result = {"result": None, "reason": None, "todo": None, "before": None, "after": None, "installed": False,
               "notes": [], "log": [], "log_more": 0, "changed": None, "repo": None, "fast": None}
     me = register_run("pipeline_sync.py update")  # one update at a time: a second one finds this entry
     try:
         code = _update(no_pull, result)
+        if fast_manifest_path().exists():
+            result["fast"] = {**fast_result(), "result": "started", "reason": FAST_STARTED}
+        write_sync(result)
+        if report is not None:
+            report(result)
         try:  # whatever the pipeline's own part did
             result["fast"] = fast_update(no_pull)
         except Exception as exc:  # the pipeline's own result is still reported
             result["fast"] = {**fast_result(), "result": "failed", "reason": f"the fast part hit an internal error: "
                                                                              f"{exc.__class__.__name__}: {exc}"}
+        write_sync(result, history_too=False)
     finally:
         unregister_run(me)
-    write_sync(result)
     fast = result["fast"]
     if fast is not None and fast["result"] not in ("current", "updated"):
         code = 1
@@ -599,7 +616,8 @@ def _update(no_pull, result):
     return 0
 
 
-def print_update(r):
+def print_update(r, fast=True):
+    """The update's lines: the pipeline's own part, then (with fast) the fast workflow's."""
     if r["result"] == "refused":
         print(f"update refused: {r['reason']}")
         print(f"What to do: {r['todo']}")
@@ -627,7 +645,8 @@ def print_update(r):
             print(r["output"])
     for note in r.get("notes") or []:
         print(f"note: {note}")
-    print_fast_update(r.get("fast"))
+    if fast:
+        print_fast_update(r.get("fast"))
 
 
 def print_fast_update(f):
@@ -963,11 +982,16 @@ def main(argv):
         else:
             print_status(s)
         return 0
-    code, result = update(no_pull="--no-pull" in argv)
-    if "--json" in argv:
+    if "--json" in argv:  # one JSON object, at the end; the record is still written before fast starts
+        code, result = update(no_pull="--no-pull" in argv)
         print(json.dumps(result, indent=1))
-    else:
-        print_update(result)
+        return code
+
+    def own_part(r):  # shown before fast starts, so a fast part stopped by the shell's limit loses only its lines
+        print_update(r, fast=False)
+        sys.stdout.flush()
+    code, result = update(no_pull="--no-pull" in argv, report=own_part)
+    print_fast_update(result["fast"])
     return code
 
 

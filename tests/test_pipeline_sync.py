@@ -422,14 +422,18 @@ class SyncTest(SyncBase):
 # The stand-in for the fast workflow's install.py update --json (its interface: one JSON object with result, before,
 # after, commits, notes, reason, todo; exit 0 for current and updated, 1 otherwise). It logs its arguments; the file
 # fast-mode in the home folder makes it refuse (dirty), print no JSON (garbage), print a line before the JSON
-# (stray), or report a diverged branch (diverged). Otherwise it installs HEAD when the manifest names another commit.
-STUB_FAST = r'''import json, subprocess, sys
+# (stray), report a diverged branch (diverged), or say it started and then take a minute (slow). Otherwise it
+# installs HEAD when the manifest names another commit.
+STUB_FAST = r'''import json, subprocess, sys, time
 from pathlib import Path
 REPO = Path(__file__).resolve().parent
 argv = sys.argv[1:]
 home = Path(argv[argv.index("--home") + 1])
 with open(home / "fast-calls.log", "a") as f:
     f.write(" ".join(argv) + "\n")
+if (home / "fast-mode").exists() and (home / "fast-mode").read_text().strip() == "slow":
+    (home / "fast-started").write_text("started")
+    time.sleep(60)
 def git(*a):
     return subprocess.run(["git", "-C", str(REPO), *a], capture_output=True, text=True).stdout.strip()
 manifest = home / ".claude/.pipeline-fast-install.json"
@@ -589,6 +593,42 @@ class FastSyncTest(SyncBase):
         finally:
             gate.kill()
             gate.wait()
+
+    def test_a_fast_part_stopped_by_the_shell_keeps_the_pipelines_record_and_lines(self):
+        new = self.upstream_commit("skills/dev/SKILL.md", "dev v2\n", "teach dev the new freeze")
+        self.fast_mode("slow")
+        p = subprocess.Popen([sys.executable, str(SYNC), "update"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=self.env, stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            deadline = time.time() + 60
+            while not (self.home / "fast-started").exists() and p.poll() is None and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertTrue((self.home / "fast-started").exists(), "the fast part started")
+        finally:
+            os.killpg(p.pid, signal.SIGTERM)  # the shell's time limit stops the command and what it started
+            out, _ = p.communicate(timeout=30)
+        self.assertIn(f"updated: {self.first[:7]} -> {new[:7]}\ncommits:\n  {new[:7]} teach dev the new freeze", out)
+        self.assertIn("Open sessions are told at their next prompt", out)
+        rec = self.sync_record()
+        self.assertEqual((rec["result"], rec["after"], rec["fast"]["result"]), ("updated", new, "started"))
+        self.assertEqual([h["after"] for h in rec["history"]], [new], "open sessions can be told what changed")
+        self.assertIn("fast last update: started at ", self.sync("status").stdout)
+        (self.home / ".claude/.pipeline-sessions").mkdir(exist_ok=True)
+        (self.home / ".claude/.pipeline-sessions/s9.json").write_text(json.dumps(
+            {"revision": self.first, "fast_revision": self.fast_first}))
+        self.assertIn("Skills changed: dev", self.notice_of(self.hook("UserPromptSubmit", session="s9")))
+        self.fast_mode("")
+        out = self.sync("update")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        rec = self.sync_record()
+        self.assertEqual((rec["result"], rec["fast"]["result"], len(rec["history"])), ("current", "current", 1),
+                         "the next update replaces fast's entry and records the install once")
+        sys.path.insert(0, str(SYNC.parent))
+        try:
+            import pipeline_sync
+        finally:
+            sys.path.remove(str(SYNC.parent))
+        self.assertLessEqual(pipeline_sync.FAST_TIMEOUT, 300, "fast's part leaves the pipeline's room in 600 s")
 
     def test_no_pull_reaches_fast_and_its_notes_are_printed(self):
         self.fast_mode("diverged")

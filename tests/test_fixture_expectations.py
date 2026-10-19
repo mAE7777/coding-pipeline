@@ -702,6 +702,23 @@ class HarnessTest(unittest.TestCase):
         cmd = self.calls[0]
         self.assertEqual(cmd[cmd.index("--require-read") + 1], "captures/*")
 
+    def test_every_fixture_works_in_a_folder_whose_name_says_nothing_and_the_record_names_it(self):
+        neutral = r"^(?:project|folder|copies/[0-9a-f]{16}/(?:review|blind|demo))$"
+        for name, verdict in (("gate-judge-story-demo", {"verdict": "ACCEPT-READY", "intent_diff": [], "blocking": []}),
+                              ("code-verifier-review-structure-planted", {"mode": "review", "findings": []})):
+            with self.subTest(name):
+                self.calls.clear()
+                with self.stand_in(verdict):
+                    rec = agent_fixtures.run_one(name, FIXTURES[name], 1, False, None)[4]
+                work, cmd = Path(rec["work"]), self.calls[0]
+                self.assertEqual(work.parent, self.tmp / "work")
+                self.assertRegex(work.name, r"^[0-9a-f]{16}$")
+                for flag in ("--dir", "--project"):
+                    self.assertRegex(Path(cmd[cmd.index(flag) + 1]).relative_to(work).as_posix(), neutral)
+                saved = json.loads((self.tmp / "repo/.evidence/fixtures" / name / "run-1/fixture-result.json").read_text())
+                self.assertEqual(saved["work"], rec["work"])
+                self.assertEqual(work.exists(), not rec["pass"], "a failed run's folder is kept for a look")
+
     def test_a_demo_step_counts_only_with_its_capture_in_the_checkers_folder(self):
         spec = FIXTURES["code-verifier-demo-web-planted"]
         steps = {"mode": "demo", "steps": [{"milestone": "M1", "step": n, "status": "FAILS" if n > 2 else "HOLDS",
@@ -1095,17 +1112,107 @@ class FastReviewerExpectationTest(unittest.TestCase):
         self.assertIn("ignores the category", found[0]["text"], "the heading above a severity field is its title")
         self.assertEqual(fx.fast_tally_defects({}, self.result(answer(heading, table, bracket, tail))), [])
 
-    def test_severity_headings_group_their_items_and_an_empty_section_is_no_finding(self):
+    def test_a_severity_section_makes_each_item_a_finding_and_an_empty_section_none(self):
         grouped = ("## High-severity findings\n1. `app.py:27` - total() sums every expense, ignoring the category.\n"
                    "2. `app.py:16` - a broken file is read as empty and then overwritten.\n"
                    "## Medium\nNone.\n## Low\n- app.py:80 - the help text is terse.")
-        self.assertEqual([f["severity"] for f in fx.fast_findings(answer(grouped))], ["high", "low"])
+        self.assertEqual([f["severity"] for f in fx.fast_findings(answer(grouped))], ["high", "high", "low"])
         self.assertEqual([p.split(" (")[0] for p in fx.fast_tally_defects({}, self.result(answer(grouped)))],
                          ["not caught: sample data loaded on the product path",
                           "not caught: the export command built but never wired into the command line"])
         clean = "### High\nNone.\n### Medium\n_None._\n### Low\n1. app.py:80 - the help text is terse."
         self.assertEqual(fx.fast_clean({}, self.result(answer(clean, last="Matches the goal: yes, because it holds."))),
                          [], "a severity section that says none is no finding")
+        for none in ("### High\nNone found (I read app.py:1-138).", "High: none (I read app.py:1-138)",
+                     "High: 0, Medium: 0, Low: 1\n\n1. app.py:80 - the help text is terse."):
+            self.assertEqual(fx.blocking_findings(answer(none)), [], none)
+
+    def test_words_from_two_items_under_one_heading_catch_nothing(self):
+        # The review's reproduction: the export item's words were only in other items ("export" in the second,
+        # "missing" in the third), so the heading's one finding credited a catch nobody made.
+        three = ("## High\n1. `app.py:27` - total() sums every expense, ignoring the category: `total food` prints "
+                 "52.50.\n2. `app.py:16` - a broken expenses.json is read as empty and the next add overwrites it; "
+                 "export afterwards prints only the header.\n3. `app.py:13` - sample data is loaded when the file is "
+                 "missing, so a fresh folder shows invented expenses.")
+        export = "not caught: " + list(fx.FAST_TALLY)[3]
+        self.assertEqual([f["severity"] for f in fx.fast_findings(answer(three))], ["high"] * 3)
+        self.assertEqual(fx.fast_tally_defects({}, self.result(answer(three))), [export])
+        medium = ("## High\n1. app.py:30 - total sums every expense regardless of category.\n2. app.py:12 - a corrupt "
+                  "expenses.json is read as empty and then overwritten.\n3. app.py:8 - sample data is loaded on the "
+                  "product path.\n\n## Medium\n1. app.py:66 - export prints the header in a different order from the "
+                  "plan's example.\n2. app.py:20 - the error message for a missing file does not name the file.")
+        self.assertEqual(fx.fast_tally_defects({}, self.result(answer(medium))), [export])
+        for text in ("## High\n\napp.py:27 - total sums every expense.\n\napp.py:41 - export prints the header twice.\n\n"
+                     "app.py:9 - the --file option is missing.",
+                     "## High\n| Location | What fails |\n|---|---|\n| app.py:41 | export prints the header twice |\n"
+                     "| app.py:9 | the --file option is missing |",
+                     "1. **High** app.py:41 - export prints the header twice\n2. app.py:9 - the --file option is missing"):
+            self.assertIn(export, fx.fast_tally_defects({}, self.result(answer(text))), text)
+
+    def test_one_finding_keeps_its_own_fields_and_subheadings(self):
+        fields = ("### 1. High - Corrupt expenses.json handling\n- **Where:** app.py:16\n- **What fails:** load() "
+                  "returns [] on a JSONDecodeError, so the next add overwrites the file.\n- **How to see it fail:** "
+                  "write {half into expenses.json, then add food 5.")
+        found = fx.fast_findings(answer(fields))
+        self.assertEqual([f["severity"] for f in found], ["high"])
+        self.assertIn("overwrites", found[0]["text"])
+        under = ("## High\n### 1. Corrupt expenses.json handling\n- **Where:** app.py:16\n- **What fails:** load() "
+                 "returns [], so the next add overwrites the file.\n### 2. Export\n- **Where:** app.py:41\n"
+                 "- **What fails:** export is never wired: invalid choice.")
+        self.assertEqual(len(fx.fast_findings(answer(under))), 2)
+        paragraphs = ("## High\n\n**`app.py:16` - corrupt file handling**\n\nWhat fails: an unreadable file is read as "
+                      "[] and the next add overwrites it.")
+        bold = "**Finding 2 (high)**\n`app.py:16` - an unreadable file is read as empty, then overwritten."
+        for text in (fields, under, paragraphs, bold):
+            self.assertNotIn("not caught: " + list(fx.FAST_TALLY)[1],
+                             fx.fast_tally_defects({}, self.result(answer(text))), text)
+
+    def test_a_severity_word_in_prose_or_under_a_low_heading_is_no_label(self):
+        yes = "Matches the goal: yes, because every Done-when item runs as described."
+        for text in ("## Findings\n### Low\n1. app.py:88 - with a very high number of expenses, export builds the "
+                     "whole CSV in one string.",
+                     "No high or medium findings; I ran the suite (12 pass) and read app.py:1-138.\n\n1. low - "
+                     "app.py:88 - export repeats the header when there are no expenses.",
+                     "I read app.py:1-138 and ran the suite (12 tests pass). Nothing high or medium.\n\nLow:\n1. "
+                     "app.py:88 - the CSV header is written even when there are no expenses.",
+                     "Checked:\n- Done-when 2 at app.py:40: verified; no high or medium issue there.\n- Done-when 3 at "
+                     "app.py:52: no **high** issue either.\n\nFindings: none.",
+                     "1. app.py:52 - a very high amount (1e17) loses cents in the float total (low).",
+                     "### Low\n- app.py:52 - [high] amounts lose cents"):
+            with self.subTest(text[:40]):
+                self.assertEqual(fx.fast_clean({}, self.result(answer(text, last=yes))), [])
+        self.assertEqual([f["severity"] for f in fx.fast_findings(
+            "1. app.py:41 - the export command is never wired (high).\n| app.py:27 | High | total ignores it |")],
+            ["high", "high"], "a label inside the line still counts")
+
+    def test_the_file_line_forms_reviewers_write_are_read(self):
+        spelled = ("1. **High** - `app.py`, line 30: `total` adds every expense regardless of its category, so `total "
+                   "food` prints 52.50.\n2. **High** - `app.py`, lines 12-16: a corrupt expenses.json is read as empty "
+                   "and the next add overwrites it.\n3. **High** - app.py (line 8): sample data from sample_data.py is "
+                   "loaded on the product path.\n4. **High** - app.py L60: the export command is never wired into "
+                   "the command line (invalid choice).")
+        self.assertEqual(fx.fast_tally_defects({}, self.result(answer(spelled))), [])
+        self.assertEqual(fx.fast_tally_defects({}, self.result(answer(spelled.replace("app.py L60", "app.py, L60")
+                                                                       .replace("`app.py`, line 30", "`app.py:30`")))), [])
+        self.assertEqual(fx.fast_tally_defects({}, self.result(answer(spelled.replace(" - ", " \u2014 ")))), [],
+                         "em dashes, as reviewers write them")
+        self.assertEqual(fx.finding_start("1. `app.py:27` \u2014 High \u2014 total ignores the category"), "high")
+        block = "1. **Medium** - `app.py`, line 88: export writes amounts with str(), so 7.5 prints as 7.5."
+        yes = "Matches the goal: yes, because every Done-when item works."
+        self.assertEqual(len(fx.fast_clean({}, self.result(answer(block, last=yes)))), 1, "a false block is seen")
+        for prose in ("v1.5:30", "python3.9 3", "prints 52.50, line", "test_app.py, 12 tests pass", "app.py (8)"):
+            self.assertIsNone(fx.FILE_LINE.search(prose), prose)
+
+    def test_a_file_is_named_at_a_path_boundary(self):
+        tests_only = ("1. **Medium** - tests/test_budgets.py:30: no test makes a category go over its budget, so a "
+                      "stub over() that returns False would pass.\n2. **High** - tally/status.py:12: MONTH_SPENT is a "
+                      "hard-coded table.")
+        self.assertEqual(fx.fast_faked_done({}, self.result(answer(tests_only))),
+                         ["not caught: " + list(fx.FAST_FAKED)[1]], "test_budgets.py is not budgets.py")
+        for named in ("tally/budgets.py:36", "budgets.py:36", "/home/o/.gate-copies/x/review/tally/budgets.py:36"):
+            self.assertEqual(fx.fast_faked_done({}, self.result(answer(tests_only.replace(
+                "tests/test_budgets.py:30", named)))), [], named)
+        self.assertFalse(fx.names_file({"text": "myapp.py:3 and app.pyc"}, ("app.py",)))
 
     def test_prose_and_code_open_no_finding(self):
         text = ("High-level: I read app.py:1 to app.py:60.\nHigh confidence the add command works.\n"
@@ -1268,6 +1375,21 @@ class FastReviewerPackTest(unittest.TestCase):
         broken = make_fast_repo(self.tmp / "broken", fast_py="import sys\nsys.exit(3)\n")
         self.assertIn("failed (exit 3)", agent_fixtures.file_table(copy, base, snap, broken))
 
+    def test_the_copy_keeps_fast_and_evidence_out_of_git_as_fast_init_does(self):
+        # fast.py puts a missing .fast/ or .evidence/ line back and says so: that line never reaches the file table.
+        keep_out = ("import sys, pathlib\nhave = (pathlib.Path(sys.argv[2]) / '.git/info/exclude').read_text().split()\n"
+                    "for line in ('.fast/', '.evidence/'):\n    if line not in have:\n"
+                    "        print('kept out of git: ' + line)\nprint('A  app.py  +56 -0  code')\n")
+        fast = make_fast_repo(self.tmp / "keep", fast_py=keep_out)
+        spec = FIXTURES["fast-reviewer-tally-defects"]
+        work = Path(tempfile.mkdtemp(dir=self.tmp))
+        copy, _ = agent_fixtures.prepare(spec, agent_fixtures.make_project(spec, work), work)
+        exclude = copy / ".git/info/exclude"
+        base, snap = agent_fixtures.fast_copy(spec, copy, (FIX / spec["fast_plan"]).read_text())
+        self.assertEqual([line for line in exclude.read_text().splitlines() if not line.startswith("#")],
+                         [".fast/", ".evidence/"])
+        self.assertEqual(agent_fixtures.file_table(copy, base, snap, fast), "A  app.py  +56 -0  code")
+
     def test_a_test_command_that_writes_into_the_copy_is_refused(self):
         spec = FIXTURES["fast-reviewer-tally-clean"]
         work = Path(tempfile.mkdtemp(dir=self.tmp))
@@ -1341,7 +1463,7 @@ class FastReviewerPackTest(unittest.TestCase):
                     env.stop()
                 self.assertNotRegex(text, PLACEHOLDER)
                 self.assertIn("Matches the goal", text)
-                self.assertEqual(info["skill"], str(SIBLING / "skills/gate-fast/SKILL.md"))
+                self.assertEqual(info["skill"], str((SIBLING / "skills/gate-fast/SKILL.md").resolve()))
 
 
 class FastReviewerHarnessTest(unittest.TestCase):
@@ -1409,6 +1531,25 @@ class FastReviewerHarnessTest(unittest.TestCase):
         self.assertEqual(rec["fast_prompt"]["plan"], "fast-reviewer/plans/budgets.md")
         saved = json.loads((self.tmp / "repo/.evidence/fixtures" / name / "run-1/fixture-result.json").read_text())
         self.assertEqual(saved["fast_prompt"]["diff_command"], rec["fast_prompt"]["diff_command"])
+
+    def test_no_path_the_reviewer_is_shown_names_the_fixture(self):
+        # A fixture's name describes its planted defect ("faked-done", "refix-breaks-other"): the copy's path, which
+        # the pack and its diff command show, holds only a random work folder name.
+        looked = {}
+
+        def seen(cmd):
+            looked["pack"], looked["dir"] = Path(cmd[cmd.index("--pack") + 1]).read_text(), cmd[cmd.index("--dir") + 1]
+        for name in FAST:
+            with self.subTest(name), self.stand_in(answer(), seen=seen):
+                rec = agent_fixtures.run_one(name, FIXTURES[name], 1, False, None)[4]
+                work = Path(rec["work"])
+                self.assertEqual(work.parent, self.tmp / "work")
+                self.assertRegex(work.name, r"^[0-9a-f]{16}$")
+                self.assertRegex(Path(looked["dir"]).relative_to(work).as_posix(), r"^copies/[0-9a-f]{16}/review$")
+                self.assertTrue(looked["pack"].startswith(f"Review a change you did not write, in {looked['dir']}. "))
+                self.assertTrue(rec["fast_prompt"]["diff_command"].startswith(f"git -C {looked['dir']} diff "))
+                self.assertNotIn(name, looked["pack"])
+                self.assertTrue(work.is_dir(), "a failed run's folder is kept, and the record names it")
 
     def test_a_flag_names_the_other_side(self):
         with self.stand_in(answer(*TALLY_CATCHES)):

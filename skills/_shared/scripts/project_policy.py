@@ -10,7 +10,11 @@ No selection means OFF. A repository's worktrees share the main checkout's
 status in a project the pipeline does not manage, when the fast workflow is installed
 (~/.claude/skills/dev-fast/SKILL.md), adds one line naming the installed /<name>-fast
 skills to use for this project instead; --json then has "fast_workflow": true and that
-line as "fast_workflow_note" ("fast_workflow" is false otherwise).
+line as "fast_workflow_note" ("fast_workflow" is false otherwise). A policy file that
+exists but is invalid (such as {"managed": true} without "version": 1) reads OFF and
+gets no fast line, since the fast workflow reads such a file as managed and stops; its
+status says the file is invalid and that /pipeline on or /pipeline off rewrites it
+(--json: "invalid" holds the problem).
 """
 import hashlib
 import json
@@ -90,7 +94,7 @@ def read(start):
     except FileNotFoundError:
         pass
     except (OSError, ValueError, UnicodeError) as exc:
-        info["reason"] = f"invalid or unreadable policy ({exc})"
+        info.update(reason=f"invalid or unreadable policy ({exc})", invalid=str(exc))
     return info
 
 
@@ -216,7 +220,10 @@ def main(argv):
         return 2
     if argv[0] == "check":
         return 0 if info["managed"] else 3
-    fast = fast_workflow() if argv[0] == "status" and not info["managed"] else None
+    if argv[0] == "status" and "invalid" in info:  # fast reads {"managed": true} alone as managed: no route there
+        info["reason"] = (f"the policy file is invalid or unreadable ({info['invalid']}); /pipeline on or /pipeline "
+                          "off rewrites it")
+    fast = fast_workflow() if argv[0] == "status" and not info["managed"] and "invalid" not in info else None
     if argv[0] == "status":
         info["fast_workflow"] = fast is not None
         if fast:
