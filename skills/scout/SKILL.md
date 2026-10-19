@@ -31,8 +31,8 @@ decide the plan.
 Facts about an existing tree for the brief's starting state, each with evidence: what builds and what the
 tests say (through `heavy.py run`), dirty files and who likely left them, running processes, seams, hazards,
 and what earlier agents claimed against what is actually there. For wide reads, brief each Explore agent with
-`~/.claude/skills/craft/explore/explorer-prompt.md` (one angle each, within the session's subagent limits),
-and write the map in the shape of `~/.claude/skills/craft/explore/explainer-prompt.md` (Overview, Key concepts,
+`~/.claude/skills/code-craft/explore/explorer-prompt.md` (one angle each, within the session's subagent limits),
+and write the map in the shape of `~/.claude/skills/code-craft/explore/explainer-prompt.md` (Overview, Key concepts,
 How it works, Where things live, Gotchas), the facts above included; `references/brownfield-analysis-guide.md`
 has the mapping strategy. Never reset, clean, or reformat the tree. A tree `record_check.py` routes to
 `/plan adopt` goes there: adoption uses this mapping inside a fuller procedure.

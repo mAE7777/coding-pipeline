@@ -107,8 +107,8 @@ meaning first, any ID only in parentheses after it.
 
 ## Output that leaves the machine
 Commits, READMEs, changelogs, and shipped text read as written by a human developer: no AI or tooling
-traces, no skill or agent names, and no spaced em-dashes. The writing standard is `craft/writing/unslop.md`
-and `craft/writing/technical-writing.md`; `gate.sh` prose-lint WARNs on what it can see. Committed planning
+traces, no skill or agent names, and no spaced em-dashes. The writing standard is `code-craft/writing/unslop.md`
+and `code-craft/writing/technical-writing.md`; `gate.sh` prose-lint WARNs on what it can see. Committed planning
 files use neutral labels (`[owner <date>]`, `[proposed]`, `[research <ref> <grade>]`, `[environment <date>]`);
 files that name models and tools stay local. `gate.sh` pipeline-traces FAILs a committed record file that names
 a pipeline tool and WARNs on one that names a model or a coding agent.

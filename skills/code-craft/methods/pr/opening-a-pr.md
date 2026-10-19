@@ -6,7 +6,7 @@ Read when work goes out as a pull request. A milestone the owner accepted become
 
 **Commits.** Commit liberally. Rebase into small, ordered commits before opening PRs. Each commit is a future PR: landable, ordered to tell the story. Amend when the fix belongs in a just-made commit. New commit when separable. Commit bodies don't restate the subject.
 
-**PRs.** Run `/craft review` over the diff before commit and apply `../../review/comment-keep-list.md` before review. Write every PR title, description, and commit body with `../../writing/technical-writing.md` (every layer except Diátaxis, and apply the STE vocabulary rules: one word per action, keep articles, a plain verb over `-ing` where one works), then apply `../../writing/unslop.md`.
+**PRs.** Run `/code-craft review` over the diff before commit and apply `../../review/comment-keep-list.md` before review. Write every PR title, description, and commit body with `../../writing/technical-writing.md` (every layer except Diátaxis, and apply the STE vocabulary rules: one word per action, keep articles, a plain verb over `-ing` where one works), then apply `../../writing/unslop.md`.
 
 **Titles.** Conventional Commits `type(scope): subject`, no trailing period. Type such as `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, or `perf`. Scope is the area, such as `pstack` or `poteto-mode`. Subject is short, imperative, and names a real symbol when one carries the change, for example `fix(pstack): retarget opening-a-pr babysit trigger`.
 
@@ -29,4 +29,4 @@ After the sections, attach videos or screenshots when they prove a claim. Full S
 
 **Babysit.** Opening a PR does not start a babysit. Post the URL and keep building. Finish the phase or stack first. Run a separate babysit pass only when the user asks for one after the whole stack exists. A babysit for each new PR stalls the build and spends checks on commits later waves restart. Push back when feedback drifts from intent.
 
-A subagent that opens a PR runs `/craft review` and the comment keep-list, and posts the URL. It returns to the parent without babysitting.
+A subagent that opens a PR runs `/code-craft review` and the comment keep-list, and posts the URL. It returns to the parent without babysitting.

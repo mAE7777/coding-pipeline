@@ -26,8 +26,8 @@ When `record_check.py` does not report `complete`, a fix still goes ahead when t
 fix log is created, and the missing record is named in your report (adoption is `/plan adopt`).
 
 ## Steps
-The method is `~/.claude/skills/craft/methods/bug-fix.md`, read after `~/.claude/skills/craft/index.md`,
-whose overrides win. A fix in shared code also gets `~/.claude/skills/craft/review/blast-radius.md`.
+The method is `~/.claude/skills/code-craft/methods/bug-fix.md`, read after `~/.claude/skills/code-craft/index.md`,
+whose overrides win. A fix in shared code also gets `~/.claude/skills/code-craft/review/blast-radius.md`.
 1. **Classify** the origin: code, plan (the contract was wrong), interface, environment, or test. A plan or
    interface origin means the fix also needs a decision entry (`decisions.py add`), and possibly the owner.
 2. **Reproduce.** When the cause is not obvious after reproducing, match the symptom in

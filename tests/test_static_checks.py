@@ -47,8 +47,8 @@ def tree(root):
     for role, tools in run_isolated.ROLES.items():
         if role not in sc.NO_AGENT_FILE:
             put(root / "agents" / f"{role}.md", agent(role, "Internal checker. Not for direct use.", tools))
-    craft = root / "skills/craft"
-    put(craft / "SKILL.md", skill("craft", "Code craft on demand: /craft review."))
+    craft = root / "skills/code-craft"
+    put(craft / "SKILL.md", skill("code-craft", "Code craft on demand: /code-craft review."))
     put(craft / "index.md", "# Craft index\n")
     write_manifest(craft)
     return root
@@ -162,18 +162,18 @@ class AlwaysLoadedTest(Base):
 
 class CraftBudgetTest(Base):
     def test_the_index_and_the_skill_have_byte_budgets(self):
-        put(self.root / "skills/craft/index.md", "x" * 10240)
-        put(self.root / "skills/craft/SKILL.md", "x" * 6144)
+        put(self.root / "skills/code-craft/index.md", "x" * 10240)
+        put(self.root / "skills/code-craft/SKILL.md", "x" * 6144)
         self.check(sc.check_craft_budget)
         self.assertEqual(self.fails(), [])
-        put(self.root / "skills/craft/index.md", "x" * 10241)
-        put(self.root / "skills/craft/SKILL.md", "x" * 6145)
+        put(self.root / "skills/code-craft/index.md", "x" * 10241)
+        put(self.root / "skills/code-craft/SKILL.md", "x" * 6145)
         self.check(sc.check_craft_budget)
-        self.assertFails("skills/craft/index.md  10241 bytes (budget 10240", "skills/craft/SKILL.md  6145 bytes "
-                                                                              "(budget 6144")
-        (self.root / "skills/craft/index.md").unlink()
+        self.assertFails("skills/code-craft/index.md  10241 bytes (budget 10240",
+                         "skills/code-craft/SKILL.md  6145 bytes (budget 6144")
+        (self.root / "skills/code-craft/index.md").unlink()
         self.check(sc.check_craft_budget)
-        self.assertFails("skills/craft/index.md  missing")
+        self.assertFails("skills/code-craft/index.md  missing")
 
 
 class RoutesAndAgentsTest(Base):
@@ -275,11 +275,11 @@ class CraftProvenanceTest(Base):
     def test_a_vendored_file_that_drifted_or_an_unlisted_one_fails(self):
         self.check(sc.check_craft_provenance)
         self.assertEqual(self.fails(), [])
-        put(self.root / "skills/craft/index.md", "# Craft index, edited\n")
+        put(self.root / "skills/code-craft/index.md", "# Craft index, edited\n")
         self.check(sc.check_craft_provenance)
-        self.assertFails("skills/craft  craft_sync.py verify", "index.md")
-        write_manifest(self.root / "skills/craft")
-        put(self.root / "skills/craft/extra.md", "not listed\n")
+        self.assertFails("skills/code-craft  craft_sync.py verify", "index.md")
+        write_manifest(self.root / "skills/code-craft")
+        put(self.root / "skills/code-craft/extra.md", "not listed\n")
         self.check(sc.check_craft_provenance)
         self.assertFails("extra.md")
 

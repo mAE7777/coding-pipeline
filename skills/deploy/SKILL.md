@@ -30,7 +30,7 @@ Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/
    did. Otherwise run `gate_run.py <project> --milestone M<k> --full` first. An earlier ship, of a milestone not yet accepted or with open blocking findings,
    needs the owner's named waiver, recorded as a decision in their words. In a venture project the private
    overlay adds helm's launch conditions.
-2. **Through a pull request**, when the milestone ships as one: `/craft pr <open | check | babysit | ship>`
+2. **Through a pull request**, when the milestone ships as one: `/code-craft pr <open | check | babysit | ship>`
    (babysit fixes go through `/fix`; `ship` only on the owner's explicit request to land). Before any PR
    lands, `python3 ~/.claude/skills/_shared/scripts/pr_watch.py land-check <pr> --project <dir> --milestone M<k>`
    must pass. Exit 1 means the head is not the accepted candidate: a focused re-gate and the owner's
@@ -44,7 +44,7 @@ Venture projects (a `truth/` folder): read `~/.claude/skills/_shared/references/
    reviews, research, sources, `.evidence/`, or `.env` may be inside. Target details:
    `references/deployment-targets.md`.
 5. **Public text** (README, descriptions, store listings, the changelog): written per
-   `~/.claude/skills/craft/writing/unslop.md`, with no AI or tooling traces and no inflated claims. When the
+   `~/.claude/skills/code-craft/writing/unslop.md`, with no AI or tooling traces and no inflated claims. When the
    owner's standing requirements file (`~/.claude/skills/_shared/references/owner-standing.md`) sets limits
    on public statements, check against them and stop on a conflict.
 6. **Changelog**: what a person can now do and what was fixed, in the product's languages, short.

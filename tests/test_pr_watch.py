@@ -1095,7 +1095,7 @@ class ScriptTest(unittest.TestCase):
 
     def test_shipping_merges_only_the_head_land_check_checked(self):
         import re
-        text = (ROOT / "skills/craft/methods/pr/shipping.md").read_text(encoding="utf-8")
+        text = (ROOT / "skills/code-craft/methods/pr/shipping.md").read_text(encoding="utf-8")
         merges = re.findall(r"`(gh pr merge [^`]*)`", text)
         self.assertTrue(merges)
         for command in merges:

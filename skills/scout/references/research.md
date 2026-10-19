@@ -26,7 +26,7 @@
 - Absence of evidence is not evidence of absence. "No source mentions X" is reported as a search that found
   nothing, never as "X is not a concern".
 
-## Phrasing (from `~/.claude/skills/craft/explore/epistemics.md`; the grades above stay)
+## Phrasing (from `~/.claude/skills/code-craft/explore/epistemics.md`; the grades above stay)
 - Confidence words ("because", "was designed to", "fixes", "the team decided") need a primary or triangulated
   source beside them. An inferred claim is hedged ("appears to", "likely", "is consistent with") and shows its
   chain: given A and B, C seems likely because D.

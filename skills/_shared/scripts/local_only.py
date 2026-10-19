@@ -5,7 +5,7 @@ Usage: local_only.py <project> [<pattern> ...]
 
 With no patterns, adds the pipeline's standard local-only set: the working files of docs/project (brief, state,
 gate settings, handoffs, reviews, research, captured sources, gate canaries, and verify/, the builder's own
-verification skill made from craft/verify, which never ships), .evidence/ (heavy.py's logs/ and failures.jsonl
+verification skill made from code-craft/verify, which never ships), .evidence/ (heavy.py's logs/ and failures.jsonl
 included), the browser tool's snapshots, and AGENTS.md and CLAUDE.md (committed output carries no tooling
 files). Each pattern is added once; existing lines are kept. Works from any folder inside the repository (git
 rev-parse finds the exclude file, also in a worktree). Prints what it added. Exit 0; 1 when the folder is not in

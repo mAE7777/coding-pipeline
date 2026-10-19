@@ -269,15 +269,15 @@ class InstallTest(unittest.TestCase):
     def test_apply_installs_the_craft_layer_the_routing_table_and_every_shared_script(self):
         out = self.run_i("apply")
         claude = self.home / ".claude"
-        expected = [p for p in (ROOT / "skills/craft").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+        expected = [p for p in (ROOT / "skills/code-craft").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
         self.assertGreater(len(expected), 60)
         for src in expected:
-            dst = claude / "skills/craft" / src.relative_to(ROOT / "skills/craft")
+            dst = claude / "skills/code-craft" / src.relative_to(ROOT / "skills/code-craft")
             self.assertTrue(dst.is_file(), f"craft file not installed: {dst}")
             self.assertEqual(dst.read_bytes(), src.read_bytes(), dst)
         for rel in ("UPSTREAM.json", "LICENSE-pstack", "index.md", "principles/principle-fix-root-causes.md",
                     "methods/pr/babysit.md", "verify/feature-map-example/README.md"):
-            self.assertTrue((claude / "skills/craft" / rel).is_file(), rel)
+            self.assertTrue((claude / "skills/code-craft" / rel).is_file(), rel)
         for rel in ("models.json", "references/agent-product/README.md",
                     "references/agent-product/reference/coordination.py",
                     "references/agent-product/reference/test_coordination.py",
@@ -290,7 +290,7 @@ class InstallTest(unittest.TestCase):
         table = claude / "skills/_shared/models.json"
         self.assertEqual(manifest["routing_table"], {"path": str(table), "sha256": hashlib.sha256(
             (ROOT / "skills/_shared/models.json").read_bytes()).hexdigest()}, "the routing table's hash is on record")
-        self.assertIn(str(claude / "skills/craft/index.md"), manifest["files"])
+        self.assertIn(str(claude / "skills/code-craft/index.md"), manifest["files"])
         self.assertNotIn("missing:", out.stdout)
         self.assertNotIn("differs from the repository", out.stdout)
         self.assertNotIn("left over from an earlier version", out.stdout)
@@ -341,15 +341,15 @@ class InstallTest(unittest.TestCase):
             for name in install.PERSONAL:
                 self.assertNotIn(claude / name, want)
 
-    def test_codex_carries_the_craft_skill_and_the_new_shared_files(self):
+    def test_codex_carries_the_code_craft_skill_and_the_new_shared_files(self):
         pkg = self.codex_package({"pipeline": "PASS"})
         out = self.run_i("apply")
         self.assertIn("Codex synced from the package", out.stdout, out.stdout[-800:])
         self.assertNotIn("Codex has no", out.stdout)
         self.assertNotIn("does not carry", out.stdout)
-        self.assertTrue((pkg / ".agents/skills/craft/SKILL.md").is_file())
+        self.assertTrue((pkg / ".agents/skills/code-craft/SKILL.md").is_file())
         recorded = (pkg / "source-manifest.sha256").read_text()
-        for rel in ("skills/craft/index.md", "skills/_shared/models.json",
+        for rel in ("skills/code-craft/index.md", "skills/_shared/models.json",
                     "skills/_shared/references/agent-product/reference/coordination.py"):
             self.assertIn(f"  {rel}\n", recorded)
 

@@ -431,7 +431,7 @@ class ReviewChangeTest(unittest.TestCase):
         self.assertNotIn("Structure lens", text, "the demo checks behavior, not structure")
 
     def test_a_missing_lens_is_named(self):
-        # The scripts installed without skills/craft beside them: the lens folder is found from the script's place.
+        # The scripts installed without skills/code-craft beside them: the lens folder is found from the script's place.
         scripts = self.root.parent / "install/skills/_shared/scripts"
         shutil.copytree(RP.parent, scripts, ignore=shutil.ignore_patterns("__pycache__"))
         r = subprocess.run([sys.executable, "-B", str(scripts / "render_pack.py"), "code-verifier", "--project",
@@ -439,7 +439,7 @@ class ReviewChangeTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stderr)
         lens = section_of(self.out.read_text(), "Structure lens (finding class structure)")
         self.assertIn("NOT PROVIDED: the structure lens", lens)
-        self.assertIn("craft/review/code-quality-review.md", lens)
+        self.assertIn("code-craft/review/code-quality-review.md", lens)
 
 
 SCOPE_DELTA = """diff --git a/src/a.py b/src/a.py

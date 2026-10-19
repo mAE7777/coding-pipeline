@@ -15,8 +15,8 @@ Roles and what their pack contains (nothing else reaches the checker):
                    status, exit, and reason, and its "for_reviewer" items: what the gate could not run); the
                    stack pack; stand-in consents from decisions.md (and, in a venture project,
                    truth/position.md); the inventory candidates for --copy; the change since the milestone's
-                   baseline; any --extra blocks; the structure lens (skills/craft/review/code-quality-review.md
-                   and comment-keep-list.md, verbatim).
+                   baseline; any --extra blocks; the structure lens
+                   (skills/code-craft/review/code-quality-review.md and comment-keep-list.md, verbatim).
                    The change: a table of every changed file (status, added and removed lines, kind: contract
                    or wiring, code, test, manifest, lockfile, generated, vendored, binary, other) and up to
                    DIFF_BUDGET (20,000) bytes of hunks in priority order: the files the milestone's Wiring
@@ -91,7 +91,8 @@ from intent_lock import effective  # noqa: E402
 from languages import language  # noqa: E402
 
 DIFF_BUDGET = 20000  # bytes of hunks a review or re-verify pack inlines; the full patch sits beside the pack
-LENS = HERE.parent.parent / "craft" / "review"  # skills/craft/review, in the repository and in ~/.claude/skills
+# skills/code-craft/review, in the repository and in ~/.claude/skills
+LENS = HERE.parent.parent / "code-craft" / "review"
 LENS_FILES = ("code-quality-review.md", "comment-keep-list.md")
 LOCKFILE_NAMES = LOCKFILES | {"Pipfile.lock", "Package.resolved", "gradle.lockfile", "flake.lock", "deno.lock",
                               "mix.lock", "pubspec.lock", "packages.lock.json", "npm-shrinkwrap.json"}

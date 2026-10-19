@@ -81,7 +81,7 @@ the build.
 | `/explain` | Explains what exists to an engineer, a founder, an investor, or a user. |
 | `/polish` | An optional outside-in pass before real users see the product. |
 | `/evolve` | Improves the pipeline from real use. It collects failures and friction from sessions, reproduces each one, and keeps a change only when the reproduction flips, nothing measured gets worse, and an isolated reviewer finds the cause removed. |
-| `/craft` | Code-craft methods from pstack, read on demand: `review`, `architect`, `blast-radius`, `unslop`, `verify-skill`, and `pr <open \| check \| babysit \| ship>`. It works in OFF projects too. |
+| `/code-craft` | Code-craft methods from pstack, read on demand: `review`, `architect`, `blast-radius`, `unslop`, `verify-skill`, and `pr <open \| check \| babysit \| ship>`. It works in OFF projects too. |
 | `/pipeline` | Turns the workflow on or off for a project, shows its status, and updates the installed pipeline (`update`). |
 
 `/pipeline`, `/evolve`, and `/polish` run only when you type them. Their `disable-model-invocation` setting
@@ -142,10 +142,11 @@ The templates are in `skills/_shared/templates/`.
 
 ## Techniques and references
 
-- **The craft layer** (`skills/craft/`) is pstack 0.15.25 from [cursor/plugins](https://github.com/cursor/plugins),
-  vendored under its MIT license (`LICENSE-pstack`, provenance in `UPSTREAM.json`). `/craft` opens a method
-  directly, and pipeline steps open the same files when their trigger fires. `index.md` says where the
-  pipeline's rules win.
+- **The craft layer** (`skills/code-craft/`) is pstack 0.15.25 from
+  [cursor/plugins](https://github.com/cursor/plugins), vendored under its MIT license (`LICENSE-pstack`,
+  provenance in `UPSTREAM.json`). `/code-craft` opens a method directly, and pipeline steps open the same files
+  when their trigger fires. `index.md` says where the pipeline's rules win. The skill is named `code-craft`,
+  not `craft`, so installing it never replaces a `/craft` skill you already have.
 - **The agent-product reference** (`skills/_shared/references/agent-product/`) compresses the AI Engineering
   Handbook's controls for a product that runs agents or causes outside effects (payments, messages, bookings,
   publishing). `/plan` reads it at intake for such a product. [`docs/handbook-adoption.md`](docs/handbook-adoption.md)

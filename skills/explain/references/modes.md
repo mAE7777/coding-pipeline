@@ -31,7 +31,7 @@ Template:
 Lint: explains what and why, not line-by-line how; honest about residual rough edges.
 
 How the product or one of its mechanisms works (`product`, or a question about a part), rather than what a
-milestone changed, takes the explainer's shape (`~/.claude/skills/craft/explore/explainer-prompt.md`):
+milestone changed, takes the explainer's shape (`~/.claude/skills/code-craft/explore/explainer-prompt.md`):
 1. **Overview**: what it is, what it does, why it exists; enough to decide whether to read on.
 2. **Key concepts**: the types, services, or ideas the rest depends on, briefly.
 3. **How it works**: the flow from trigger to result, naming the files and functions; a diagram only when it

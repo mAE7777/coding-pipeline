@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the vendored craft layer (skills/craft/) with pstack, the upstream it was copied from.
+"""Compare the vendored craft layer (skills/code-craft/) with pstack, the upstream it was copied from.
 
 Usage: craft_sync.py [--upstream <pstack checkout>] [--craft <dir>] [--json] [--diff]
        craft_sync.py verify [--craft <dir>] [--json]
@@ -21,7 +21,7 @@ verify checks the local side only: each entry whose local_edit is null is byte-i
 upstream sha256, each entry with a local edit differs from it, every listed file exists, and every file in
 the craft folder is listed (or named in "own"). Exit 0 when all hold, 1 otherwise, 2 on bad usage.
 
---craft defaults to skills/craft beside this script's skills folder. --json prints one JSON object.
+--craft defaults to skills/code-craft beside this script's skills folder. --json prints one JSON object.
 --help prints this text and exits 0.
 """
 import difflib
@@ -32,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_CRAFT = Path(__file__).resolve().parents[2] / "craft"
+DEFAULT_CRAFT = Path(__file__).resolve().parents[2] / "code-craft"
 SKIP_PARTS = {"__pycache__", ".DS_Store"}
 
 

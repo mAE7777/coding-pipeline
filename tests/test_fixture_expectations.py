@@ -92,7 +92,8 @@ class RegistrationTest(unittest.TestCase):
 
     def test_evolve_finds_the_probes_whose_text_changed(self):
         import evolve
-        self.assertIn("probe-explorer-recall", evolve.probe_fixtures(ROOT, ["skills/craft/explore/explorer-prompt.md"]))
+        self.assertIn("probe-explorer-recall",
+                      evolve.probe_fixtures(ROOT, ["skills/code-craft/explore/explorer-prompt.md"]))
         found = evolve.probe_fixtures(ROOT, ["skills/explain/references/modes.md"])
         self.assertIn("probe-explain-grounding", found)
         self.assertNotIn("probe-explorer-recall", found)

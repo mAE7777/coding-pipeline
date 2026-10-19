@@ -55,12 +55,12 @@ still needs ("real-use needs"). These are different words for different facts: n
 A card may carry `Reversibility: one-way` (undoing it after release means migrating data, breaking its users,
 or rebuilding: a storage format, a sync protocol, a public interface) or `two-way`. A one-way card, or any
 card the owner asks about, goes through the architect arena before the lock: phases A and B of
-`~/.claude/skills/craft/design/architect.md`, two runners on the `architect-runner` route (Opus 5.5 at xhigh,
+`~/.claude/skills/code-craft/design/architect.md`, two runners on the `architect-runner` route (Opus 5.5 at xhigh,
 Sonnet 5.5 at high). Save the synthesized sketch and its rationale as `docs/project/research/design-<card>.md`
 (outside the product tree: no product code comes before the lock), list it in the brief's Context index, and
 check the card's guarantee and probe against it. Not in `/plan adopt`, which uses no helper agents and
 describes what exists. Every other card's shape is screened by the builder when it is built, with
-`~/.claude/skills/craft/design/design-red-flags.md` and `rationale-template.md`.
+`~/.claude/skills/code-craft/design/design-red-flags.md` and `rationale-template.md`.
 
 ## Idea-anchor closure
 When an upstream idea anchor exists, `milestones.md` ends with its closure, every anchor item in one of three

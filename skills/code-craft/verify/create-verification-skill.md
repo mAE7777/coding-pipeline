@@ -1,6 +1,6 @@
 # Create a verification skill
 
-Every serious project needs a scripted way to drive the real app and prove behavior: launch it, exercise a feature the way a user would, and capture evidence. This method generates that as a project-local verification skill at `docs/project/verify/`, tailored to the repo. `/craft verify-skill` runs it. You write the generator's output for the next agent, not for a human: it will be read cold, mid-task, by an agent that has never seen the app.
+Every serious project needs a scripted way to drive the real app and prove behavior: launch it, exercise a feature the way a user would, and capture evidence. This method generates that as a project-local verification skill at `docs/project/verify/`, tailored to the repo. `/code-craft verify-skill` runs it. You write the generator's output for the next agent, not for a human: it will be read cold, mid-task, by an agent that has never seen the app.
 
 **Builder-side only.** The generated skill and its feature map live in the project at `docs/project/verify/`. They are local-only working files: run `python3 ~/.claude/skills/_shared/scripts/local_only.py <project> /docs/project/verify/` once. Only the builder uses them, for its own checks and bug repros. They are never rendered into any checker pack, and no checker reads them. A checker that read the builder's beliefs about how the product works would no longer check independently, and independence is never traded for tokens.
 
@@ -37,4 +37,4 @@ Run its own instructions end to end once: launch, doctor, drive ONE mapped featu
 
 ## 5. Offer the maintenance loop
 
-Point the user at `maintain-verification-skill.md` (`/craft verify-skill` again) for keeping the map honest as the app changes. Suggest a cadence only if they ask.
+Point the user at `maintain-verification-skill.md` (`/code-craft verify-skill` again) for keeping the map honest as the app changes. Suggest a cadence only if they ask.

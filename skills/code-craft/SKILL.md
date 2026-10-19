@@ -1,6 +1,6 @@
 ---
-name: craft
-description: "Code craft from pstack, on demand: /craft review | architect | blast-radius | unslop | verify-skill | pr. A read-only review of the current diff, design before code, what a change could break, plain prose, a builder-side app driver, and pull request work."
+name: code-craft
+description: "Code craft from pstack, on demand: /code-craft review | architect | blast-radius | unslop | verify-skill | pr. A read-only review of the current diff, design before code, what a change could break, plain prose, a builder-side app driver, and pull request work."
 argument-hint: "review [base | files] | architect | blast-radius | unslop [file] | verify-skill | pr <open | check | babysit | ship>"
 ---
 
@@ -9,10 +9,10 @@ argument-hint: "review [base | files] | architect | blast-radius | unslop [file]
 Run `python3 ~/.claude/skills/_shared/scripts/project_policy.py status <project> --json` first; when OFF, do the request directly (see `_shared/references/project-control.md`).
 When ON, the active pipeline step's rules and the owner's gates win every conflict with a craft file.
 
-# /craft
+# /code-craft
 
 pstack's craft layer, vendored under its MIT license (`LICENSE-pstack`, provenance in `UPSTREAM.json`).
-Paths below are relative to this folder (`~/.claude/skills/craft/`). Read `index.md` first: its override
+Paths below are relative to this folder (`~/.claude/skills/code-craft/`). Read `index.md` first: its override
 lines say where this pipeline's rules win, and its triggers say which leaf to open. Then read only the file the
 method names. Pipeline steps point at the same files; this skill is the entry when you ask for one directly.
 

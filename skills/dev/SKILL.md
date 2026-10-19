@@ -69,7 +69,7 @@ Scripts: `~/.claude/skills/_shared/scripts/`. `<session>` is this session's ID, 
   `heavy.py serve` in the background.
 - **Two fixes, one premise.** When `heavy.py` prints that a failure has survived 2 fixes, write down the
   premise both fixes shared and test it before a third fix
-  (`~/.claude/skills/craft/principles/principle-attack-the-premise.md`). Record each refuted approach, with
+  (`~/.claude/skills/code-craft/principles/principle-attack-the-premise.md`). Record each refuted approach, with
   its evidence, under Eliminated approaches in `state.md`, so a resumed session does not retry it.
 - **Economy.** Quiet flags; do not re-read a file you just wrote; do not re-run a check that passed and whose
   inputs did not change.
@@ -81,7 +81,7 @@ Scripts: `~/.claude/skills/_shared/scripts/`. `<session>` is this session's ID, 
    `intent_lock.py verify` must pass. The milestone is planned or changes; earlier milestones are accepted,
    or covered by a campaign authorization.
 2. Read the intent, brief, the milestone contract, interfaces, `AGENTS.md`, the stack pack named in
-   `docs/project/gate.md`, and `~/.claude/skills/craft/index.md` (once per milestone session; its triggers
+   `docs/project/gate.md`, and `~/.claude/skills/code-craft/index.md` (once per milestone session; its triggers
    say when a principle or method leaf is read).
 3. `baseline.py record <project> M<k>` (it refuses a second baseline: a milestone starts once).
 4. `state.md`: the Writer line is claimed for this session by the continuity hook at your first edit (check
@@ -103,11 +103,11 @@ whatever its style (hidden from the user never means hidden from the log, and ev
 consequence shows obviously); before the freeze, run its clarity pass and tell the owner what you removed,
 tucked away, or merged. High-stakes design (the design intent says so, or the owner asks):
 `references/high-stakes-design.md`.
-Own checks: a project-local verification skill, generated once with `~/.claude/skills/craft/verify/`
-(`/craft verify-skill`) and kept in `docs/project/verify/`: local-only, builder-only, never in a checker pack.
+Own checks: a project-local verification skill, generated once with `~/.claude/skills/code-craft/verify/`
+(`/code-craft verify-skill`) and kept in `docs/project/verify/`: local-only, builder-only, never in a checker pack.
 Background work (a build, a server, an agent) is listed under In flight while it runs.
 Subagents: none by default. A read-only explorer for a genuinely wide unknown, briefed with
-`~/.claude/skills/craft/brief.md` (the task contract and the result package); parallel builders (at most two
+`~/.claude/skills/code-craft/brief.md` (the task contract and the result package); parallel builders (at most two
 worktrees) only when the owner asks, each given the absolute path of this checkout's build record. A large
 mechanical change runs through a saved workflow, never a batch that spawns many agents at once. What the
 builder believes about the product (the verification skill, feature maps, explanations) never enters a

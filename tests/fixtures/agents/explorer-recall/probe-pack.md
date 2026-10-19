@@ -5,7 +5,7 @@ values that follow it. The codebase (a small Python tool called shelf) is your w
 
 ## The template
 
-{repo:skills/craft/explore/explorer-prompt.md}
+{repo:skills/code-craft/explore/explorer-prompt.md}
 
 ## {QUESTION}
 

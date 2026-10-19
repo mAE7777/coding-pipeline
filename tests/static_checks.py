@@ -10,7 +10,7 @@ Checks skills/*/SKILL.md, agents/*.md, hooks/*, skills/**/references|templates|s
                       session loads, stay within ALWAYS_LOADED_BUDGET bytes. Skills marked
                       disable-model-invocation: true are left out of both (they are not in the model's listing).
                       The total is printed on an INFO line and in the summary.
-  craft budget        skills/craft/index.md at most 10,240 bytes, skills/craft/SKILL.md at most 6,144
+  craft budget        skills/code-craft/index.md at most 10,240 bytes, skills/code-craft/SKILL.md at most 6,144
   routes and agents   models.py check passes on skills/_shared/models.json; every checker route
                       (models.CHECKER_ROUTES) is a role in run_isolated.ROLES and, apart from probe, has
                       agents/<role>.md; every agents/*.md is a role in ROLES with a checker route in the table; a
@@ -42,8 +42,8 @@ OPTIONAL_SHARED = {"_shared/references/owner-standing.md", "_shared/references/v
 ALWAYS_LOADED_BUDGET = 6500
 SKILL_DESCRIPTION_LIMIT = 450
 AGENT_DESCRIPTION_LIMIT = 120
-# The craft layer is read lazily (plan D4): the index once per milestone or fix session, the skill on /craft.
-CRAFT_BUDGETS = {"skills/craft/index.md": 10240, "skills/craft/SKILL.md": 6144}
+# The craft layer is read lazily (plan D4): the index once per milestone or fix session, the skill on /code-craft.
+CRAFT_BUDGETS = {"skills/code-craft/index.md": 10240, "skills/code-craft/SKILL.md": 6144}
 # The checker role whose agent file comes from the fixture that runs it (--agent-file), never from agents/.
 NO_AGENT_FILE = ("probe",)
 # The files that name Fable or Mythos models on purpose, to prove they are rejected: the routing code, the tests
@@ -266,10 +266,10 @@ def check_craft_provenance(root):
         report("FAIL", "skills/_shared/scripts/craft_sync.py",
                "missing, so the vendored craft files cannot be checked against UPSTREAM.json")
         return
-    code, out, err = run_python(script, "verify", "--craft", root / "skills/craft")
+    code, out, err = run_python(script, "verify", "--craft", root / "skills/code-craft")
     if code != 0:
         detail = (out + err).strip()
-        report("FAIL", "skills/craft", f"craft_sync.py verify: {detail[-600:] or f'exit {code}'}")
+        report("FAIL", "skills/code-craft", f"craft_sync.py verify: {detail[-600:] or f'exit {code}'}")
 
 
 def main(argv):

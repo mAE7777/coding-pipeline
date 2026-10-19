@@ -10,8 +10,8 @@ Usage:
   python3 install.py check [--home <dir>]     compare the installed files with this repository and hunt shadows
 
 What is managed:
-  skills/<name>/          every file of each pipeline skill (SKILL.md, references/, scripts/; for craft, the
-                          vendored pstack layer with UPSTREAM.json and LICENSE-pstack); files the repository no
+  skills/<name>/          every file of each pipeline skill (SKILL.md, references/, scripts/; for code-craft,
+                          the vendored pstack layer with UPSTREAM.json and LICENSE-pstack); files the repository no
                           longer has are removed, except the owner's own brain.md, friction.log, and tests/
   skills/_shared/         gate.sh, scripts/, templates/, models.json (the routing table: each checker's model and
                           effort), and the pipeline's references, agent-product/ included (other _shared files are
@@ -62,7 +62,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 SKILLS = ("pipeline", "next", "capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
-          "polish", "evolve", "craft")
+          "polish", "evolve", "code-craft")
 RETIRED_SKILLS = ("qa", "integrate")
 # scripts/ goes whole, so every shared script (models.py, pr_watch.py, craft_sync.py, and the rest) is installed.
 SHARED = ("gate.sh", "scripts", "templates", "models.json", "references/project-control.md",
@@ -483,7 +483,7 @@ def codex_conversion_check(home, want):
         fails.append(f"Codex's copies were converted from older versions of {len(stale)} file(s) ({', '.join(stale[:5])}"
                      + (" ..." if len(stale) > 5 else "") + "): " + fix)
     # Every managed file must be carried, except the hooks, which Codex runs from ~/.claude/hooks directly. Nothing
-    # newer is left out on purpose: the craft skill converts like every other skill, models.json must reach Codex
+    # newer is left out on purpose: the code-craft skill converts like every other skill, models.json must reach Codex
     # because models.py (imported by run_isolated.py) reads the table beside the scripts and fails without it, and
     # the agent-product reference ships like the other references.
     absent = [str(dst.relative_to(claude)) for dst in sorted(want)

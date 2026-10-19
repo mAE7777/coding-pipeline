@@ -178,7 +178,7 @@
       "upstream": "skills/poteto-mode/playbooks/opening-a-pr.md",
       "commit": "99743e9",
       "sha256": "a5aef646de8b651306c2d10974623650e4a013a245aec1c00525bbe0e31bfa76",
-      "local_edit": "gh is the only forge (Origin, Graphite, and the built-in PR tool paragraphs dropped); /deslop and /no-comments become /craft review and the comment keep-list; skill pointers name craft files; Task becomes Claude Code's Agent tool; the Autopilot owner exception dropped"
+      "local_edit": "gh is the only forge (Origin, Graphite, and the built-in PR tool paragraphs dropped); /deslop and /no-comments become /code-craft review and the comment keep-list; skill pointers name craft files; Task becomes Claude Code's Agent tool; the Autopilot owner exception dropped"
     },
     {
       "local": "methods/pr/review-bot-triage.md",

@@ -191,7 +191,7 @@ class CraftSyncTest(unittest.TestCase):
     def test_the_shipped_craft_layer_matches_its_manifest(self):
         out = self.run_sync("verify")
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
-        manifest = json.loads((ROOT / "skills/craft/UPSTREAM.json").read_text())
+        manifest = json.loads((ROOT / "skills/code-craft/UPSTREAM.json").read_text())
         self.assertEqual({e["commit"] for e in manifest["files"]}, {"99743e9"})
         principles = {e["local"] for e in manifest["files"] if e["local"].startswith("principles/")}
         self.assertEqual(len(principles), 24)

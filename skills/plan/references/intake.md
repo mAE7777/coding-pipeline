@@ -90,7 +90,7 @@ levels, conventional layout, a library choice with no trade-off. Always ask abou
 integration failure, data lifecycle, scope boundaries, the authorization model, money or irreversible
 actions, data about people, and anything two careful readers would build differently. When unsure
 whether it is material, it is. The fork test: a fork a run can settle (which approach is fast enough, whether
-a library handles a case) is a `/scout spike` (`~/.claude/skills/craft/methods/prototype.md`), not a question;
+a library handles a case) is a `/scout spike` (`~/.claude/skills/code-craft/methods/prototype.md`), not a question;
 only product and preference calls go to the owner.
 
 ## G. Writing done examples
