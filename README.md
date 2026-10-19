@@ -1,43 +1,50 @@
 # Coding Pipeline
 
-A set of skills, checker agents, hooks, and scripts for building software with coding agents (Claude Code,
-and Codex alongside it). It is written for current frontier models, which plan, test, and check their own
-work well and can run for hours. So it does not script the work. It controls the places where agent-built
-software still goes wrong: drifting toward a familiar imitation of what was meant, quietly narrowing or
-widening scope, hiding failures behind fallbacks, leaving built parts unwired, calling things done too early,
-and losing decisions when context is compacted or work moves between sessions and tools.
+Skills, checker agents, hooks, and scripts for building software with Claude Code, with Codex alongside. The
+models plan, build, and test their own work well, so the pipeline does not script that work. It guards the
+places where agent-built software still goes wrong:
+
+- a familiar imitation built in place of what was meant;
+- scope quietly narrowed or widened;
+- failures hidden behind fallbacks;
+- parts built but never wired in;
+- work called done too early;
+- decisions lost when context is compacted or work moves between sessions and tools.
 
 The principles are in [`skills/_shared/references/pipeline-constitution.md`](skills/_shared/references/pipeline-constitution.md).
 
-## Choose whether a project is managed
+## This pipeline or the fast one
 
-Projects default to **OFF**, including projects with old or partially adopted records. Use `/pipeline on`
-(Codex: `$pipeline on`) to enable the formal workflow, `/pipeline off` to disable it immediately, or
-`/pipeline status` to inspect the choice. Each command accepts an optional project folder. Type the command:
-the model does not start `/pipeline` itself. No adoption or owner ruling is needed to change the choice.
+This repository is the full workflow. It suits a project that needs a locked intent, gated milestones, and a
+record that outlasts any one session. For tools, scripts, prototypes, small apps, and everyday changes, use
+[coding-pipeline-fast](https://github.com/mAE7777/coding-pipeline-fast): one plan file, one concentrated
+verification, fewer tokens. Both can be installed together. The full workflow runs only in a project you turn
+on. In every other project, a full skill that has a fast counterpart points to it when fast is installed.
 
-The choice is stored outside the build record in `.coding-pipeline.json`:
+## Turn the workflow on or off for a project
+
+A project is OFF until you type `/pipeline on` (Codex: `$pipeline on`). `/pipeline off` turns it off at once.
+`/pipeline status` shows the choice and what is installed. Each command takes an optional project folder. The model never runs
+`/pipeline` by itself, and no skill, old record, or finished adoption turns a project on.
+
+The choice lives in `.coding-pipeline.json`, outside the build record:
 
 ```json
 {"version": 1, "managed": false}
 ```
 
-OFF persists across sessions, compaction and Claude/Codex. Existing documents and design remain usable
-directly. Old locks, handoffs, missing record files and unfinished adoption never become prerequisites.
-Skills remain available as independent tools. The pipeline's automatic hooks, formal checker runners and
-continuation stop applying; an in-flight formal run stops when it observes the change. ON preserves the
-original gates and owner acceptance rules. Invoking a skill or finding old files never enables management.
+A missing, unreadable, or invalid file means OFF. Git worktrees share the main checkout's choice, and a nested
+repository has its own. From a shell: `python3 ~/.claude/skills/_shared/scripts/project_policy.py off <project>`.
 
-Git worktrees share the main checkout's choice. Nested repositories have their own choice. The controller
-also conditions recognizable older generated `AGENTS.md` agreements without removing project conventions.
-Existing managed projects must explicitly turn ON after this update. A missing, unreadable or invalid selection
-is treated as OFF; it cannot silently revive a workflow.
+While a project is OFF, the skills still work as tools on its existing documents, design, and code. Old locks,
+handoff notes, and unfinished adoptions are never prerequisites. The hooks, the formal checker runs, and the
+journal stay out of the way, and a formal run in progress stops when it sees the switch. When a project is
+ON, every gate and owner-acceptance rule applies.
 
-Direct CLI: `python3 ~/.claude/skills/_shared/scripts/project_policy.py off /path/to/project`.
+When the choice changes, an `AGENTS.md` working agreement that an older version of the pipeline generated gets
+the new workflow-choice paragraph. Any other `AGENTS.md` is left alone.
 
 ## How work flows
-
-The formal flow below applies when the project is ON.
 
 ```
  conversations, voice notes ──/capture──> dossier ──┐
@@ -51,140 +58,155 @@ The formal flow below applies when the project is ON.
       └─ ACCEPT-READY → the owner watches the demo and accepts → /dev M2 ...
 ```
 
-Work is cut into **milestones**: complete product states a person can use end to end, each with a demo
-that proves it. Verification happens only at the joints (the intent lock, the builder's restated
-understanding, a few load-bearing checkpoints, the milestone gate, and irreversible actions), never as a
-ritual inside the build.
+Work is cut into milestones. A milestone is a product state a person can use end to end, with a demo that
+proves it. Verification happens only at the joints: the intent lock, the builder's restated understanding, a
+few load-bearing checkpoints, the milestone gate, and irreversible actions. It never runs as a ritual inside
+the build.
 
 ## Skills
 
 | Command | What it does |
 |---|---|
-| `/next` | The front door: where the project stands and what comes next, computed from the record, then does it; `auto` keeps going step after step and stops only where the owner must decide; `status` only reports. Every skill ends by recording its step in a journal and naming the next one |
-| `/capture` | Keeps and understands what a project's ideas and knowledge live in (ChatGPT chats, voice recordings, notes, documents in Markdown, PDF, Word, and similar formats, records and logs; a file or a whole folder), verbatim in numbered units, organized into a dossier that cites every point and keeps the owner's words apart from an assistant's; an isolated reader drafts it from the sources (every load-bearing point, quoted), a second audits it against them until an audit finds nothing material, and the spend stays within the owner's budget (5 percent of the week, stopping at 10 until the owner raises it) |
-| `/scout` | Turns a real unknown into graded evidence: ask, map, spike, or offload to a chat model and verify what comes back |
-| `/plan` | Writes the build record and locks the intent with the owner; `adopt` takes over a project that has no record; `amend` changes intent by ruling; `convert` migrates older formats |
-| `/dev` | Builds one milestone (or an authorized run of several) as one sustained run; `resume` after a break or a switch of tools; `freeze` hands it to the gate |
-| `/gate` | Accepts or rejects a milestone through isolated checkers and a computed verdict; `accept` records the owner's acceptance |
-| `/loyal` | Checks mid-build whether what was built is still the thing that was meant |
-| `/fix` | Makes a targeted change outside a milestone, reproduction first |
-| `/handoff` | Hands work over on purpose, to another session, another tool, or an outside reviewer |
-| `/inbox` | Keeps other people's opinions, proposed changes, and new ideas in their own words until they are weighed: each is checked against the locked intent and earlier decisions, researched where it rests on a claim, adopted whole, in part, reshaped, placed in a milestone, or rejected (by the owner unless it is a whole adoption inside the current contract), written where it belongs, and cleared with a decision entry; the gate fails on any item that vanished |
-| `/deploy` | Ships behind a plain-English confirmation of each irreversible action, then verifies the live product |
-| `/explain` | Explains what exists to an engineer, founder, investor, or user |
-| `/polish` | Optional outside-in scrutiny before real users see it |
-| `/evolve` | Improves the pipeline itself from real use: in any session that used it, harvests every failure, block, stuck step, and piece of friction with what the session did about it into a private ledger; then proves each problem with a reproduction, weighs the fix against the session's own workaround, and keeps a change only when a rule fixed in advance says the pipeline got better (the reproduction flips, nothing measured gets worse, both sides measured alike) and an isolated reviewer finds the cause removed and nothing weakened |
-| `/craft` | Code craft vendored from pstack and read on demand: `review` (a read-only review of the current diff), `architect`, `blast-radius`, `unslop`, `verify-skill`, and `pr <open \| check \| babysit \| ship>`; usable on projects where the pipeline is OFF. Pipeline steps open the same files when their trigger fires |
+| `/next` | Says where the project stands and what comes next, then does it. `auto` keeps going until the owner must decide; `status` only reports. |
+| `/capture` | Turns chats, recordings, notes, and documents (a file or a folder) into a dossier that cites every point and keeps the owner's words apart from an assistant's. One isolated reader drafts it and another audits it against the sources, within a spending cap the owner sets. |
+| `/scout` | Settles an unknown with graded evidence: a question, a map of the code, a spike, or a chat model's answer checked against sources. |
+| `/plan` | Writes the build record and locks the intent with the owner. `adopt` takes over a project without a record, `amend` changes the intent by the owner's ruling, `convert` migrates older formats. |
+| `/dev` | Builds one milestone, or a run the owner authorized, in one sustained run. `resume` continues after a break or a tool switch; `freeze` hands the milestone to the gate. |
+| `/gate` | Accepts or rejects a milestone through isolated checkers and a computed verdict. `accept` records the owner's acceptance. |
+| `/loyal` | Checks during a build whether what exists is still the thing that was meant. |
+| `/fix` | Makes a targeted change outside a milestone, starting from a reproduction. |
+| `/handoff` | Hands work to another session, another tool, or an outside reviewer. |
+| `/inbox` | Holds other people's opinions, proposals, and ideas in their own words until they are weighed against the locked intent, then records what was adopted or rejected and why. The gate fails when an item disappears. |
+| `/deploy` | Ships after a plain-words confirmation of each irreversible action, then checks the live product. |
+| `/explain` | Explains what exists to an engineer, a founder, an investor, or a user. |
+| `/polish` | An optional outside-in pass before real users see the product. |
+| `/evolve` | Improves the pipeline from real use. It collects failures and friction from sessions, reproduces each one, and keeps a change only when the reproduction flips, nothing measured gets worse, and an isolated reviewer finds the cause removed. |
+| `/craft` | Code-craft methods from pstack, read on demand: `review`, `architect`, `blast-radius`, `unslop`, `verify-skill`, and `pr <open \| check \| babysit \| ship>`. It works in OFF projects too. |
+| `/pipeline` | Turns the workflow on or off for a project, shows its status, and updates the installed pipeline (`update`). |
 
-`/pipeline`, `/evolve`, and `/polish` run only when you type them: they are left out of the model's skill listing
-(`disable-model-invocation`), so the model never starts them on its own or from another skill.
+`/pipeline`, `/evolve`, and `/polish` run only when you type them. Their `disable-model-invocation` setting
+keeps them out of the model's skill list.
 
 ## Checkers
 
-Each runs as a separate headless process in a prepared copy of the project, under the operating system's
-sandbox, with its inputs rendered by a script from files. None sees the builder's conversation. Each run's
-model and effort come from the routing table, `skills/_shared/models.json` (`models.py list` shows them), by
-route: the checker, and its mode where the modes judge different things (the code-verifier's review, re-verify,
-and demo; the cold-reader's documents, re-read, understanding, extraction, fidelity, and re-audit). The agent
-file sets neither, and each run gets only its own mode's part of it. Every route runs today's setting until a
-change to it passes the measurements in [`docs/model-routing.md`](docs/model-routing.md) (pooled fixtures,
-cost, shadow runs beside real rounds) and the owner approves it. `spend.py report` shows what each milestone,
-round, and checker cost.
+Each checker runs as a separate headless process in a prepared copy of the project, under the operating
+system's sandbox. A script renders its inputs from files, and no checker sees the builder's conversation.
 
 | Agent | Catches |
 |---|---|
-| `code-verifier` | a build that passes its own tests while the core mechanism is a familiar imitation, or failure paths quietly degrade; structural damage, logged unless it is one of four presumptive blockers; in a focused round, whether the open findings are fixed; also runs the demo from a clean start |
-| `loyal-evaluator` | a product that works but is no longer the thing that was meant: it describes what the product does and guesses its purpose before it is told the goal |
-| `gate-judge` | a verdict that grades the builder's story instead of the evidence |
-| `cold-reader` | a document clear to its author that admits several builds; a restatement that shifted the promise; a summary that lost or bent its source |
-| `claim-verifier` | a research claim resting on one reprinted, misread, or outdated source |
-| `change-reviewer` | a change to the pipeline that turns its reproduction green while the cause survives, loosens a check, hides a failure, or is labeled a fix to skip the owner's ruling |
+| `code-verifier` | A build that passes its own tests while its core mechanism is a familiar imitation, or its failure paths quietly degrade. Structural damage, logged unless it is one of four presumptive blockers. In a focused round, whether the open findings are fixed. It also runs the demo from a clean start. |
+| `loyal-evaluator` | A product that works but is no longer the thing that was meant. It describes the product and guesses its purpose before it is told the goal. |
+| `gate-judge` | A verdict that grades the builder's story instead of the evidence. |
+| `cold-reader` | A document clear to its author that still admits several builds, a restatement that shifted the promise, or a summary that lost or bent its source. |
+| `claim-verifier` | A research claim that rests on one reprinted, misread, or outdated source. |
+| `change-reviewer` | A change to the pipeline that turns its reproduction green while the cause survives, loosens a check, hides a failure, or skips the owner's ruling. |
+
+The routing table, `skills/_shared/models.json`, sets each checker's model and effort, per mode where the
+modes judge different things (`python3 ~/.claude/skills/_shared/scripts/models.py list` shows it). A route
+changes only after the measurements in [`docs/model-routing.md`](docs/model-routing.md) pass and the owner
+approves. `spend.py report` shows what each milestone, round, and checker cost, in tokens and dollars.
 
 ## The build record
 
-`AGENTS.md` (the map: labeled commands, conventions, a working agreement every agent reads) plus
-`docs/project/`: `intent.md` (locked and hashed), `milestones.md`, `interfaces.md`, `decisions.md`,
-`fix-log.md`, `inbox.md` (input waiting to be weighed), and local-only working files (`brief.md`, `state.md`, `gate.md`, handoff notes, gate reviews,
-research, captured sources, evidence). Templates are in `skills/_shared/templates/`.
+`AGENTS.md` is the map every agent reads: labeled commands, conventions, and the working agreement. Beside it,
+`docs/project/` holds:
+
+- committed: `intent.md` (locked and hashed), `milestones.md`, `interfaces.md`, `decisions.md`, `fix-log.md`,
+  and `inbox.md`;
+- local only: `brief.md`, `state.md`, `gate.md`, handoff notes, gate reviews, research, captured sources, and
+  evidence.
+
+The templates are in `skills/_shared/templates/`.
 
 ## Guarantees enforced in code
 
-- **Isolation.** Checkers run with no user settings, no plugins or MCP servers, only the tools they need,
-  reads fenced to their own copy and toolchains, writes fenced to the copy and caches, network limited to
-  localhost (a Codex-family checker also reaches HTTPS, because its own model call runs inside the same fence),
-  and a canary planted in the real project for every round: a checker that reads it fails the round.
-- **Owner's words.** Only messages the owner typed count: agent reports and harness notices that arrive in
-  the user role are never taken as the owner's ruling, and a quoted ruling must equal the words recorded.
-- **Owner rulings.** The intent lock, milestone acceptance, and any consent to a stand-in quote the owner's
-  own words, and a script proves those words are a whole sentence (or the whole message) the owner typed, so a
-  cut quote cannot drop a "no". An acceptance names the
-  exact candidate that passed its gate, and a release ships only that candidate.
-- **Nothing silent.** Every non-success has a name (FAIL, NOT_RUN, BLOCKED, INCONCLUSIVE, STALE, and the rest),
-  missing inputs are named, and the verdict is recomputed from the evidence.
-- **Handoffs.** A handoff note is rewritten at every stop and checked for anything dropped; a new session in
+- **Isolation.** A checker gets no user settings, plugins, or MCP servers, and only the tools it needs. Its
+  reads are fenced to its copy and the toolchains, its writes to the copy and caches, and its network to
+  localhost. A Codex-family checker also reaches HTTPS, because its own model call runs inside the fence. Every
+  round plants a canary in the real project, and a checker that reads it fails the round.
+- **The owner's words.** Only messages the owner typed count. Agent reports and harness notices that arrive in
+  the user role never count as a ruling.
+- **Owner rulings.** The intent lock, a milestone acceptance, and consent to a stand-in quote the owner. A script
+  proves each quote is a whole sentence (or the whole message) the owner typed, so a cut quote cannot drop a
+  "no". An acceptance names the exact candidate that passed its gate, and a release ships only that candidate.
+- **Nothing silent.** Every non-success has a name (FAIL, NOT_RUN, BLOCKED, INCONCLUSIVE, STALE, and others).
+  Missing inputs are named, and the verdict is recomputed from the evidence.
+- **Tests stay honest.** `gate.sh` fails a deleted test, a test moved out of the runner's collection, a new
+  skip, only, or expected-failure marker, and a raised timeout, unless the owner ruled the change. Fewer
+  assertions is a warning.
+- **Handoffs.** The handoff note is rewritten at every stop and checked for anything dropped. A new session in
   either tool is told who worked last, what changed since, and what is next.
-- **Compaction.** After a compaction, edits wait until the state files have been read again.
-- **Machine load.** One heavy job (build, test suite, browser, simulator) runs at a time on the machine, through
-  a kernel lock; subagent concurrency and depth are capped.
+- **Compaction.** After a compaction, edits wait until the state files are read again.
+- **Machine load.** A kernel lock lets one heavy job (a build, a test suite, a browser, a simulator) run at a
+  time on the machine. Subagent concurrency and depth are capped.
+
+## Techniques and references
+
+- **The craft layer** (`skills/craft/`) is pstack 0.15.25 from [cursor/plugins](https://github.com/cursor/plugins),
+  vendored under its MIT license (`LICENSE-pstack`, provenance in `UPSTREAM.json`). `/craft` opens a method
+  directly, and pipeline steps open the same files when their trigger fires. `index.md` says where the
+  pipeline's rules win.
+- **The agent-product reference** (`skills/_shared/references/agent-product/`) compresses the AI Engineering
+  Handbook's controls for a product that runs agents or causes outside effects (payments, messages, bookings,
+  publishing). `/plan` reads it at intake for such a product. [`docs/handbook-adoption.md`](docs/handbook-adoption.md)
+  records which handbook chapters apply and why.
 
 ## Install
 
 ```
-python3 install.py plan          # every action, nothing changed
-python3 install.py apply         # install into ~/.claude, archive retired pieces, write a manifest,
-                                 # and bring Codex's copies up to date when a Codex package is installed
-python3 settings_patch.py        # show the hook registrations; add --apply to write them (with a backup)
-python3 codex_hooks_patch.py     # the same for Codex; Codex asks you to trust new hooks once
+python3 install.py plan          # list every action, change nothing
+python3 install.py apply         # install into ~/.claude, archive retired pieces, write the manifest,
+                                 # and update Codex's copies when a Codex package is installed
+python3 settings_patch.py        # show the hook registrations; --apply writes them (with a backup)
+python3 codex_hooks_patch.py     # the same for Codex, which asks you to trust new hooks once
 python3 install.py check         # prove the installed files match this repository, with no shadow copies
 ```
 
-`apply` puts the skills (the craft layer included) in `~/.claude/skills/`; the shared scripts, templates,
-references, and the routing table (`models.json`) in `~/.claude/skills/_shared/`; the checkers in
-`~/.claude/agents/`; and the hooks in `~/.claude/hooks/`. Its manifest, `~/.claude/.pipeline-install.json`, records
-every installed file's hash, and the routing table's on its own. Your personal routing override
-(`~/.claude/.pipeline-models.json`) and shadow-run records (`~/.claude/.pipeline-shadow.jsonl`) are never touched.
+`apply` installs the skills in `~/.claude/skills/`, the shared scripts, templates, references, and routing table
+in `~/.claude/skills/_shared/`, the checkers in `~/.claude/agents/`, and the hooks in `~/.claude/hooks/`. Its
+manifest, `~/.claude/.pipeline-install.json`, records each installed file's hash. `apply` stops at a file you
+edited under `~/.claude` and names it. It never touches your routing override (`~/.claude/.pipeline-models.json`)
+or your shadow-run records (`~/.claude/.pipeline-shadow.jsonl`).
+
+A local `private/` folder, if present, is installed over the same paths (the owner's standing requirements and
+private rules) with its own tests, which the self-test runs. It is never published.
+
+Requirements: macOS (the sandbox and copy-on-write clones), Python 3.9 or later, Claude Code 2.1.283 or later,
+Playwright for Python with Chromium (the checkers' browser), and `playwright-cli` (the builder's browser).
+`install.py check` fails when one is missing. Optional: the Codex CLI (the second model family for code review)
+and whisper (audio capture).
 
 Tests: `bash tests/pipeline-selftest.sh` runs every script and hook suite and the static checks.
-`python3 tests/agent_fixtures.py` runs each checker against planted-defect and clean projects, three times each,
-on its route's setting (`--model` and `--effort` measure another).
+`python3 tests/agent_fixtures.py` runs each checker against projects with planted defects and clean controls,
+three times each, on its route's setting (`--model` and `--effort` measure another).
 
-Requirements: macOS (the sandbox and copy-on-write clones), Python 3.9+, Claude Code 2.1.283 or later,
-Playwright for Python with Chromium (the checkers' browser), and `playwright-cli` (the builder's browser);
-`install.py check` fails when one is missing. Optional: Codex CLI (the other model family for code review),
-whisper (audio capture).
+## Update
 
-A local `private/` folder, if present, is installed over the same paths (the owner's standing requirements
-and any private rules) and carries its own tests, which the self-test runs; it is never published.
+Type `/pipeline update` in any session. It does four things:
 
-## Updating the pipeline
+1. It pulls the repository that `~/.claude` was installed from, fast-forward only. A diverged branch is reported,
+   never merged, and a failed fetch goes on with the local commits.
+2. It runs `install.py apply` and `settings_patch.py --apply`.
+3. It proves the result with `install.py check`.
+4. It reports the revisions before and after, the commits between them, and the skills, agents, hooks, and
+   shared files that changed.
 
-Type `/pipeline update` in any session. It pulls the repository `~/.claude` was installed from (fast-forward
-only: a diverged branch is reported, never merged; a failed fetch goes on with the local commits), runs
-`install.py apply` and `settings_patch.py --apply`, proves the result with `install.py check`, and reports the
-revisions before and after, the commits between them, and which skills, agents, hooks, and shared files
-changed. It refuses while the repository has uncommitted changes or untracked files under `skills/`, `agents/`,
-or `hooks/` (an edit in progress is never installed half-done) and while a gate or checker run is in progress.
-`/pipeline status` shows what is installed and what the repository holds. Nothing pulls or installs in the
-background.
+It refuses while the repository has uncommitted changes, or untracked files under `skills/`, `agents/`, or
+`hooks/`, and while a gate or checker run is in progress. Nothing pulls or installs in the background.
 
-When the fast workflow (mAE7777/coding-pipeline-fast) is installed, `/pipeline update` updates it too: after the
-pipeline's own part, it runs `install.py update` in the repository fast's manifest
-(`~/.claude/.pipeline-fast-install.json`) names, which refuses, pulls, and installs by the same rules, and reports
-it on its own `fast:` lines. One part's refusal never stops the other; the command exits 1 when either was
-refused or failed. A fast install made before fast's `update` existed records no repository: run
-`python3 install.py apply` once in the fast repository. `/pipeline status` and the two notices below cover fast
-as well.
+When coding-pipeline-fast is installed, the same command updates it after the pipeline: it runs fast's
+`install.py update`, which follows the same rules, and reports on its own `fast:` lines. One part's refusal never
+stops the other. A fast install made before fast had `update` needs `python3 install.py apply` once in the fast
+repository.
 
-What a running session keeps: Claude Code gives the next invocation of a skill its changed SKILL.md, but a skill
-already invoked stays in the conversation as the text it read then, and its frontmatter hooks stay as they were
-registered at that invocation. Scripts, hook scripts, and checker agents are read from `~/.claude` at each call,
-so they run the new version at once. Two hooks close the gap. At session start, a session is told when the
-repository holds commits not installed yet. At the first prompt after an update, every open session is told,
-once, that the skill text it read is out of date: re-read the SKILL.md of the skill in use and the references
-the next step relies on, or invoke the skill again (which also registers its new hooks); the changed skills are
-named (the notice speaks of the fast skills when only fast changed). Claude Code's settings watcher usually picks
-up new hook registrations in open sessions; a restart does when it does not. Codex sessions get neither notice,
-since Codex has no such hook: after an update, start a new Codex session or re-read the skill in use.
+An open session keeps the skill text it already read. Scripts, hook scripts, and checker agents run the new
+version at their next call. Two hooks tell you what is stale:
 
-Once, on a machine whose installed copy predates this: run `python3 install.py apply` and
-`python3 settings_patch.py --apply` from the repository. From then on `/pipeline update` does both.
+- At session start, you hear when the repository holds commits that are not installed.
+- At the first prompt after an update, each open session is told once which skills changed. Re-read the
+  SKILL.md of the skill in use, or invoke the skill again.
+
+Codex has no such hooks: after an update, start a new Codex session.
+
+On a machine whose installed copy predates `/pipeline update`, run `python3 install.py apply` and
+`python3 settings_patch.py --apply` once from the repository.
