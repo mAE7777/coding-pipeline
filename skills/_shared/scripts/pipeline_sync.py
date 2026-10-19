@@ -109,6 +109,15 @@ def write_json(path, data):
     os.replace(tmp, path)
 
 
+def describe_update(lu):
+    """One recorded update for status: what happened, when, the revisions it moved between (an update) or stayed
+    at (current), and the reason of a refusal or failure."""
+    result = lu.get("result")
+    revs = (f" ({short(lu.get('before'))} -> {short(lu.get('after'))})" if result == "updated"
+            else f" ({short(lu.get('after'))})" if result == "current" and lu.get("after") else "")
+    return f"{result} at {lu.get('time')}{revs}" + (f": {lu['reason']}" if lu.get("reason") else "")
+
+
 def short(rev):
     if not rev:
         return "unknown"
@@ -736,8 +745,7 @@ def print_status(s):
               "skills/, agents/, hooks/")
     lu = s["last_update"]
     if lu:
-        print(f"last update: {lu.get('result')} at {lu.get('time')} ({short(lu.get('before'))} -> "
-              f"{short(lu.get('after'))})" + (f": {lu['reason']}" if lu.get("reason") else ""))
+        print(f"last update: {describe_update(lu)}")
     print(f"runs in progress: {describe_runs(s['runs']) if s['runs'] else 'none'}")
     for p in s["problems"]:
         print(f"problem: {p}")
@@ -758,8 +766,7 @@ def print_status(s):
                   + ": type /pipeline update")
     lu = f["last_update"]
     if lu:
-        print(f"fast last update: {lu.get('result')} at {lu.get('time')} ({short(lu.get('before'))} -> "
-              f"{short(lu.get('after'))})" + (f": {lu['reason']}" if lu.get("reason") else ""))
+        print(f"fast last update: {describe_update(lu)}")
     for p in f["problems"]:
         print(f"problem: {p}")
 
