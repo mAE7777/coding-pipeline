@@ -36,8 +36,7 @@ Boundary between development agents and product agents:
   owner's own permissions and the pipeline's hooks); its subagents (none by default; a read-only explorer;
   parallel builders in at most two worktrees only when the owner asks; capped at 5 at once and depth 2 by the
   environment `settings_patch.py` writes); and the isolated checkers (`code-verifier`, `loyal-evaluator`,
-  `gate-judge`, `cold-reader`, `claim-verifier`, `change-reviewer`) that `run_isolated.py` starts. `/polish`
-  names four outside agents that are not in this repository.
+  `gate-judge`, `cold-reader`, `claim-verifier`, `change-reviewer`) that `run_isolated.py` starts.
 - Product agents: any agent, model call, or external effect inside a product the pipeline builds. They are
   product behavior, specified in that product's intent (mechanism cards, must-not-lose items) and checked by the
   gate like any other behavior. The handbook's controls for them are in the conditional reference

@@ -59,6 +59,8 @@ strengthen, 3 propose-delete. Now it has 460 rows: 336 Must, 96 Default, 28 Cond
 every rule the text pass dropped from a skill or an agent keeps its row, which names the home it went to.
 
 What moved since 587f48c:
+- /polish left the pipeline (2026-10-19): it judged the business more than the build, ran on four agents this
+  repository never carried, and was never run. Its seven rows are gone, and the totals count without them.
 - 91 rows were added for the rules the change introduced, the new `/code-craft` skill and the craft index's override lines
   among them.
 - 47 of the 50 pointer moves and 55 of the 81 dedupe moves are done. Blocks D1, D2, and D3 are one line each pointing
@@ -88,7 +90,7 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | /inbox | 17 | 17 | 13 | 4 | 0 | 11 | 4 (4 done) | 2 (2 done) | 0 | 0 |
 | /deploy | 14 | 16 | 14 | 1 | 1 | 6 | 0 | 6 (3 done) | 4 | 0 |
 | /explain | 11 | 11 | 4 | 6 | 1 | 6 | 0 | 4 (4 done) | 0 | 1 |
-| /polish | 6 | 7 | 3 | 4 | 0 | 4 | 0 | 3 (2 done) | 0 | 0 |
+| /polish (left the pipeline) | 6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | /evolve | 27 | 32 | 24 | 8 | 0 | 16 | 13 (11 done) | 0 | 1 | 2 |
 | /code-craft | 0 | 11 | 6 | 4 | 1 | 6 | 0 | 5 (1 done) | 0 | 0 |
 | craft index | 0 | 10 | 7 | 2 | 1 | 9 | 0 | 1 | 0 | 0 |
@@ -98,7 +100,7 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | cold-reader | 9 | 12 | 9 | 3 | 0 | 12 | 0 | 0 | 0 | 0 |
 | claim-verifier | 5 | 6 | 4 | 2 | 0 | 6 | 0 | 0 | 0 | 0 |
 | change-reviewer | 12 | 12 | 10 | 2 | 0 | 11 | 1 (1 done) | 0 | 0 | 0 |
-| **All** | **365** | **460** | **336** | **96** | **28** | **304** | **50 (47 done)** | **81 (55 done)** | **22** | **3** |
+| **All** | **365** | **453** | **333** | **92** | **28** | **300** | **50 (47 done)** | **78 (53 done)** | **22** | **3** |
 
 ## Constitution (skills/_shared/references/pipeline-constitution.md)
 
@@ -346,7 +348,7 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | gate-10 | L63-64: ACCEPT-READY: write the owner summary and ask for acceptance; in a campaign record the verdict, start the next milestone, batch acceptance. | Must | [early-done] Gate-passed taken as accepted. | project_status.py makes acceptance the owner's step (L256-258) | test_a_gate_passed_candidate_waits_for_the_owner | keep |
 | gate-11 | L65-67: CHANGES: each blocking finding names its loop-back and what shows it fixed; contained defects to /fix, in-contract work to /dev; freeze and run the next round. | Must | [early-done] | gate_report.py:update_ledger keeps loop_back, fixed_when, and files (L472-504); project_status.py routes changes (L265-268) | test_gate_findings_inconclusive_and_blocked_rounds, test_the_ledger_keeps_files_and_the_reviewers_class_severity_and_where | keep |
 | gate-12 | L67-68: The judge keeps each finding's ID, and gate_report.py turns a finding still blocking in a second round into BLOCKED, for the owner. | Must | An endless fix loop. | gate_report.py:compute (L398-412) | test_blocking_finding_then_same_finding_again, test_a_finding_not_fixed_after_its_round_is_blocked_even_when_the_judge_lets_it_go | pointer (done): the sentence names gate_report.py |
-| gate-13 | L68-69: An intent finding goes to /plan amend with the owner, never to an edit of the intent (intent_lock.py verify fails one). | Must | [scope] | intent_lock.py verify in layer 1 (gate_run.py:449) | test_edit_after_lock_fails_verify | dedupe: same rule also at C-27, loyal-04, polish-05; keep one home at C-27 (the line now names intent_lock.py verify) |
+| gate-13 | L68-69: An intent finding goes to /plan amend with the owner, never to an edit of the intent (intent_lock.py verify fails one). | Must | [scope] | intent_lock.py verify in layer 1 (gate_run.py:449) | test_edit_after_lock_fails_verify | dedupe: same rule also at C-27, loyal-04; keep one home at C-27 (the line now names intent_lock.py verify) |
 | gate-14 | L70: BLOCKED: write the Blockers row and ask plainly. | Must | An owner decision left unasked. | project_status.py routes BLOCKED to the owner (L259-261) | test_gate_findings_inconclusive_and_blocked_rounds | keep |
 | gate-15 | L71-72: INCONCLUSIVE: say which checker and why, remove the cause, run again. | Must | [hidden] | gate_report.py reasons; project_status.py routes it (L262-264) | test_gate_findings_inconclusive_and_blocked_rounds, test_malformed_or_missing_evidence_is_inconclusive_and_clears_the_tick | keep |
 | gate-16 | L77-81: The owner summary: one screen, plain, standalone, exceptions first; IDs only in parentheses after their meaning. | Default | [hidden] An exception buried under a green headline. | prose only | none | keep |
@@ -370,7 +372,7 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | gate-34 | L58: gate.sh file-growth WARNs on a code file pushed past 1,000 lines since the baseline. | Default | A file grown past what a reader can hold, unnoticed. | gate_checks.py:file_growth (L508-549; lockfiles, vendored, generated, binary, and Gate exclude paths left out) | test_file_growth_warns | keep |
 | gate-35 | L59: gate.sh prose-lint WARNs on slop in outbound text and commit messages. | Default | Slop and tooling traces in what leaves the machine. | gate_checks.py:prose_lint (L630-682) and commit_messages (L603-628; only when the baseline records its commit) | test_prose_lint_warns_with_examples_and_never_fails, test_prose_lint_reads_commit_messages_since_the_recorded_commit, test_code_is_ignored_and_cjk_lines_keep_their_punctuation | keep |
 | gate-36 | L60: A shadow set in ~/.claude/.pipeline-models.json runs beside the real checker and never counts. | Must | [hidden] A candidate setting changes a verdict before it was promoted. | run_isolated.py:run_shadow runs after the main summary is written and never changes the main run's status, files, or exit code (L959-1017; finish writes the main summary before it runs the shadow, L1125-1134); models.py checks the shadow entries (L196-237); gate_report.py reads only the main summaries and lists a shadow LEAK as an exception (L343-347); shadow_diff.py counts only real rounds toward a promotion | test_a_shadow_never_changes_the_main_run, test_a_shadow_runs_on_its_own_copy_and_never_changes_the_verdict, test_a_shadow_leak_is_an_exception_naming_the_checker, test_fixture_runs_are_not_real_rounds, test_ready_only_with_three_distinct_rounds_and_no_miss | keep |
-| gate-37 | L73-74: Logged findings, under any verdict, never start a round; they go to the next milestone's Open list or /polish. | Default | [scope] Fix rounds spent on nits. | gate_report.py:compute gives CHANGES only for blocking findings, intent defects, and forced reasons (L413-419); regate_scope.py never counts a logged finding's files | test_logged_findings_never_count | keep |
+| gate-37 | L73-74: Logged findings, under any verdict, never start a round; they go to the next milestone's Open list. | Default | [scope] Fix rounds spent on nits. | gate_report.py:compute gives CHANGES only for blocking findings, intent defects, and forced reasons (L413-419); regate_scope.py never counts a logged finding's files | test_logged_findings_never_count | keep |
 | gate-38 | L79-80: The owner summary shows exceptions such as a model switch or a CARRIED result, and each checker's model and effort (set by models.json). | Default | [hidden] The owner accepts without knowing which model judged the work or that a result was carried. | gate_report.py:model_line writes each step's route, asked and served model, and escalation into the round block (L452-470) | test_the_round_block_lists_each_checkers_model_and_effort | keep |
 | gate-39 | L85-86: Keep the acceptance body exactly: milestone_lint.py and pr_watch.py land-check parse it. | Must | An acceptance the scripts cannot read, so a lint passes on the wrong entry or land-check compares nothing. | milestone_lint.py ACCEPT pattern (L39) and check_acceptance (L261-297); pr_watch.py:accepted_fingerprint counts only the fixed form (L1612-1653) | test_only_the_fixed_form_is_an_acceptance, test_accepted_needs_a_proven_acceptance | keep |
 
@@ -381,7 +383,7 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | loyal-01 | L7: Project workflow choice, one paragraph (block D1). | Must | The formal workflow imposed on an OFF project. | see control-01 to control-13 | see control-01 to control-13 | dedupe (done): block D1 is one paragraph naming project-control.md; home control-01 |
 | loyal-02 | L15-16: The evaluator and the judge run isolated, by script (the charter's law 3); the never-sees-the-goal rule now lives only in the evaluator's own text. | Must | [imitation] An evaluator that knows the goal confirms a match that is not there. | gate_copies.py:blind_strip (L339-364); render_pack.py pass 1 (L732-735); run_isolated.py:pack_leaks makes a leak a LEAK (L486-496, L1142-1145) | test_blind_copy_has_no_intent, test_pass_one_pack_leak_detected, test_loyal_pass_one_holds_no_goal | dedupe (done): one line citing law 3; homes C-10 and loyal-evaluator-02 |
 | loyal-03 | L28-30, merged into loyal-08's step by the text pass (was L26: only what is not HOLDS; no finding invented; a clean check is one line). | Default | A report that becomes one more approve button (L11-12). | prose only | loyal-evaluator-true | dedupe (done): merged; home loyal-08 |
-| loyal-04 | L17-18: A finding is fixed in the product, or the owner changes the intent through /plan amend; never the intent to make a check pass. | Must | [scope] | intent_lock.py verify | test_edit_after_lock_fails_verify | dedupe: same rule also at C-27, gate-13, polish-05; keep one home at C-27 |
+| loyal-04 | L17-18: A finding is fixed in the product, or the owner changes the intent through /plan amend; never the intent to make a check pass. | Must | [scope] | intent_lock.py verify | test_edit_after_lock_fails_verify | dedupe: same rule also at C-27, gate-13; keep one home at C-27 |
 | loyal-05 | L19: Venture line (block D3). | Conditional | A venture project handled without its own rules. | prose only | none | dedupe (done): block D3 is one line; home control-14 |
 | loyal-06 | L22-23: intent_lock.py verify must pass first (a missing lock means /plan first). | Must | [scope] An intent check run against an edited intent. | prose only (the intent-only round skips layer 1, gate_run.py:766) | none | strengthen: gate_run.py --intent-only can run intent_lock.py verify before making the copies |
 | loyal-07 | L24-26: Run gate_run.py --intent-only in the background; its usage says what runs (the blind copy of the live tree, the evaluator's three passes, the judge, a line in intent-ledger.md). | Must | [imitation] | gate_run.py intent-only path (L790-803, usage L68-71); gate_report.py intent-only rules (INTENT_CHECKERS L137, required at L328) | test_intent_only_runs_on_the_live_tree | pointer (done): the step names gate_run.py's usage |
@@ -493,18 +495,6 @@ Rows by label and by action, per source; "(n done)" counts the pointer and dedup
 | explain-09 | L31-33: demo: each step, what to do, what the owner will see beside the latest capture, and what the step proves. | Default | The owner accepts without seeing the demo. | prose only | none | keep |
 | explain-10 | L36-37: gate: the latest round as the one-screen owner summary that gate/SKILL.md defines. | Default | [hidden] | prose only | none | dedupe (done): points to the gate's owner summary; home gate-16 |
 | explain-11 | L40: End, one line (block D2). | Must | [lost-decision] | project_status.py:record (L303-350) | test_every_step_is_recorded_with_what_comes_next | dedupe (done): block D2 is one line naming project-control.md End; home control-15 |
-
-## /polish (skills/polish/SKILL.md)
-
-| ID | Rule (line) | Label | Failure it prevents | Enforced by | Evidence | Action |
-|---|---|---|---|---|---|---|
-| polish-01 | L8: Project workflow choice, one paragraph (block D1). | Must | The formal workflow imposed on an OFF project. | see control-01 to control-13 | see control-01 to control-13 | dedupe (done): block D1 is one paragraph naming project-control.md; home control-01 |
-| polish-02 | L12-13: Judgment over volume; product scrutiny, not code review (correctness, wiring, and intent belong to the gate). | Default | Manufactured findings; duplicated gate work. | prose only | none | keep |
-| polish-03 | L16-17: Frame the product, its users, and its bar; choose the lenses that apply and skip the rest. | Default | Lenses run that do not apply (spend). | prose only | none | keep |
-| polish-04 | L18-24: One instrument per lens, run one at a time; each gets the product, goal, and persona, and nothing about how it was built. | Default | An instrument primed with the builder's story. | prose only (the four agents are not in this repository, unverified) | none | keep |
-| polish-05 | L27-28: Real defects go to /fix or a milestone; a finding that questions the intent goes to the owner, never quietly into the plan; write the research note. | Must | [scope] | intent_lock.py verify fails an unruled intent edit | test_edit_after_lock_fails_verify | dedupe: same rule also at C-27, gate-13, loyal-04; keep one home at C-27 |
-| polish-06 | L31: End, one line (block D2). | Must | [lost-decision] | project_status.py:record (L303-350) | test_every_step_is_recorded_with_what_comes_next | dedupe (done): block D2 is one line naming project-control.md End; home control-15 |
-| polish-07 | L3, L5: Typed by the owner (disable-model-invocation: true); not part of the build loop, and skipped for a CLI, a library, or a personal tool. | Default | The model starts an outside-in review nobody asked for; listing text every session pays for. | the frontmatter's disable-model-invocation: true (L5) keeps it out of the model's listing; static_checks.py:invocable leaves it out of the always-loaded total (L108-110, L134-135) | test_a_skill_only_the_owner_types_is_left_out | keep |
 
 ## /evolve (skills/evolve/SKILL.md)
 
@@ -691,19 +681,18 @@ the plan: each one limits a pstack text where it clashes with a pipeline rule, a
 
 ## Summary
 
-The row counts are in Totals, near the top. 34 of the 81 dedupe rows come from the blocks below (13 from D1 and one
-from /code-craft's variant of it, 12 from D2, 8 from D3); next-05 and next-11 point to D2's home too. D4's six rows are keep.
+The row counts are in Totals, near the top. 32 of the 78 dedupe rows come from the blocks below (12 from D1 and one
+from /code-craft's variant of it, 11 from D2, 8 from D3); next-05 and next-11 point to D2's home too. D4's six rows are keep.
 
 ### Exact duplicate blocks across skills
 
 - **D1, "Workflow choice, first."** Now one paragraph (564 bytes, 565 with its final newline), byte for byte the same in
-  14 skills: capture L7, deploy L7, dev L12, evolve L8, explain L7, fix L7, gate L7, handoff L7, inbox L7, loyal L7,
-  next L7, plan L7, polish L8, scout L7. Its content's home is `project-control.md` (L3-23); the constitution's
+  13 skills: capture L7, deploy L7, dev L12, evolve L8, explain L7, fix L7, gate L7, handoff L7, inbox L7, loyal L7,
+  next L7, plan L7, scout L7. Its content's home is `project-control.md` (L3-23); the constitution's
   Applicability paragraph (L9-10) and `pipeline/SKILL.md` (L14-15) point to it, and `/code-craft` carries a two-line variant
   (L7-10, craft-01). Done as plan 6.2 proposed. In /evolve the paragraph still has nothing to apply to (evolve-01).
-- **D2, the End block.** Now one line in 12 skills, differing only in the skill name and the optional `--arg`: capture
-  L91, deploy L61, dev L153, explain L40, fix L61, gate L107, handoff L54, inbox L88, loyal L46, plan L113, polish L31,
-  scout L62. /next says the same at L27 and L50, and the constitution at L56-58. Home: the End section of
+- **D2, the End block.** Now one line in 11 skills, differing only in the skill name and the optional `--arg`: capture
+  L91, deploy L61, dev L153, explain L40, fix L61, gate L107, handoff L54, inbox L88, loyal L46, plan L113, scout L62. /next says the same at L27 and L50, and the constitution at L56-58. Home: the End section of
   `project-control.md` (L32-42), row control-15. Done.
 - **D3, the venture line.** Now one line, byte for byte the same, in 8 skills: capture L23, deploy L20, dev L54, fix
   L23, gate L21, handoff L21, loyal L19, plan L34 (capture and loyal set it as a list item). Home: the Venture projects
@@ -717,7 +706,7 @@ from /code-craft's variant of it, 12 from D2, 8 from D3); next-05 and next-11 po
   craft index found no other line repeated verbatim between files, apart from
   "Scripts: `~/.claude/skills/_shared/scripts/`." (gate L23, handoff L23). The remaining duplicates are the same rule
   in different words; each is marked dedupe in its row, with these homes: intent changed only by the owner (C-27:
-  gate-13, loyal-04, polish-05); checker isolation (C-10: gate-02; loyal-02 done); the heavy lock (C-35: scout-08,
+  gate-13, loyal-04); checker isolation (C-10: gate-02; loyal-02 done); the heavy lock (C-35: scout-08,
   fix-11; dev-13 is a pointer); write-through (C-19: dev-09; plan-06 done); asking only on material ambiguity (dev-02:
   control-08); mid-build input to the inbox (inbox-07: dev-25 done); one writer per checkout (handoff-04: dev-30);
   handoff by reference (C-21: handoff-02); owner-facing text decodes alone (C-39: explain-05 done; gate-16: explain-10

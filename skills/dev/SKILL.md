@@ -58,7 +58,7 @@ Scripts: `~/.claude/skills/_shared/scripts/`. `<session>` is this session's ID, 
 ## How the work runs
 - **Order.** Subtract dead weight and lay the scaffold the later steps stand on; then the load-bearing
   mechanism and the riskiest unknown; then the rest, wiring as you go. Logged findings, polish, and ideas
-  outside the contract wait for their slot (the next milestone's Open list, the inbox, `/polish`).
+  outside the contract wait for their slot (the next milestone's Open list or the inbox).
 - **Verification ladder.** Each edit: only the typecheck hook (once per turn, when typed files changed). A
   checkpoint: its own `check:` command and the tests of the modules touched, not the full suite or an
   isolated checker. The freeze: nothing extra; the gate's deterministic layer runs first and stops a failing

@@ -79,13 +79,12 @@ the build.
 | `/inbox` | Holds other people's opinions, proposals, and ideas in their own words until they are weighed against the locked intent, then records what was adopted or rejected and why. The gate fails when an item disappears. |
 | `/deploy` | Ships after a plain-words confirmation of each irreversible action, then checks the live product. |
 | `/explain` | Explains what exists to an engineer, a founder, an investor, or a user. |
-| `/polish` | An optional outside-in pass before real users see the product. |
 | `/evolve` | Improves the pipeline from real use. It collects failures and friction from sessions, reproduces each one, and keeps a change only when the reproduction flips, nothing measured gets worse, and an isolated reviewer finds the cause removed. |
 | `/code-craft` | Code-craft methods from pstack, read on demand: `review`, `architect`, `blast-radius`, `unslop`, `verify-skill`, and `pr <open \| check \| babysit \| ship>`. It works in OFF projects too. |
 | `/pipeline` | Turns the workflow on or off for a project, shows its status, and updates the installed pipeline (`update`). |
 
-`/pipeline`, `/evolve`, and `/polish` run only when you type them. Their `disable-model-invocation` setting
-keeps them out of the model's skill list.
+`/pipeline` and `/evolve` run only when you type them. Their `disable-model-invocation` setting keeps them out
+of the model's skill list.
 
 ## Checkers
 

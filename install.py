@@ -62,7 +62,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 SKILLS = ("pipeline", "next", "capture", "scout", "plan", "dev", "gate", "loyal", "fix", "handoff", "inbox", "deploy", "explain",
-          "polish", "evolve", "code-craft")
+          "evolve", "code-craft")
 RETIRED_SKILLS = ("qa", "integrate")
 # scripts/ goes whole, so every shared script (models.py, pr_watch.py, craft_sync.py, and the rest) is installed.
 SHARED = ("gate.sh", "scripts", "templates", "models.json", "references/project-control.md",

@@ -1,7 +1,7 @@
 # Pipeline charter
 
 The principles behind the coding pipeline: `/next`, `/capture`, `/scout`, `/plan`, `/dev`, `/gate`, `/loyal`,
-`/fix`, `/handoff`, `/inbox`, `/deploy`, `/explain`, `/polish`, `/evolve`. Written for frontier agents (Claude Opus 5.5 and
+`/fix`, `/handoff`, `/inbox`, `/deploy`, `/explain`, `/evolve`. Written for frontier agents (Claude Opus 5.5 and
 GPT-6 Astra class), in Claude Code and in Codex. Each skill carries its own rules; this file is the reason
 they are shaped the way they are, and the tie-breaker when a situation is not covered.
 
@@ -52,8 +52,8 @@ owner. `/dev` builds one milestone; `/gate` accepts or rejects it through isolat
 accepts it by watching the demo. Input that arrives while building (other people's opinions, proposed
 changes, new ideas) waits in the inbox, verbatim, until `/inbox` weighs it and the owner rules; it enters the
 record only through a decision. `/scout` answers real unknowns, `/fix` makes targeted changes, `/handoff`
-moves work between sessions and tools on purpose (switching tools is automatic), `/deploy` ships, `/explain`
-tells any audience what exists, `/polish` scrutinizes a product from outside. The owner never has to know which
+moves work between sessions and tools on purpose (switching tools is automatic), `/deploy` ships, and
+`/explain` tells any audience what exists. The owner never has to know which
 step comes next: `project_status.py` computes it from the record each skill's End writes, and `/next` (or
 `/next auto`, which chains steps until the owner must decide) takes it. The pipeline improves from its own
 use: `/evolve` turns what went wrong in a session into incidents and keeps a change only when `evolve.py`

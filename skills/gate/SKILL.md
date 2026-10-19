@@ -70,8 +70,8 @@ Scripts: `~/.claude/skills/_shared/scripts/`.
 - **BLOCKED**: something only the owner can settle. Write the Blockers row and ask, plainly.
 - **INCONCLUSIVE**: a checker could not ground itself even after its re-run, or the judge's verdict did not
   follow from its findings. Say which and why (the summary files name it), remove the cause, run again.
-- **Logged findings**, under any verdict, never start a round: they go to the next milestone's Open list or
-  `/polish`.
+- **Logged findings**, under any verdict, never start a round: they go to the next milestone's
+  Open list.
 
 ## The owner summary
 One screen, in plain words, readable without any earlier context, exceptions first: the verdict; what
