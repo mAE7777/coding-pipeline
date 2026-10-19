@@ -639,6 +639,20 @@ def section_of(text, heading):
     return m.group(1) if m else None
 
 
+class RunUsageTest(unittest.TestCase):
+    def test_one_hour_cache_writes_are_kept_when_a_run_recorded_them(self):
+        ev = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, ev, True)
+        opus = "claude-opus-5-5"
+        (ev / "a.summary.json").write_text(json.dumps({"served_model": opus, "usage": {
+            "input": 1, "cache_write": 100, "cache_read": 0, "output": 2, "cache_write_1h": 60}}))
+        (ev / "b.summary.json").write_text(json.dumps({"served_model": opus, "usage": {"cache_write": 50}}))
+        usage, models, _ = agent_fixtures.run_usage(ev)
+        self.assertEqual(usage[opus], {"input": 1, "cache_write": 150, "cache_read": 0, "output": 2,
+                                       "cache_write_1h": 60})
+        self.assertEqual(models, [opus])
+
+
 class HarnessTest(unittest.TestCase):
     """run_one end to end with a stand-in runner: no model, no spending."""
 

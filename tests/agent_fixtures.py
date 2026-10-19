@@ -483,8 +483,10 @@ def run_usage(ev):
             continue
         key = f"codex:{model}" if s.get("family") == "codex" or u.get("family") == "codex" else model
         acc = usage.setdefault(key, {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0})
-        for k in acc:
+        for k in ("input", "cache_write", "cache_read", "output"):
             acc[k] += u.get(k) or 0
+        if u.get("cache_write_1h"):  # recorded by newer runs only (spend.py prices it at 2x input)
+            acc["cache_write_1h"] = acc.get("cache_write_1h", 0) + u["cache_write_1h"]
     return usage, sorted(models), escalated
 
 
