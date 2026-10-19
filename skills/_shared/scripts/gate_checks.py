@@ -16,13 +16,21 @@ test-tamper   FAIL when, since the baseline: a test file was deleted (a move wit
               deletion, unless it moves a file the runner collects by its default pattern, such as test_*.py or
               *.test.js, to a name it does not collect); a skip, only (focus), or expected-failure marker was
               added to a test file, each marker keyed to the test it applies to (so one moved onto a test that
-              did not carry it is new; the f- and x-prefixed runner calls such as fit and xit count only in a
-              JavaScript or TypeScript test file and only with a string first argument); or a number grew on a
-              line that mentions a timeout, in a test file or a test runner's config, matched with the baseline
-              line that reads the same apart from its numbers (in package.json, only the numeric values of keys
-              naming a timeout inside the jest, mocha, vitest, ava, playwright, cypress, karma, or jasmine
-              settings, never a version string). WARN when the test files hold fewer assertions in total than at
-              the baseline. Findings for a file are cleared only by an entry in
+              did not carry it is new, while one that moved with its test, the same kind and text on a test of
+              the same name gone from another test file, is not; pytest's marks count with or without the @ and
+              the pytest. prefix, and vitest's skipIf and runIf count as skips; the f- and x-prefixed runner calls
+              such as fit and xit count only in a JavaScript or TypeScript test file and only with a string first
+              argument);
+              or a timeout grew: a number bound to a timeout-named key or call (timeout=5, testTimeout: 5000,
+              jest.setTimeout(5000), @pytest.mark.timeout(5); a bare setTimeout(fn, ms) is a timer), never on
+              a comment or assertion line, in a test file or a test runner's config, on a line matched with the
+              baseline line that reads the same apart from its numbers (pytest's timeouts in pytest.ini and in
+              pytest's own section of pyproject.toml, setup.cfg, and tox.ini; in package.json, only the numeric
+              values of keys naming a timeout inside the jest, mocha, vitest, ava, playwright, cypress, karma, or
+              jasmine settings, never a version string). WARN when the test files hold fewer assertions in total
+              than at the baseline (a commented-out assertion counts for none). Vendored folders (vendor/,
+              third_party/, ...) and dependency folders (node_modules/, .venv/, venv/, site-packages/,
+              bower_components/) hold no test files. Findings for a file are cleared only by an entry in
               docs/project/decisions.md that holds "[test-change: <path>]" and whose Source line is an owner
               ruling ("Source: [owner ..."); rulings.py check proves the owner's words. SKIP when no baseline was
               recorded; FAIL when state.md records one that is gone.
@@ -76,19 +84,23 @@ JS_MARKERS = [
     ("skip", re.compile(r"(?<![\w.$])x(?:it|test|describe|context|specify)\s*\((?=\s*['\"`])")),
     ("only", re.compile(r"(?<![\w.$])f(?:it|describe|context)\s*\((?=\s*['\"`])")),
 ]
+# pytest's marks count with or without the @ and the pytest. prefix (pytestmark = pytest.mark.skip, from pytest
+# import mark), and vitest's conditional skipIf and runIf count as skips.
 MARKERS = [
     ("skip", re.compile(r"\b(?:it|test|describe|context|suite|specify|this)\.skip\b")),
-    ("skip", re.compile(r"@pytest\.mark\.skip(?:if)?\b")),
+    ("skip", re.compile(r"\b(?:it|test|describe|suite)\.(?:skipIf|runIf)\b")),
+    ("skip", re.compile(r"(?:\bpytest\.)?\bmark\.(?:skip|skipif)\b")),
     ("skip", re.compile(r"\bpytest\.(?:skip|importorskip)\s*\(")),
     ("skip", re.compile(r"@unittest\.skip(?:If|Unless)?\b")),
     ("skip", re.compile(r"\.skipTest\s*\(")),
+    ("skip", re.compile(r"\bSkipTest\s*\(")),
     ("skip", re.compile(r"\b(?:t|tt|tb|b|s|T\(\))\.Skip(?:f|Now)?\s*\(")),  # Go; not C#'s LINQ .Skip(n)
     ("skip", re.compile(r"#\[ignore\b")),
     ("skip", re.compile(r"\bXCTSkip(?:If|Unless)?\b")),
     ("skip", re.compile(r"@(?:Disabled|Ignore)\b")),
     ("skip", re.compile(r"\b(?:it|test)\.fixme\b")),
     ("only", re.compile(rf"\b{RUNNER}\.only\b")),
-    ("expected-failure", re.compile(r"@pytest\.mark\.xfail\b")),
+    ("expected-failure", re.compile(r"(?:\bpytest\.)?\bmark\.xfail\b")),
     ("expected-failure", re.compile(r"\bpytest\.xfail\s*\(")),
     ("expected-failure", re.compile(r"@(?:unittest\.)?expectedFailure\b")),
     ("expected-failure", re.compile(r"\bXCTExpectFailure\b")),
@@ -111,6 +123,21 @@ RUNNER_SETTINGS = ("jest", "mocha", "vitest", "ava", "playwright", "cypress", "k
 TIMEOUT = re.compile(r"timeout", re.I)
 NUMBER = re.compile(r"(?<![\w.])\d[\d_]*(?:\.\d+)?")
 ASSERTION = re.compile(r"\bassert|\bexpect\s*\(|\.should\b|XCTAssert|\b(?:t|tb|b)\.(?:Error|Fatal)f?\s*\(")
+# A timeout is a number bound to a timeout-named key (timeout=5, testTimeout: 5000) or call (jest.setTimeout(5000),
+# this.timeout(5000), @pytest.mark.timeout(5)); a bare setTimeout(fn, ms) is a timer, not a test's timeout.
+TIMEOUT_NAME = r"(?:[\w$]+\.)*[\w$]*timeout[\w$]*"
+TIMEOUT_VALUE = r"\d[\d_]*(?:\.\d+)?(?:\s*\*\s*\d[\d_]*(?:\.\d+)?)*"
+TIMEOUT_KEY = re.compile(rf"(?<![\w$.])({TIMEOUT_NAME})[\"']?\s*(?::|=(?!=))\s*({TIMEOUT_VALUE})", re.I)
+TIMEOUT_CALL = re.compile(rf"(?<![\w$.])({TIMEOUT_NAME})\s*\(\s*({TIMEOUT_VALUE})", re.I)
+TIMER = "settimeout"
+COMMENT = re.compile(r"^\s*(?:#(?!\[)|//|/\*|\*|--)")   # a Rust #[attribute] is code
+INI_COMMENT = re.compile(r"^\s*[#;]")
+# pytest's own sections, the only part of these files whose timeouts are compared; pytest.ini is pytest's whole.
+PYTEST_SECTIONS = {"pyproject.toml": ("tool.pytest.ini_options", "tool.pytest"), "setup.cfg": ("tool:pytest",),
+                   "tox.ini": ("pytest",)}
+INI_FILES = ("pytest.ini", *PYTEST_SECTIONS)
+# The folders a package manager installs into, never the project's own tests (adopt.py's VENDORED stays as it is).
+DEPENDENCIES = ("node_modules/", ".venv/", "venv/", "site-packages/", "bower_components/")
 DECISION = re.compile(r"^## (D-\d{3,})\b.*?(?=^## D-\d{3,}\b|\Z)", re.M | re.S)
 TEST_CHANGE = re.compile(r"\[test-change:\s*([^\]]+?)\s*\]")
 OWNER_SOURCE = re.compile(r"^Source:[ \t]*\[owner ", re.M)
@@ -246,7 +273,7 @@ def gate_excluded(project):
 
 
 def is_vendored(rel):
-    return any(rel.startswith(v) or f"/{v}" in rel for v in VENDORED)
+    return any(rel.startswith(v) or f"/{v}" in rel for v in VENDORED + DEPENDENCIES)
 
 
 # ---- test-tamper ----------------------------------------------------------------------------------------------
@@ -257,6 +284,11 @@ def is_test_file(rel):
 
 def is_test_config(rel):
     return bool(TEST_CONFIG.search(rel)) and not is_vendored(rel) and not TEST_DATA.search(rel)
+
+
+def is_pytest_config(rel):
+    """pyproject.toml, setup.cfg, or tox.ini: only pytest's own section is read."""
+    return rel.rsplit("/", 1)[-1] in PYTEST_SECTIONS and not is_vendored(rel) and not TEST_DATA.search(rel)
 
 
 def is_js(rel):
@@ -292,15 +324,14 @@ def markers(lines, js=True):
     return found
 
 
-def new_markers(old_lines, new_lines, js=True):
-    """Markers added since the baseline, each keyed to the test it applies to. A marker is not new when the
-    baseline has it on the same line and test, or reworded on the same test, or with the same line on a test the
-    baseline did not have (the test was renamed); one now on a test that existed without it is new. js: the file
-    is JavaScript or TypeScript, where the f- and x-prefixed runner calls are markers too."""
+def marker_changes(old_lines, new_lines, js=True):
+    """(markers added, markers gone) since the baseline, each keyed to the test it applies to. A marker is not
+    added when the baseline has it on the same line and test, or reworded on the same test, or with the same line
+    on a test the baseline did not have (the test was renamed); one now on a test that existed without it is
+    added. js: the file is JavaScript or TypeScript, where the f- and x-prefixed runner calls are markers too."""
     old, new = markers(old_lines, js), markers(new_lines, js)
     old_tests = {line.strip() for line in old_lines if defines_test(line, js)}
-    left = list(old)
-    pending = list(new)
+    left, pending = list(old), list(new)
     keys = (lambda o, n: o[2:5] == n[2:5],                                  # same marker, line, and test
             lambda o, n: n[4] is not None and (o[2], o[4]) == (n[2], n[4]),  # reworded on the same test
             lambda o, n: n[4] not in old_tests and o[2:4] == n[2:4])         # the same line on a renamed test
@@ -310,20 +341,65 @@ def new_markers(old_lines, new_lines, js=True):
             if match is not None:
                 left.remove(match)
                 pending.remove(nm)
-    return [(n, f"new {kind} marker {text}") for n, kind, text, _, _ in pending]
+    return pending, left
+
+
+def new_markers(old_lines, new_lines, js=True):
+    """Markers added since the baseline (marker_changes): [(line, "new <kind> marker <text>")]."""
+    return [(n, f"new {kind} marker {text}") for n, kind, text, _, _ in marker_changes(old_lines, new_lines, js)[0]]
+
+
+def test_name(definition):
+    """A test's name from its definition line: the name after def, fn, func, and the like, else its first string
+    (a JavaScript test's title), else the whole line."""
+    m = re.search(r"\b(?:def|fn|func|fun|void|Task|class)\s+(\w+)|(['\"`])(.*?)\2", definition)
+    return (m.group(1) or m.group(3)) if m else definition
+
+
+def moved_with_their_test(added, gone):
+    """The added markers [(file, paths, path, marker)] left once each one that moved with its test (a marker of the
+    same kind and text, on a test of the same name, gone from another test file in the same change) is taken out."""
+    pool = [(i, (m[1], m[2], test_name(m[4]))) for i, m in gone if m[4] is not None]
+    left = []
+    for entry in added:
+        m = entry[3]
+        key = (m[1], m[2], test_name(m[4])) if m[4] is not None else None
+        match = next((g for g in pool if key and g[1] == key and g[0] != entry[0]), None)
+        if match:
+            pool.remove(match)
+        else:
+            left.append(entry)
+    return left
 
 
 def as_number(s):
-    return float(s.replace("_", ""))
+    """A timeout's value, a product such as 30 * 1000 included."""
+    out = 1.0
+    for factor in s.split("*"):
+        out *= float(factor.strip().replace("_", ""))
+    return out
 
 
-def raised_timeouts(old_lines, new_lines):
-    """Lines mentioning a timeout whose numbers grew, each paired with the baseline line that reads the same apart
-    from its numbers."""
-    left = Counter(l.strip() for l in old_lines if TIMEOUT.search(l))
+def timeout_values(line, comment=COMMENT):
+    """{key or call name: [values]} for the numbers a line binds to a timeout; none on a comment or assertion line."""
+    out = {}
+    if not TIMEOUT.search(line) or comment.match(line) or ASSERTION.search(line):
+        return out
+    for rx in (TIMEOUT_KEY, TIMEOUT_CALL):
+        for m in rx.finditer(line):
+            if not (rx is TIMEOUT_CALL and m.group(1).lower() == TIMER):
+                out.setdefault(m.group(1), []).append(" ".join(m.group(2).split()))
+    return out
+
+
+def raised_timeouts(old_lines, new_lines, comment=COMMENT):
+    """Timeouts that grew, keyed by name, on lines paired with the baseline line that reads the same apart from
+    numbers."""
+    olds = [l.strip() for l in old_lines if timeout_values(l, comment)]
+    left = Counter(olds)
     changed = []
     for n, line in enumerate(new_lines, 1):
-        if not TIMEOUT.search(line):
+        if not timeout_values(line, comment):
             continue
         s = line.strip()
         if left[s] > 0:
@@ -331,20 +407,42 @@ def raised_timeouts(old_lines, new_lines):
         else:
             changed.append((n, s))
     pool = {}
-    for s in [l.strip() for l in old_lines if TIMEOUT.search(l)]:
+    for s in olds:
         if left[s] > 0:
             left[s] -= 1
             pool.setdefault(NUMBER.sub("#", s), []).append(s)
     out = []
     for n, s in changed:
-        olds = pool.get(NUMBER.sub("#", s))
-        if not olds:
+        same = pool.get(NUMBER.sub("#", s))
+        if not same:
             continue
-        o = olds.pop(0)
-        grew = [f"{a} -> {b}" for a, b in zip(NUMBER.findall(o), NUMBER.findall(s)) if as_number(b) > as_number(a)]
+        was, now = timeout_values(same.pop(0), comment), timeout_values(s, comment)
+        grew = [f"{a} -> {b}" for name in now for a, b in zip(was.get(name, ()), now[name])
+                if as_number(b) > as_number(a)]
         if grew:
             out.append((n, "timeout raised " + ", ".join(grew)))
     return out
+
+
+def section_lines(text, names):
+    """[(line number, line)] inside the INI or TOML sections named, e.g. [tool.pytest.ini_options]."""
+    out, inside = [], False
+    for n, line in enumerate(text.splitlines(), 1):
+        head = re.match(r"^\s*\[\[?\s*([\w.:\"' -]+?)\s*\]\]?\s*(?:[#;].*)?$", line)
+        if head:
+            inside = head.group(1) in names
+        elif inside:
+            out.append((n, line))
+    return out
+
+
+def ini_timeouts(rel, old_text, new_text):
+    """pytest's timeouts in pytest.ini, or only inside pytest's own section of pyproject.toml, setup.cfg, tox.ini."""
+    names = PYTEST_SECTIONS.get(rel.rsplit("/", 1)[-1])
+    old = section_lines(old_text, names) if names else list(enumerate(old_text.splitlines(), 1))
+    new = section_lines(new_text, names) if names else list(enumerate(new_text.splitlines(), 1))
+    return [(new[i - 1][0], what) for i, what in raised_timeouts([l for _, l in old], [l for _, l in new],
+                                                                  INI_COMMENT)]
 
 
 def json_timeouts(data):
@@ -380,8 +478,9 @@ def package_timeouts(old_text, new_text):
 
 
 def assertion_lines(lines):
+    """[(line number, line, assertions on it)]; a commented-out line holds none."""
     return [(n, line.strip(), len(ASSERTION.findall(line))) for n, line in enumerate(lines, 1)
-            if ASSERTION.search(line)]
+            if ASSERTION.search(line) and not COMMENT.match(line)]
 
 
 def exemptions(project):
@@ -411,6 +510,7 @@ def test_tamper(project, given=None):
     if not old_tests and not new_tests and not configs:
         return [("SKIP", f"no test files at the {base.mid} baseline or now (tests/, test/, __tests__/, spec/, e2e/, "
                          "*.test.*, *.spec.*, test_*.py, *_test.py, *_test.go, *Tests.swift)")]
+    configs |= {r for r in base.files if r in now and is_pytest_config(r)}  # after the SKIP: tests make them count
     owner, other = exemptions(project)
     findings = []  # (path, "path[:line] what")
     added = {}
@@ -426,7 +526,7 @@ def test_tamper(project, given=None):
         else:
             findings.append((rel, f"{rel} deleted"))
     before_total = after_total = 0
-    drops = []
+    drops, marks_added, marks_gone = [], [], []  # a (path, None) finding holds the place of its added markers
     for rel in sorted(old_tests | new_tests | configs):
         try:
             old = base.text(rel) if rel in base.files else ""
@@ -446,14 +546,21 @@ def test_tamper(project, given=None):
         old_lines, new_lines = old.splitlines(), new.splitlines()
         is_test = rel in old_tests or rel in new_tests
         if is_test and rel in now:
-            findings += [(rel, f"{rel}:{n} {what}") for n, what in new_markers(old_lines, new_lines, is_js(rel))]
-        if rel in base.files and rel in now and rel.rsplit("/", 1)[-1] == "package.json":
+            plus, minus = marker_changes(old_lines, new_lines, is_js(rel))
+            marks_added += [(rel, (rel,), rel, m) for m in plus]
+            marks_gone += [(rel, m) for m in minus]
+            findings.append((rel, None))
+        elif is_test:  # deleted, or moved: its markers may have gone with their tests to another test file
+            marks_gone += [(rel, m) for m in markers(old_lines, is_js(rel))]
+        name = rel.rsplit("/", 1)[-1]
+        if rel in base.files and rel in now and name == "package.json":
             try:
                 findings += [(rel, f"{rel}{f':{n}' if n else ''} {what}") for n, what in package_timeouts(old, new)]
             except ValueError as exc:
                 findings.append((rel, f"{rel} not compared: it does not parse as JSON ({exc})"))
         elif rel in base.files and rel in now:
-            findings += [(rel, f"{rel}:{n} {what}") for n, what in raised_timeouts(old_lines, new_lines)]
+            found = ini_timeouts(rel, old, new) if name in INI_FILES else raised_timeouts(old_lines, new_lines)
+            findings += [(rel, f"{rel}:{n} {what}") for n, what in found]
         if is_test and rel not in owner:
             olda, newa = assertion_lines(old_lines), assertion_lines(new_lines)
             b, a = sum(c for *_, c in olda), sum(c for *_, c in newa)
@@ -469,6 +576,10 @@ def test_tamper(project, given=None):
                 where = (f" (baseline line{'s' if len(gone) > 1 else ''} {', '.join(gone[:10])}"
                          f"{' and more' if len(gone) > 10 else ''} gone)") if gone else ""
                 drops.append(f"{rel} {b} -> {a}{where}")
+    marks = {}
+    for rel, _, _, m in moved_with_their_test(marks_added, marks_gone):
+        marks.setdefault(rel, []).append((rel, f"{rel}:{m[0]} new {m[1]} marker {m[2]}"))
+    findings = [f for rel, text in findings for f in (marks.get(rel, []) if text is None else [(rel, text)])]
     cleared = sorted({f"{rel} ({owner[rel]})" for rel, _ in findings if rel in owner})
     failing = [text for rel, text in findings if rel not in owner]
     tail = []

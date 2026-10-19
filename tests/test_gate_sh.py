@@ -414,7 +414,7 @@ class BaselineChecksTest(unittest.TestCase):
             fail = self.failing(gate(d).stdout)
             self.assertIn("tests/test_a.py:9 new skip marker @unittest.skip", fail)
             self.assertIn("web/app.test.ts:3 new only marker it.only", fail)
-            self.assertIn("tests/test_new.py:4 new expected-failure marker @pytest.mark.xfail", fail)
+            self.assertIn("tests/test_new.py:4 new expected-failure marker pytest.mark.xfail", fail)
             self.assertNotIn("test_old.py", fail, "a marker already there at the baseline is not new")
 
     def test_a_raised_timeout_fails_and_a_lowered_one_does_not(self):

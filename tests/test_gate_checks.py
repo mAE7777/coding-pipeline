@@ -43,6 +43,39 @@ class MarkerTest(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertEqual(gc.new_markers([], [line]), [])
 
+    def test_skip_markers_without_the_at_or_the_prefix_and_conditional_skips(self):
+        # Ported from the fast repository's tests (test_checks.py, ReviewFindings), which fast.py must match.
+        py = "import pytest\n\ndef test_a():\n    assert 1 == 1\n"
+        ut = "import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(1, 1)\n"
+        vt = "import { it, expect } from 'vitest'\nit('adds', () => {\n  expect(add(1, 2)).toBe(3)\n})\n"
+        mark = "from pytest import mark\n\ndef test_a():\n    assert 1\n"
+        cases = [
+            ("tests/test_a.py", py, py.replace("\n\ndef", '\npytestmark = pytest.mark.skip(reason="flaky")\n\ndef'),
+             "new skip marker pytest.mark.skip"),
+            ("tests/test_a.py", mark, mark.replace("\ndef", '\n@mark.skip(reason="x")\ndef'), "new skip marker mark.skip"),
+            ("tests/test_a.py", mark, mark.replace("\ndef", "\n@mark.skipif(True, reason='x')\ndef"),
+             "new skip marker mark.skipif"),
+            ("tests/test_a.py", mark, mark.replace("\ndef", "\n@mark.xfail\ndef"), "new expected-failure marker mark.xfail"),
+            ("tests/test_a.py", ut, ut.replace("    def test_a(self):\n", "    def test_a(self):\n        raise "
+                                               "unittest.SkipTest('later')\n"), "new skip marker SkipTest("),
+            ("tests/test_a.py", ut, ut.replace("    def test_a(self):\n", "    def test_a(self):\n        raise "
+                                               "SkipTest('later')\n"), "new skip marker SkipTest("),
+            ("src/add.test.ts", vt, vt.replace("it('adds'", "it.skipIf(true)('adds'"), "new skip marker it.skipIf"),
+            ("src/add.test.ts", vt, vt.replace("it('adds'", "it.runIf(false)('adds'"), "new skip marker it.runIf"),
+            ("src/add.test.ts", vt, vt.replace("it('adds'", "describe.skipIf(ci)('adds'"),
+             "new skip marker describe.skipIf"),
+            ("src/add.test.ts", vt, vt.replace("it('adds'", "test.runIf(ok)('adds'"), "new skip marker test.runIf"),
+            ("src/add.test.ts", vt, vt.replace("it('adds'", "suite.skipIf(x)('adds'"), "new skip marker suite.skipIf"),
+        ]
+        for rel, base, new, want in cases:
+            with self.subTest(want=want, new=new):
+                self.assertEqual([w for _, w in gc.new_markers(base.splitlines(), new.splitlines(), gc.is_js(rel))],
+                                 [want])
+        for line in ("bookmark.skip(1)", "watermark.xfail = 2", "class MySkipTest(Base):", "except unittest.SkipTest:",
+                     "items.skipIfEmpty()", "it.skipped", "runIfNeeded()", "self.mark.skipped = True"):
+            with self.subTest(line=line):
+                self.assertEqual(gc.new_markers([], [line]), [])
+
     def test_a_marker_already_there_is_not_new(self):
         old = ["@pytest.mark.skip", "def test_a():", "    assert 1"]
         self.assertEqual(gc.new_markers(old, ["# moved down", *old]), [])
@@ -62,7 +95,7 @@ class MarkerTest(unittest.TestCase):
         old = ['@pytest.mark.skip(reason="flaky")', "def test_legacy_sync():", "    sync()", "",
                "def test_total():", "    assert total() == 3"]
         moved = ['@pytest.mark.skip(reason="flaky")', "def test_total():", "    assert total() == 3"]
-        self.assertEqual(gc.new_markers(old, moved), [(1, "new skip marker @pytest.mark.skip")],
+        self.assertEqual(gc.new_markers(old, moved), [(1, "new skip marker pytest.mark.skip")],
                          "a skip moved from a deleted test onto one that ran")
         reworded = ['@pytest.mark.skip(reason="flaky, see #12")', "def test_legacy_sync():", "    sync()"]
         self.assertEqual(gc.new_markers(old, reworded), [], "a reworded marker on the same test")
@@ -92,6 +125,51 @@ class TimeoutTest(unittest.TestCase):
 
     def test_a_new_timeout_line_has_nothing_to_compare_with(self):
         self.assertEqual(gc.raised_timeouts([], ["jest.setTimeout(60000);"]), [])
+
+    def test_only_numbers_bound_to_a_timeout_count(self):
+        quiet = [  # (baseline line, line now): no test timeout grew
+            ("    assert retry(timeout=5, attempts=3) == 3", "    assert retry(timeout=5, attempts=4) == 4"),
+            ("    assert DEFAULT_TIMEOUT == 30", "    assert DEFAULT_TIMEOUT == 60"),
+            ("    result = retry(timeout=5, attempts=3)", "    result = retry(timeout=5, attempts=4)"),
+            ("  setTimeout(fn, 500);", "  setTimeout(fn, 5000);"),
+            ("  setTimeout(() => done(), 500);", "  setTimeout(() => done(), 5000);"),
+            ("  await setTimeout(100);", "  await setTimeout(900);"),
+            ("  // jest.setTimeout(5000);", "  // jest.setTimeout(60000);"),
+            ("  await expect(page).toHaveURL(u, { timeout: 5000 });", "  await expect(page).toHaveURL(u, { timeout: 9000 });"),
+            ("  const TIMEOUT_MS = 200; const RETRIES = 2;", "  const TIMEOUT_MS = 200; const RETRIES = 9;"),
+        ]
+        for old, new in quiet:
+            self.assertEqual(gc.raised_timeouts([old], [new]), [], new)
+        loud = [
+            ("jest.setTimeout(5000);", "jest.setTimeout(30_000);", "5000 -> 30_000"),
+            ("  this.timeout(5000);", "  this.timeout(10000);", "5000 -> 10000"),
+            ("@pytest.mark.timeout(5)", "@pytest.mark.timeout(50)", "5 -> 50"),
+            ("@timeout(5)", "@timeout(10)", "5 -> 10"),
+            ("  timeout(5)", "  timeout(10)", "5 -> 10"),
+            ("  testTimeout: 5000,", "  testTimeout: 60000,", "5000 -> 60000"),
+            ('  "testTimeout": 5000,', '  "testTimeout": 9000,', "5000 -> 9000"),
+            ("    r = fetch(url, timeout=5, retries=3)", "    r = fetch(url, timeout=50, retries=3)", "5 -> 50"),
+            ("jasmine.DEFAULT_TIMEOUT_INTERVAL = 5000;", "jasmine.DEFAULT_TIMEOUT_INTERVAL = 20000;", "5000 -> 20000"),
+            ("  timeout: 30 * 1000,", "  timeout: 60 * 1000,", "30 * 1000 -> 60 * 1000"),
+            ("vi.setConfig({ testTimeout: 1000, hookTimeout: 500 })", "vi.setConfig({ testTimeout: 1000, hookTimeout: 900 })",
+             "500 -> 900"),
+        ]
+        for old, new, want in loud:
+            self.assertEqual(gc.raised_timeouts([old], [new]), [(1, f"timeout raised {want}")], new)
+
+    def test_commented_out_assertions_count_for_none(self):
+        for line, n in (("# assert x", 0), ("// expect(x)", 0), (" * expect(x)", 0), ("-- assert", 0), ("/* assert", 0),
+                        ("assert x  # assert y", 2), ("#[test] assert_eq!(a, b)", 1)):
+            self.assertEqual(sum(c for *_, c in gc.assertion_lines([line])), n, line)
+
+    def test_dependency_folders_hold_no_test_files(self):
+        for rel in ("node_modules/pkg/test/index.test.js", "web/node_modules/pkg/test/index.test.js",
+                    ".venv/lib/pkg/test/index.test.js", "venv/pkg/test/index.test.js",
+                    "lib/site-packages/pkg/test/index.test.js", "bower_components/pkg/test/index.test.js"):
+            self.assertFalse(gc.is_test_file(rel), rel)
+        self.assertTrue(gc.is_test_file("src/myvenv/test_a.py"), "only the folder itself")
+        self.assertEqual(gc.VENDORED, ("vendor/", "third_party/", "third-party/", "external/", "Pods/"),
+                         "adopt.py's own list is unchanged (the fast repository compares it)")
 
     def test_package_json_compares_only_the_runners_numeric_timeouts(self):
         old = '{\n  "dependencies": {"p-timeout": "^5.1.0"},\n  "jest": {"testTimeout": 5000},\n  "mocha": {"timeout": 2000}\n}\n'
@@ -123,6 +201,14 @@ class TamperTest(unittest.TestCase):
     def tamper(self):
         return gc.test_tamper(self.p, "M1")[0]
 
+    def write(self, files):
+        for rel, text in files.items():
+            (self.p / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.p / rel).write_text(text)
+
+    def failing(self):
+        return " ".join(d for s, d in gc.test_tamper(self.p, "M1") if s == "FAIL")
+
     def move(self, a, b):
         (self.p / b).parent.mkdir(parents=True, exist_ok=True)
         (self.p / a).rename(self.p / b)
@@ -153,6 +239,97 @@ class TamperTest(unittest.TestCase):
         self.assertEqual(self.tamper()[0], "PASS", self.tamper())
         (self.p / "tests/a.test.js").write_text("fit('a', () => { expect(1).toBe(1) })\n")
         self.assertIn("tests/a.test.js:1 new only marker fit(", self.tamper()[1])
+
+    # Ported from the fast repository's tests (test_checks.py, ReviewFindings), which fast.py must match.
+
+    def test_a_skip_written_as_pytestmark_fails(self):
+        py = "import pytest\n\ndef test_a():\n    assert 1 == 1\n"
+        self.baseline({"tests/test_a.py": py})
+        self.write({"tests/test_a.py": py.replace("\n\ndef", '\npytestmark = pytest.mark.skip(reason="flaky")\n\ndef')})
+        self.assertIn("tests/test_a.py:2 new skip marker pytest.mark.skip", self.failing())
+
+    def test_commented_out_assertions_count_for_none(self):
+        body = "def test_a():\n    r = compute()\n    assert r == 42\n    assert r > 0\n"
+        self.baseline({"tests/test_a.py": body, "web/a.test.js": "it('a', () => {\n  expect(a()).toBe(1)\n})\n"})
+        self.write({"tests/test_a.py": body.replace("    assert", "    # assert"),
+                    "web/a.test.js": "it('a', () => {\n  // expect(a()).toBe(1)\n  /* expect(b()) */\n})\n"})
+        got = gc.test_tamper(self.p, "M1")
+        self.assertEqual([s for s, _ in got], ["WARN"], got)
+        self.assertIn("fell from 3 to 0", got[0][1])
+
+    def test_a_number_beside_a_timeout_that_is_not_one_passes(self):
+        self.baseline({"tests/test_retry.py": "def test_retry():\n    assert retry(timeout=5, attempts=3) == 3\n",
+                       "tests/test_default.py": "from app import DEFAULT_TIMEOUT\n\ndef test_d():\n"
+                                                "    assert DEFAULT_TIMEOUT == 30\n"})
+        self.write({"tests/test_retry.py": "def test_retry():\n    assert retry(timeout=5, attempts=4) == 4\n",
+                    "tests/test_default.py": "from app import DEFAULT_TIMEOUT\n\ndef test_d():\n"
+                                             "    assert DEFAULT_TIMEOUT == 60\n"})
+        self.assertEqual(self.tamper()[0], "PASS", self.tamper())
+
+    def test_pytest_timeouts_in_pyproject_setup_cfg_and_tox_ini(self):
+        pyproject = ('[project]\nname = "x"\ntimeout = 1\n\n[tool.pytest.ini_options]\ntimeout = 10\n'
+                     'addopts = "--timeout=20"\n\n[tool.other]\ntimeout = 3\n')
+        setup_cfg = "[metadata]\nname = x\n\n[tool:pytest]\naddopts =\n    -x\n    --timeout=30\n# timeout = 1\n"
+        tox_ini = "[tox]\nenvlist = py\n\n[pytest]\ntimeout = 40\n\n[testenv]\ncommands = pytest --timeout=1\n"
+        self.baseline({"pyproject.toml": pyproject, "setup.cfg": setup_cfg, "tox.ini": tox_ini,
+                       "pytest.ini": "[pytest]\ntimeout = 50\n", "tests/test_a.py": "def test_a():\n    assert 1\n"})
+        self.write({"pyproject.toml": pyproject.replace("timeout = 1\n", "timeout = 9\n").replace("timeout = 3", "timeout = 99"),
+                    "setup.cfg": setup_cfg.replace("# timeout = 1", "# timeout = 99"),
+                    "tox.ini": tox_ini.replace("--timeout=1", "--timeout=99")})
+        self.assertEqual(self.tamper()[0], "PASS", "outside pytest's own section, or a comment")
+        self.write({"pyproject.toml": pyproject.replace("timeout = 10", "timeout = 600").replace("--timeout=20", "--timeout=200"),
+                    "setup.cfg": setup_cfg.replace("--timeout=30", "--timeout=300"),
+                    "tox.ini": tox_ini.replace("timeout = 40", "timeout = 400"),
+                    "pytest.ini": "[pytest]\ntimeout = 500\n"})
+        fail = self.failing()
+        for want in ("pyproject.toml:6 timeout raised 10 -> 600", "pyproject.toml:7 timeout raised 20 -> 200",
+                     "setup.cfg:7 timeout raised 30 -> 300", "tox.ini:5 timeout raised 40 -> 400",
+                     "pytest.ini:2 timeout raised 50 -> 500"):
+            self.assertIn(want, fail)
+
+    def test_a_project_without_tests_stays_a_skip_when_pyproject_changes(self):
+        self.baseline({"pyproject.toml": '[project]\nname = "x"\nversion = "1"\n'})
+        self.write({"pyproject.toml": '[project]\nname = "x"\nversion = "2"\n'})
+        self.assertEqual(self.tamper()[0], "SKIP")
+
+    def test_dependency_folders_hold_no_test_files(self):
+        deps = {f"{d}pkg/test/index.test.js": "it('a', () => { expect(1).toBe(1) })\n"
+                for d in ("lib/site-packages/", "bower_components/", "web/node_modules/")}
+        self.baseline({**deps, "tests/test_a.py": "def test_a():\n    assert 1\n"})
+        for rel in deps:
+            (self.p / rel).unlink()
+        status, detail = self.tamper()
+        self.assertEqual(status, "PASS", detail)
+        self.assertIn("(1 test file(s);", detail)
+
+    def test_a_skipped_test_moved_to_another_file_is_not_new(self):
+        old_all = ('import pytest\n\ndef test_a():\n    assert 1\n\n@pytest.mark.skip(reason="needs network")\n'
+                   "def test_net():\n    assert fetch()\n")
+        self.baseline({"tests/test_all.py": old_all, "tests/test_other.py": "def test_x():\n    assert 1\n",
+                       "tests/test_gone.py": "import pytest\n\n@pytest.mark.xfail\ndef test_old():\n    assert 0\n"})
+        self.write({"tests/test_all.py": "def test_a():\n    assert 1\n",
+                    "tests/test_network.py": 'import pytest\n\n@pytest.mark.skip(reason="needs network")\n'
+                                             "def test_net():\n    assert fetch()\n"})
+        self.assertEqual(self.tamper()[0], "PASS", self.tamper())
+        self.write({"tests/test_other.py": 'import pytest\n\n@pytest.mark.skip(reason="needs network")\n'
+                                           "def test_x():\n    assert 1\n"})
+        fail = self.failing()
+        self.assertIn("tests/test_other.py:3 new skip marker", fail, "another test, so a new skip")
+        self.assertNotIn("test_network.py", fail)
+        self.write({"tests/test_other.py": "def test_x():\n    assert 1\n"})
+        (self.p / "tests/test_gone.py").unlink()
+        others = "".join(f"\ndef test_more_{i}(tmp_path):\n    assert make({i}).ready\n" for i in range(8))
+        self.write({"tests/test_new_home.py": "import pytest\n\n@pytest.mark.xfail\ndef test_old():\n    assert 0\n"
+                                              + others})
+        fail = self.failing()
+        self.assertIn("tests/test_gone.py deleted", fail)
+        self.assertNotIn("test_new_home.py", fail, "its marker moved with the test from the deleted file")
+
+    def test_a_moved_test_file_keeps_its_markers(self):
+        skipped = "import pytest\n\n@pytest.mark.skip(reason='slow')\ndef test_a():\n    assert 1\n"
+        self.baseline({"tests/test_a.py": skipped})
+        self.move("tests/test_a.py", "tests/unit/test_a.py")
+        self.assertEqual(self.tamper()[0], "PASS", "a move with its content unchanged adds no marker")
 
 
 class ExemptionTest(unittest.TestCase):
