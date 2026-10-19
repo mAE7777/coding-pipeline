@@ -6,6 +6,11 @@ Usage: project_policy.py on|off|status [project] [--json]
 
 No selection means OFF. A repository's worktrees share the main checkout's
 .coding-pipeline.json. No environment variable or build artifact can enable it.
+
+status in a project the pipeline does not manage, when the fast workflow is installed
+(~/.claude/skills/dev-fast/SKILL.md), adds one line naming the installed /<name>-fast
+skills to use for this project instead; --json then has "fast_workflow": true and that
+line as "fast_workflow_note" ("fast_workflow" is false otherwise).
 """
 import hashlib
 import json
@@ -30,6 +35,8 @@ AGREEMENT = ("<!-- coding-pipeline-policy:v1 -->\n"
              "adoption, owner lock, record maintenance, handoff intake and milestone stop rules\n"
              "are not prerequisites. Pipeline skills may be used as independent tools without\n"
              "enabling the workflow. This choice also applies after resume or compaction.\n")
+# The fast workflow's skills (mAE7777/coding-pipeline-fast), named <name>-fast; an installed dev-fast marks it.
+FAST_SKILLS = ("dev", "fix", "plan", "gate", "next", "scout", "capture", "explain", "handoff", "deploy", "polish")
 
 
 def project_root(start):
@@ -89,6 +96,16 @@ def read(start):
 
 def managed(start):
     return read(start)["managed"]
+
+
+def fast_workflow():
+    """The line that routes an unmanaged project to the fast workflow when it is installed, else None."""
+    skills = Path.home() / ".claude/skills"
+    if not (skills / "dev-fast/SKILL.md").is_file():
+        return None
+    names = [f"/{n}-fast" for n in FAST_SKILLS if (skills / f"{n}-fast/SKILL.md").is_file()]
+    return ("The fast workflow is installed: for this project use the matching /<name>-fast skill ("
+            + ", ".join(names) + ").")
 
 
 def valid(lease):
@@ -199,8 +216,14 @@ def main(argv):
         return 2
     if argv[0] == "check":
         return 0 if info["managed"] else 3
+    fast = fast_workflow() if argv[0] == "status" and not info["managed"] else None
+    if argv[0] == "status":
+        info["fast_workflow"] = fast is not None
+        if fast:
+            info["fast_workflow_note"] = fast
     print(json.dumps(info, indent=2) if "--json" in argv else
-          f"Coding workflow {info['mode']} · {info['project']} · {info['reason']} · {info['source']}")
+          f"Coding workflow {info['mode']} · {info['project']} · {info['reason']} · {info['source']}"
+          + (f"\n{fast}" if fast else ""))
     return 0
 
 

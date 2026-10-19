@@ -292,5 +292,80 @@ class ProjectPolicyTest(unittest.TestCase):
         self.assertFalse(marker.exists())
 
 
+class FastRoutingTest(unittest.TestCase):
+    """status names the fast workflow in a project the pipeline does not manage, when fast is installed."""
+
+    LINE = ("The fast workflow is installed: for this project use the matching /<name>-fast skill (/dev-fast, "
+            "/fix-fast, /plan-fast, /gate-fast, /next-fast, /scout-fast, /capture-fast, /explain-fast, /handoff-fast, "
+            "/deploy-fast, /polish-fast).")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        self.home = self.base / "home"
+        self.project = self.base / "app"
+        self.project.mkdir()
+        self.env = {**os.environ, "HOME": str(self.home), "PYTHONDONTWRITEBYTECODE": "1"}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def install_fast(self, names=policy.FAST_SKILLS):
+        for n in names:
+            (self.home / f".claude/skills/{n}-fast").mkdir(parents=True, exist_ok=True)
+            (self.home / f".claude/skills/{n}-fast/SKILL.md").write_text(f"---\nname: {n}-fast\n---\n")
+
+    def status(self, where=None, *flags):
+        out = subprocess.run([sys.executable, str(S / "project_policy.py"), "status", str(where or self.project),
+                              *flags], capture_output=True, text=True, env=self.env, timeout=10)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout
+
+    def test_without_fast_installed_status_is_unchanged(self):
+        out = self.status()
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertNotIn("fast", out)
+        self.assertIs(json.loads(self.status(None, "--json"))["fast_workflow"], False)
+        self.install_fast(["fix", "gate"])  # without dev-fast this is not the fast workflow
+        self.assertNotIn("fast", self.status())
+
+    def test_an_unmanaged_project_is_routed_to_the_fast_skills_in_or_out_of_git(self):
+        self.install_fast()
+        out = self.status()
+        self.assertTrue(out.startswith("Coding workflow OFF"), out)
+        self.assertEqual(out.splitlines()[1], self.LINE)
+        info = json.loads(self.status(None, "--json"))
+        self.assertIs(info["fast_workflow"], True)
+        self.assertEqual(info["fast_workflow_note"], self.LINE)
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        (self.project / "src").mkdir()
+        self.assertEqual(self.status(self.project / "src").splitlines()[1], self.LINE)
+
+    def test_only_the_installed_fast_skills_are_named(self):
+        self.install_fast(["dev", "gate"])
+        self.assertTrue(self.status().rstrip().endswith("skill (/dev-fast, /gate-fast)."))
+
+    def test_a_managed_project_is_never_routed_to_fast_and_a_worktree_follows_its_checkout(self):
+        self.install_fast()
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        subprocess.run(["git", "-C", str(self.project), "-c", "user.name=fixture", "-c", "user.email=f@f",
+                        "commit", "--allow-empty", "-qm", "fixture"], check=True)
+        worktree = self.base / "worktree"
+        subprocess.run(["git", "-C", str(self.project), "worktree", "add", "--detach", "-q", str(worktree)],
+                       check=True)
+        self.assertIn(self.LINE, self.status(worktree))
+        policy.set_mode(self.project, True)
+        for where in (self.project, worktree):
+            out = self.status(where)
+            self.assertTrue(out.startswith("Coding workflow ON"), out)
+            self.assertNotIn("fast", out)
+            info = json.loads(self.status(where, "--json"))
+            self.assertIs(info["fast_workflow"], False)
+            self.assertNotIn("fast_workflow_note", info)
+        check = subprocess.run([sys.executable, str(S / "project_policy.py"), "check", str(self.project)],
+                               capture_output=True, text=True, env=self.env)
+        self.assertEqual((check.returncode, check.stdout), (0, ""), "check prints nothing, fast or not")
+
+
 if __name__ == "__main__":
     unittest.main()

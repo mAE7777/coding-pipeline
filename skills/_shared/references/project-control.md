@@ -6,9 +6,12 @@ venture overlays and a conductor's dispatch. No choice means OFF. Only the owner
 instruction changes it: they type `/pipeline on` or `/pipeline off` (which runs `project_policy.py`); invoking
 another skill never enables management.
 
-When OFF, perform the user's requested work with their existing documents, design, code and tests.
-Do not require adoption, plan conversion, a cold read, lock playback, intent verification, record repair,
-writer claims, milestone acceptance, inbox processing or recovery bookkeeping before doing that work.
+When OFF and the status names the fast workflow (it is installed: `"fast_workflow": true`, with the
+`/<name>-fast` skills it lists), use the matching `/<name>-fast` skill for the request when it lists one: the
+fast workflow serves projects the pipeline does not manage. Otherwise, perform the user's requested work
+with their existing documents, design, code and tests. Do not require adoption, plan conversion, a cold
+read, lock playback, intent verification, record repair, writer claims, milestone acceptance, inbox
+processing or recovery bookkeeping before doing that work.
 Old records can supply context but do not bind the workflow. Ask only about a concrete ambiguity that
 changes the implementation. Do not route to a formal step, maintain the formal journal, or chain via
 next auto at the end. Research, diagnosis, planning, explanation and independent reviews are still usable
