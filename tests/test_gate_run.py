@@ -393,7 +393,8 @@ class GateRunTest(unittest.TestCase):
             "code-verifier": ("code-verifier.review", "--route"), "loyal-evaluator": ("loyal-evaluator", "--route"),
             "loyal-evaluator-pass2": ("loyal-evaluator", "--route"), "code-verifier-demo": ("code-verifier.demo", "--route"),
             "gate-judge": ("gate-judge", "--route")})
-        self.assertEqual({self.flags(c) for c in self.calls()}, {(None, "xhigh")}, "today's setting: no --model")
+        self.assertEqual({self.flags(c) for c in self.calls()}, {("claude-opus-5-5", "xhigh")},
+                         "today's setting: the pinned model")
         judge = routes["gate-judge"]
         self.assertEqual((judge["require_read"]["globs"], judge["require_read"]["files"]), (["captures/*"], 1))
         self.assertFalse(any("escalated" in v for v in routes.values()))
@@ -445,7 +446,7 @@ class GateRunTest(unittest.TestCase):
         out, verdict, ev = self.gate(root, extra_env={"FAKE_FAIL_ALWAYS": "gate-judge"})
         self.assertEqual(verdict["verdict"], "INCONCLUSIVE", out.stdout[-1500:])
         judge = [self.flags(c) for c in self.calls() if c["key"] == "gate-judge"]
-        self.assertEqual(judge, [(None, "xhigh"), (None, "xhigh")])
+        self.assertEqual(judge, [("claude-opus-5-5", "xhigh"), ("claude-opus-5-5", "xhigh")])
         s = json.loads((ev / "gate-judge.summary.json").read_text())
         self.assertFalse(s["escalated"])
         self.assertIn("nothing to escalate", s["escalation_reason"])
