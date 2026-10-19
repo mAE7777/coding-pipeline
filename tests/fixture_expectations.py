@@ -907,16 +907,27 @@ TAGS = (re.compile(r"\(\s*" + SEV + r"(?:[\s-]+(?:severity|priority))?\s*\)|\[\s
                    + SEV + r"\s*[-\u2013\u2014]+(?!\S)", re.I),
         re.compile(r"\b" + SEV + r"\s*:", re.I))
 NEGATED = re.compile(r"\b(?:no|not|nothing|none|without)\s*[*_`(\[|]*$", re.I)  # "no **high** issue"
-# What, right after a label, says there is nothing at that severity: "High: none", "**High:** 0", "High - n/a".
-NONE_AFTER = re.compile(r"[\W_]*(?:(?:none|nothing)\b(?!\s+of\b)|n/a\b|no\s+(?:findings?|issues?|problems?|bugs?|"
-                        r"defects?)\b|(?:0|zero)(?:\s+(?:findings?|issues?))?(?=\s*(?:[,;|)]|\.(?!\d)|$)))", re.I)
+# What, right after a label or at the start of an entry, says there is nothing at that severity: "High: none",
+# "**High:** 0", "High - n/a", "**Medium?** No:", "No medium findings.", "There are no high-severity issues",
+# "I found no high or medium issues"; never a "no" before another word ("High: no test covers app.py:41").
+NONE_WORDS = (r"(?:(?:" + SEV + r"|severity|priority|level|or|and|nor|other|further|more|new|real|such|blocking|"
+              r"material|serious)[\s/-]+){0,6}(?:findings?|issues?|problems?|bugs?|defects?|concerns?)\b")
+NONE_AFTER = re.compile(r"[\W_]*(?:(?:there\s+(?:is|are|was|were)\s+|(?:i\s+)?found\s+)?(?:(?:none|nothing)\b"
+                        r"(?!\s+of\b)|no\s+" + NONE_WORDS + r")|n/a\b|no(?=\s*(?:[.,:;!]|$))|(?:0|zero)(?:\s+"
+                        r"(?:findings?|issues?))?(?=\s*(?:[,;|)]|\.(?!\d)|$)))", re.I)
 # A line that is only a severity label: a section over the findings below it ("## High", "### Low (1)", "Low:",
 # "**High**", "High-severity findings:").
 SECTION = re.compile(SEVERITY + r"(?:[\s-]+(?:severity|priority|impact))?(?:\s+(?:findings?|issues?|problems?))?"
                      r"(?:\s*\(\d+\))?[\W_]*$", re.I)
 HEADING = re.compile(r"^ {0,3}(#{1,6})(?:\s|$)")
 ITEM = re.compile(r"^\s*(?:([-*+])\s|(\d{1,3}[.)])\s|(\|))")  # a bullet, a numbered item, a table row
-LABEL_LINE = re.compile(r"^[\W_]*[a-z][\w /'-]{0,40}:[\W_]*$", re.I)  # "Not checked:", "**Notes:**"
+LABEL_LINE = re.compile(r"^[\W_]*[a-z][\w /'-]{0,40}:[\W_]*$", re.I)  # "Not checked:", "**Checked and fine:**"
+# A label that names a part of one finding ("What fails:", "**How to see it fail:**", "Where:", "Fix:"): the lines
+# it leads stay in that finding.
+PART_LEAD = re.compile(r"^[\s>*_`]*([a-z][\w /'()-]{0,40}?)[*_`\s]*:", re.I)
+PARTS = re.compile(r".*\b(?:fail|repro)\w*.*|steps\b.*|why\b.*|where|location|files?|lines?|severity|priority|"
+                   r"impact|evidence|details?|problem|issue|(?:root )?cause|(?:suggested |proposed )?fix|suggestion|"
+                   r"recommendation|expected|actual|observed|result|consequence|effect|proof|example|symptom", re.I)
 RULE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")
 VERDICT_LINE = re.compile(r"^matches the goal\W{0,6}", re.I)
 
@@ -977,23 +988,53 @@ def located(finding):
     return any(FILE_LINE.search(line) for line in finding["lines"])
 
 
+def finding_part(line):
+    """True when the line opens with a label naming a part of one finding ("What fails: ...", "**Fix:**")."""
+    m = PART_LEAD.match(line)
+    return bool(m and PARTS.fullmatch(" ".join(m.group(1).split())))
+
+
+def ends_findings(line, cur, after_blank, section):
+    """True when an unindented line that is not a list item or table row ends the findings before it: a line that
+    is only a label ("**Checked and fine:**", "Not checked:"), or a paragraph after a finding (or after an entry
+    that says none) with no label and no file:line of its own ("What I checked and found fine: ..."). A label or
+    paragraph led by a part of a finding ("How to see it fail:") does not, nor does a label right under a severity
+    heading, before any entry ("## High" / "Both of these fail a Done-when item:"), nor a paragraph under a
+    heading that opened a finding: a heading's finding is everything under it."""
+    if indent(line) or item_kind(line) is not None or finding_part(line):
+        return False
+    if LABEL_LINE.match(line):
+        return section is None or section["level"] == 7 or bool(section["entries"])
+    return (after_blank and cur is not None and cur["by"] != "heading" and (located(cur) or not cur["severity"])
+            and labeled(line) is None and not FILE_LINE.search(line))
+
+
 def fast_findings(text):
     """The reviewer's findings, in order: {"severity", "first" (the line that opened it), "text" (it and the lines
     after it, lowercased)}. Only a finding that holds a file:line counts (the prompt asks each one for it); a line
     inside a code block never opens one, and the "Matches the goal" line ends the findings.
 
     Under a severity section (a heading or a line that is only a severity label: "## High", "Low:", "**High**";
-    it runs to the next heading of its level or above, a rule, or another section, and a plain-line section also
-    to a "Notes:" line) each list item or table row, each subheading (with what is under it), and each paragraph
-    that names its own file:line is one finding, with the section's severity unless its first line has a label of
-    its own; one whose first line says none ("None.", "No findings.") is none. The section's own line belongs to
-    its finding when it holds just one. A severity word inside an entry's prose never changes its severity.
+    it runs to the next heading of its level or above, a rule, another section, or a line that ends findings)
+    each list item or table row, each subheading (with what is under it), and each paragraph that names its own
+    file:line is one finding, with the section's severity unless its first line has a label of its own; one whose
+    first line says none ("None.", "No medium findings.", "There are no high-severity issues; ...") is none. The
+    section's own line belongs to its finding when it holds just one. A severity word inside an entry's prose
+    never changes its severity.
 
     Elsewhere a finding opens at a line its label opens (finding_start) and runs to the next one, a heading, a
-    rule, or a section; one opened by a list item also ends at an unlabeled item beside it (an entry with no
-    severity of its own). A heading that opened none, right before a finding, belongs to it (its title, when the
-    severity is a field below it); a labeled heading ("### 1. High - ...") that holds no file:line yet takes a
-    severity field under it ("**Severity:** high") as its own."""
+    rule, a section, or a line that ends findings; one opened by a list item also ends at an unlabeled item beside
+    it (an entry with no severity of its own). A heading that opened none, right before a finding, belongs to it
+    (its title, when the severity is a field below it); a labeled heading ("### 1. High - ...") that holds no
+    file:line yet takes a severity field under it ("**Severity:** high") as its own.
+
+    A line that ends findings (ends_findings) ends the section and the finding it is in, inside a heading's
+    finding too: a line that is only a label ("**Checked and fine:**", "Not checked:"; not one right under a
+    severity heading, before any entry, which leads the section's entries), and an unindented paragraph after a
+    finding with no label and no file:line of its own ("What I checked and found fine: ...", "I also looked at
+    sample_data.py: it is fine."). What follows it opens a finding only by a label of its own. A label or
+    paragraph led by a part of a finding ("What fails:", "**How to see it fail:**") stays in it, and so does a
+    paragraph under a heading that opened a finding."""
     found, fence, title, blank = [], False, None, False
     cur = section = None
 
@@ -1056,10 +1097,10 @@ def fast_findings(text):
             cur, section = None, {"severity": sev, "level": 7, "heads": [title, line], "entries": []}
             title = None
             continue
-        if section is not None and section["level"] == 7 and not indent(line) and LABEL_LINE.match(line) \
-                and item_kind(line) is None:  # "Not checked:" ends a section that no heading opened
+        if ends_findings(line, cur, after_blank, section):  # "**Checked and fine:**", or a closing paragraph
             end_section()
-            cur = None
+            cur = title = None
+            continue
         if section is not None:
             if cur is not None and cur["by"] == "heading":
                 cur["lines"].append(line)
@@ -1131,13 +1172,30 @@ NOT_WIRED = ("unwired", "not wired", "isn't wired", "never wired", "not register
              "no export command", "no `export`", "invalid choice", "unreachable", "not reachable", "never called",
              "not called", "not exposed", "dead code", "not hooked", "no way to", "cannot be run", "can't be run",
              "missing", "not available", "doesn't exist", "does not exist", "not a command")
+# What says the total ignores its category, and nothing a finding about another defect says ("every expense in
+# every category is lost", "the loader ignores the error", "lost regardless of what was there").
+IGNORES_CATEGORY = ("ignores the categor", "ignoring the categor", "ignores its categor", "ignoring its categor",
+                    "ignores categor", "ignore the categor", "ignored the categor", "ignores the `categor",
+                    "ignoring the `categor", "ignores the requested categor", "ignores the given categor",
+                    "category is ignored",
+                    "category argument is ignored", "category is never used", "category is unused",
+                    "category is not used", "category isn't used", "never uses the categor", "doesn't use the categor",
+                    "does not use the categor", "unused categor", "regardless of categor", "regardless of the categor",
+                    "regardless of its categor", "regardless of which categor", "whatever the categor",
+                    "whatever its categor", "no matter the categor", "no matter which categor",
+                    "irrespective of categor", "irrespective of the categor", "not filter", "n't filter",
+                    "never filter", "no filter", "without filter", "unfiltered", "sums all", "sum of all", "sums every",
+                    "sums up all", "sums up every", "summing all", "summing every", "adds every", "adds all",
+                    "adds up all", "adds up every", "adding every", "adding all", "counts every expense",
+                    "counts all expenses", "includes every expense", "includes all expenses", "every expense is summed",
+                    "every expense is added", "every expense is counted", "all expenses are summed",
+                    "all expenses are added", "all expenses are counted", "grand total", "overall total", "52.5",
+                    "same total for every", "same total for each", "same total for all", "same for every categor",
+                    "same for each categor", "same for any categor", "same for all categor",
+                    "every category gets the same", "every category shows the same", "each category shows the same")
 FAST_TALLY = {
     "the total ignores the category (every expense is summed under the category's name)":
-        (("app.py",), (("total",), ("categor",), ("ignor", "regardless", "grand total", "52.5", "every expense",
-                                                  "all expenses", "every item", "all items", "every entry", "all entries",
-                                                  "not filter", "n't filter", "never filter", "no filter", "without filter",
-                                                  "unfiltered", "sums all", "sum of all", "sums every", "across all",
-                                                  "all categories", "every category", "any category"))),
+        (("app.py",), (("total",), ("categor",), IGNORES_CATEGORY)),
     "an unreadable expenses.json is read as empty and then overwritten":
         (("app.py",), (UNREADABLE, DESTROYED)),
     "sample data loaded on the product path (a fresh folder shows invented expenses)":

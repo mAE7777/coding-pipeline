@@ -1271,6 +1271,114 @@ class FastReviewerExpectationTest(unittest.TestCase):
                          "the yes must be the last line")
         self.assertEqual(len(fx.fast_clean({}, self.result(""))), 1, "the empty answer fails a clean control")
 
+    def credited(self, text, last="Matches the goal: no, because a corrupt file destroys the ledger."):
+        """The indexes of the tally items (fx.FAST_TALLY's order) the answer is credited with."""
+        missing = fx.fast_tally_defects({}, self.result(answer(text, last=last)))
+        return [i for i, label in enumerate(fx.FAST_TALLY) if f"not caught: {label}" not in missing]
+
+    def test_a_label_line_ends_any_section_and_the_finding_it_is_in(self):
+        # The re-review's r20: a bold "Checked and fine:" list after a heading section joined that section, so its
+        # bullets falsely blocked a clean control and credited "sample_data.py:1 is imported only by the tests".
+        yes = "Matches the goal: yes, because every Done-when item works."
+        clean = ("## High\nNone.\n\n## Medium\nNone.\n\n**Checked and fine:**\n- app.py:52 filters the total by "
+                 "category, as the plan says.\n- sample_data.py:1 is imported only by the tests.")
+        self.assertEqual(fx.fast_clean({}, self.result(answer(clean, last=yes))), [])
+        corrupt = "1. app.py:41 - an unreadable expenses.json is read as [] and the next add overwrites it."
+        checked = ("**Checked and fine:**\n- sample_data.py:1 is imported only by the tests, never on the product "
+                   "path.\n- app.py:88 registers every subcommand the plan names.")
+        for text in ("## High\n" + corrupt, "High:\n" + corrupt,
+                     "### 1. High - app.py:41 - corrupt expenses.json\nload() returns [] and the next add overwrites it.",
+                     "## High\n### 1. Corrupt expenses.json\n- **Where:** app.py:41\n- **What fails:** it is read as "
+                     "[], then overwritten."):
+            with self.subTest(text[:40]):
+                self.assertEqual(self.credited(text + "\n\n" + checked), [1])
+                self.assertEqual(self.credited(text + "\n\n" + checked.replace("**Checked and fine:**",
+                                                                                  "Not checked:")), [1])
+        # A label right under a severity heading leads its entries, and a part of a finding stays in it.
+        intro = ("## High\n\nBoth of these fail a Done-when item:\n\n1. app.py:16 - a corrupt file is read as empty "
+                 "and overwritten.\n2. app.py:27 - total sums every expense regardless of category.")
+        self.assertEqual(self.credited(intro), [0, 1])
+        part = ("1. **High** - app.py:16 - a corrupt expenses.json breaks the ledger.\n**How to see it fail:**\n"
+                "```\necho x > expenses.json; python3 app.py add food 5\n```\nThe file is overwritten with one expense.")
+        self.assertEqual(self.credited(part), [1])
+
+    def test_a_closing_paragraph_is_not_part_of_the_finding_before_it(self):
+        # r11: a paragraph after the last finding, with no label and no file:line, credited the items it called fine.
+        corrupt = "an unreadable expenses.json is read as empty and the next add overwrites it (data loss)."
+        for text, last in ((f"### High\n1. app.py:41 - {corrupt}\n\nWhat I checked and found fine: sample data loads "
+                            "only behind --demo, and export is a registered subcommand.", None),
+                           (f"1. **High** - app.py:41 - {corrupt}\n\nI also looked at sample_data.py: it is only test "
+                            "scaffolding, so it is fine.", None),
+                           (f"- [high] app.py:41 {corrupt}", "Matches the goal: no, because of the corrupt-file loss; "
+                            "the sample data and the export command look right."),
+                           (f"## High\n1. app.py:41 - {corrupt}\n\nEverything else holds.\n\nsample_data.py:1 is "
+                            "imported only by the tests.", None)):
+            with self.subTest(text[:40]):
+                self.assertEqual(self.credited(text, *([last] if last else [])), [1])
+        # A finding's own paragraphs stay in it: one led by a part of the finding, one with its own file:line, an
+        # indented one, and everything under the heading that opened it.
+        opened = "1. **High** - app.py:41 - a corrupt expenses.json breaks the ledger."
+        for text in (opened + "\n\nWhat fails: the next add overwrites it.",
+                     opened + "\n\nThe save at app.py:50 then overwrites it.",
+                     opened + "\n\n   The next add overwrites it.",
+                     "### 1. High - app.py:41 - corrupt expenses.json\n\nload() returns [] and the next add overwrites it.",
+                     "## High\n\n**`app.py:41` - corrupt expenses.json**\n\n**What fails:** the next add overwrites it."):
+            with self.subTest(text[-40:]):
+                self.assertEqual(self.credited(text), [1])
+
+    def test_an_empty_section_that_says_so_in_a_sentence_is_no_finding(self):
+        # r17: "## Medium / No medium findings. I checked app.py:41: ..." was a medium finding; r11 adds the other
+        # clean layouts it measured ("**Medium?** No: I checked app.py:41 ..." was a medium finding).
+        yes = "Matches the goal: yes, because every item works."
+        low = "## Low\n1. app.py:12 - the name `tot` is unclear."
+        for text in ("## High\nNone.\n\n## Medium\nNo medium findings. I checked app.py:41: a corrupt expenses.json "
+                     "raises, it is never overwritten.",
+                     "## High\nThere are no high-severity issues; the corrupt-file path (app.py:41) raises as it should."
+                     "\n\n## Medium\nNone.",
+                     "### High\nNothing found. app.py:41 handles a corrupt file.",
+                     "**High**\nNo issues at this level (app.py:41 and app.py:52 were checked).",
+                     "## Medium\nNone found; app.py:52 filters by category.",
+                     "## High\nI found no high or medium issues; app.py:41 raises on a corrupt file.",
+                     "## High\nThere is nothing at this severity: app.py:41 raises.",
+                     "## High and medium findings\nNone.",
+                     "| # | Severity | Where | What |\n|---|---|---|---|\n| 1 | Low | app.py:12 | unclear name |\n"
+                     "| 2 | Low | app.py:30 | a high number of retries in a comment |",
+                     "- (low) app.py:30 - retries are high: 5, which could be lower.\n- (low) app.py:44 - medium-sized "
+                     "lists are sorted twice; fine for now.",
+                     "1. app.py:12 - unclear name. Severity: low.\nOverall risk: low. No high- or medium-severity issues "
+                     "in app.py:1-140.",
+                     "I ran the tests and every Done-when item. I found no bugs of high or medium severity; app.py:52 "
+                     "filters by category as the plan says.",
+                     "**Low** - app.py:12: the variable `t` could be named `total`.\n**Medium?** No: I checked app.py:41 "
+                     "and an unreadable file is reported, not overwritten.",
+                     "Findings\nHigh: none\nMedium: none\nLow:\n- app.py:12 unclear name"):
+            with self.subTest(text[:50]):
+                self.assertEqual(fx.fast_clean({}, self.result(answer(text + "\n\n" + low, last=yes))), [])
+        # A finding that only starts like such a sentence is still one.
+        for text in ("## High\nThere are no checks on the parse at app.py:16: a corrupt file is read as empty.",
+                     "High: No test covers app.py:16, and a corrupt file is read as empty.",
+                     "**High** - No error handling at app.py:16: a corrupt file is read as empty."):
+            with self.subTest(text[:40]):
+                self.assertEqual([f["severity"] for f in fx.blocking_findings(answer(text))], ["high"])
+
+    def test_the_total_item_needs_words_about_the_total_ignoring_its_category(self):
+        # r18: a finding about the corrupt file alone credited "the total ignores the category" by "every expense",
+        # "every category", "regardless", or "ignores".
+        for text in ("1. **High** - app.py:41: an unreadable expenses.json is read as an empty list, and the next `add` "
+                     "overwrites\n   the file, so every expense in every category is lost and `total` then reports 0.",
+                     "- [high] app.py:41 - an unreadable expenses.json is read as []: the next add overwrites it, and "
+                     "every category's total is lost regardless of what was there.",
+                     "- [high] app.py:16 - load() ignores the JSONDecodeError, so all expenses are lost and the total "
+                     "for every category drops to 0."):
+            with self.subTest(text[:60]):
+                self.assertEqual(self.credited(text), [1])
+        for words in ("ignores the category", "ignores the `category` argument", "is the same for every category",
+                      "adds every expense regardless of its category", "prints 52.50 for the food category",
+                      "returns the grand total, whatever the category", "never filters by category",
+                      "sums all expenses, ignoring its category"):
+            with self.subTest(words):
+                self.assertIn(0, self.credited("1. **High** - app.py:27 - `total food` " + words + "."))
+
 
 class FastReviewerPackTest(unittest.TestCase):
     """Each fast-reviewer fixture's review copy and pack, prepared as agent_fixtures.py prepares them, with no model."""
