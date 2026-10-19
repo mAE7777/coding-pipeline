@@ -123,13 +123,17 @@ RUNNER_SETTINGS = ("jest", "mocha", "vitest", "ava", "playwright", "cypress", "k
 TIMEOUT = re.compile(r"timeout", re.I)
 NUMBER = re.compile(r"(?<![\w.])\d[\d_]*(?:\.\d+)?")
 ASSERTION = re.compile(r"\bassert|\bexpect\s*\(|\.should\b|XCTAssert|\b(?:t|tb|b)\.(?:Error|Fatal)f?\s*\(")
-# A timeout is a number bound to a timeout-named key (timeout=5, testTimeout: 5000) or call (jest.setTimeout(5000),
-# this.timeout(5000), @pytest.mark.timeout(5)); a bare setTimeout(fn, ms) is a timer, not a test's timeout.
+# A timeout is a number bound to a timeout-named key (timeout=5, testTimeout: 5000, timeout := 5, timeout: float = 5)
+# or given to a timeout-named call, the first number among its arguments (jest.setTimeout(5000), @Timeout(value = 5),
+# context.WithTimeout(ctx, 5*time.Second)); a timer's delay (setTimeout(fn, ms), page.waitForTimeout(ms)) is not one.
 TIMEOUT_NAME = r"(?:[\w$]+\.)*[\w$]*timeout[\w$]*"
 TIMEOUT_VALUE = r"\d[\d_]*(?:\.\d+)?(?:\s*\*\s*\d[\d_]*(?:\.\d+)?)*"
-TIMEOUT_KEY = re.compile(rf"(?<![\w$.])({TIMEOUT_NAME})[\"']?\s*(?::|=(?!=))\s*({TIMEOUT_VALUE})", re.I)
-TIMEOUT_CALL = re.compile(rf"(?<![\w$.])({TIMEOUT_NAME})\s*\(\s*({TIMEOUT_VALUE})", re.I)
-TIMER = "settimeout"
+TIMEOUT_KEY = re.compile(rf"(?<![\w$.])({TIMEOUT_NAME})[\"']?\s*(?::=|(?::\s*[\w$.\[\]|?<> ]+?\s*)?=(?!=)|:)\s*"
+                         rf"({TIMEOUT_VALUE})", re.I)
+TIMEOUT_CALL = re.compile(rf"(?<![\w$.])({TIMEOUT_NAME})\s*\(", re.I)
+ARGUMENT = re.compile(rf"(?<![\w$.]){TIMEOUT_VALUE}")
+STRING = re.compile(r"([\"'`])(?:\\.|(?!\1).)*\1")
+TIMERS = ("settimeout", "waitfortimeout")   # a receiver's setTimeout given a number first is a runner's (jest, test)
 COMMENT = re.compile(r"^\s*(?:#(?!\[)|//|/\*|\*|--)")   # a Rust #[attribute] is code
 INI_COMMENT = re.compile(r"^\s*[#;]")
 # pytest's own sections, the only part of these files whose timeouts are compared; pytest.ini is pytest's whole.
@@ -356,14 +360,22 @@ def test_name(definition):
     return (m.group(1) or m.group(3)) if m else definition
 
 
-def moved_with_their_test(added, gone):
-    """The added markers [(file, paths, path, marker)] left once each one that moved with its test (a marker of the
-    same kind and text, on a test of the same name, gone from another test file in the same change) is taken out."""
-    pool = [(i, (m[1], m[2], test_name(m[4]))) for i, m in gone if m[4] is not None]
+def test_names(lines, js):
+    return {test_name(line.strip()) for line in lines if defines_test(line, js)}
+
+
+def moved_with_their_test(added, gone, defined):
+    """The added markers [(file, paths, path, marker)] left once each one that moved with its test is taken out: a
+    marker of the same kind and text, on a test of the same name, gone from another test file in the same change,
+    where that test is gone too, into a file that did not define it at the base. defined: {file: (the test names
+    at the base, the test names now)}."""
+    pool = [(i, (m[1], m[2], test_name(m[4]))) for i, m in gone
+            if m[4] is not None and test_name(m[4]) not in defined[i][1]]
     left = []
     for entry in added:
         m = entry[3]
-        key = (m[1], m[2], test_name(m[4])) if m[4] is not None else None
+        name = test_name(m[4]) if m[4] is not None else None
+        key = (m[1], m[2], name) if name is not None and name not in defined[entry[0]][0] else None
         match = next((g for g in pool if key and g[1] == key and g[0] != entry[0]), None)
         if match:
             pool.remove(match)
@@ -380,15 +392,33 @@ def as_number(s):
     return out
 
 
+def call_value(name, rest):
+    """The number a timeout-named call is given (rest is the line after its "("): the first among its arguments,
+    nested calls included and strings left out; None for a timer (setTimeout(fn, ms), page.waitForTimeout(ms))."""
+    last = name.rsplit(".", 1)[-1].lower()
+    if last in TIMERS and (last != "settimeout" or "." not in name or not re.match(r"\s*\d", rest)):
+        return None
+    args, depth = STRING.sub('""', rest), 1
+    for i, ch in enumerate(args):
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if not depth:
+            args = args[:i]
+            break
+    m = ARGUMENT.search(args)
+    return " ".join(m.group(0).split()) if m else None
+
+
 def timeout_values(line, comment=COMMENT):
     """{key or call name: [values]} for the numbers a line binds to a timeout; none on a comment or assertion line."""
     out = {}
     if not TIMEOUT.search(line) or comment.match(line) or ASSERTION.search(line):
         return out
-    for rx in (TIMEOUT_KEY, TIMEOUT_CALL):
-        for m in rx.finditer(line):
-            if not (rx is TIMEOUT_CALL and m.group(1).lower() == TIMER):
-                out.setdefault(m.group(1), []).append(" ".join(m.group(2).split()))
+    for m in TIMEOUT_KEY.finditer(line):
+        out.setdefault(m.group(1), []).append(" ".join(m.group(2).split()))
+    for m in TIMEOUT_CALL.finditer(line):
+        value = call_value(m.group(1), line[m.end():])
+        if value:
+            out.setdefault(m.group(1), []).append(value)
     return out
 
 
@@ -526,7 +556,8 @@ def test_tamper(project, given=None):
         else:
             findings.append((rel, f"{rel} deleted"))
     before_total = after_total = 0
-    drops, marks_added, marks_gone = [], [], []  # a (path, None) finding holds the place of its added markers
+    # a (path, None) finding holds the place of its added markers; defined: {path: (test names at the base, now)}
+    drops, marks_added, marks_gone, defined = [], [], [], {}
     for rel in sorted(old_tests | new_tests | configs):
         try:
             old = base.text(rel) if rel in base.files else ""
@@ -545,6 +576,8 @@ def test_tamper(project, given=None):
             continue  # binary
         old_lines, new_lines = old.splitlines(), new.splitlines()
         is_test = rel in old_tests or rel in new_tests
+        if is_test:
+            defined[rel] = (test_names(old_lines, is_js(rel)), test_names(new_lines, is_js(rel)))
         if is_test and rel in now:
             plus, minus = marker_changes(old_lines, new_lines, is_js(rel))
             marks_added += [(rel, (rel,), rel, m) for m in plus]
@@ -577,7 +610,7 @@ def test_tamper(project, given=None):
                          f"{' and more' if len(gone) > 10 else ''} gone)") if gone else ""
                 drops.append(f"{rel} {b} -> {a}{where}")
     marks = {}
-    for rel, _, _, m in moved_with_their_test(marks_added, marks_gone):
+    for rel, _, _, m in moved_with_their_test(marks_added, marks_gone, defined):
         marks.setdefault(rel, []).append((rel, f"{rel}:{m[0]} new {m[1]} marker {m[2]}"))
     findings = [f for rel, text in findings for f in (marks.get(rel, []) if text is None else [(rel, text)])]
     cleared = sorted({f"{rel} ({owner[rel]})" for rel, _ in findings if rel in owner})

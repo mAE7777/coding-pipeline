@@ -123,6 +123,21 @@ class TimeoutTest(unittest.TestCase):
         new = ["// slower CI", "jest.setTimeout(30_000);", "const TIMEOUT_MS = 100;", "  timeout: 30,"]
         self.assertEqual(gc.raised_timeouts(old, new), [(2, "timeout raised 5000 -> 30_000")])
 
+    def test_timeouts_in_go_rust_junit_and_annotated_forms_are_caught(self):
+        loud = [  # (baseline line, line now): each raises a test's timeout
+            ("\ttimeout := 2 * time.Second", "\ttimeout := 60 * time.Second"),
+            ("\tctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)",
+             "\tctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)"),
+            ("    tokio::time::timeout(Duration::from_millis(500), fut).await", 
+             "    tokio::time::timeout(Duration::from_millis(5000), fut).await"),
+            ("    @Timeout(value = 2, unit = TimeUnit.SECONDS)", "    @Timeout(value = 60, unit = TimeUnit.SECONDS)"),
+            ("    timeout: float = 3.0", "    timeout: float = 30.0"),
+        ]
+        for old, new in loud:
+            self.assertTrue(gc.raised_timeouts([old], [new]), new)
+        self.assertEqual(gc.raised_timeouts(["  await page.waitForTimeout(100);"],
+                                            ["  await page.waitForTimeout(1000);"]), [], "a sleep, not a timeout")
+
     def test_a_new_timeout_line_has_nothing_to_compare_with(self):
         self.assertEqual(gc.raised_timeouts([], ["jest.setTimeout(60000);"]), [])
 
@@ -324,6 +339,17 @@ class TamperTest(unittest.TestCase):
         fail = self.failing()
         self.assertIn("tests/test_gone.py deleted", fail)
         self.assertNotIn("test_new_home.py", fail, "its marker moved with the test from the deleted file")
+
+    def test_a_skip_on_another_test_of_the_same_name_is_new(self):
+        api = "import pytest\n\ndef test_create():\n    assert make().ok\n"
+        old_v1 = "import pytest\n\n@pytest.mark.skip(reason='v1 is gone')\ndef test_create():\n    assert 0\n"
+        self.baseline({"tests/test_api.py": api, "tests/test_v1_api.py": old_v1})
+        (self.p / "tests/test_v1_api.py").unlink()
+        self.write({"tests/test_api.py": api.replace("def test_create", "@pytest.mark.skip(reason='v1 is gone')\n"
+                                                                        "def test_create")})
+        fail = self.failing()
+        self.assertIn("tests/test_v1_api.py deleted", fail)
+        self.assertIn("tests/test_api.py:3 new skip marker", fail, "test_api.py defined test_create at the base")
 
     def test_a_moved_test_file_keeps_its_markers(self):
         skipped = "import pytest\n\n@pytest.mark.skip(reason='slow')\ndef test_a():\n    assert 1\n"
