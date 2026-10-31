@@ -1,25 +1,30 @@
-# Coding Pipeline
+# coding-pipeline
 
-Skills, checker agents, hooks, and scripts for building software with Claude Code, with Codex alongside. The
-models plan, build, and test their own work well, so the pipeline does not script that work. It guards the
-places where agent-built software still goes wrong:
+coding-pipeline is a set of skills, checker agents, hooks, and Python scripts for building software with
+Claude Code. Codex can share the work. Current models plan, write, and test code well, so the pipeline leaves
+that to them. It guards the places where agent-built software still goes wrong:
 
-- a familiar imitation built in place of what was meant;
-- scope quietly narrowed or widened;
-- failures hidden behind fallbacks;
-- parts built but never wired in;
-- work called done too early;
-- decisions lost when context is compacted or work moves between sessions and tools.
+- The agent builds a familiar look-alike instead of what was asked for.
+- Scope shrinks or grows without anyone deciding it.
+- A fallback hides a failure.
+- A part is built but never connected.
+- Work is called done before it works.
+- A decision is lost when the context is compacted or the work moves to another session or tool.
 
-The principles are in [`skills/_shared/references/pipeline-constitution.md`](skills/_shared/references/pipeline-constitution.md).
+Work is cut into milestones, and each one ends in a demo. Separate checker agents, each in its own sandboxed
+copy of the project, review the code, reconstruct the product's purpose without being told the goal, and run
+the demo from a clean start. None of them sees the builder's conversation. A script computes the verdict from
+their evidence. The owner, the person directing the build, accepts a milestone by watching its demo.
+
+The design principles are in [the pipeline charter](skills/_shared/references/pipeline-constitution.md).
 
 ## This pipeline or the fast one
 
 This repository is the full workflow. It suits a project that needs a locked intent, gated milestones, and a
-record that outlasts any one session. For tools, scripts, prototypes, small apps, and everyday changes, use
-[coding-pipeline-fast](https://github.com/mAE7777/coding-pipeline-fast): one plan file, one concentrated
-verification, fewer tokens. Both can be installed together. The full workflow runs only in a project you turn
-on. In every other project, a full skill that has a fast counterpart points to it when fast is installed.
+record that outlasts any one session. For scripts, prototypes, small apps, and everyday changes, the lighter
+coding-pipeline-fast uses one plan file and one verification pass. Both can be installed together. The full
+workflow runs only in a project you turn on. In every other project, a skill that has a fast counterpart
+points to it when the fast workflow is installed.
 
 ## Turn the workflow on or off for a project
 
@@ -121,10 +126,10 @@ The templates are in `skills/_shared/templates/`.
 
 ## Guarantees enforced in code
 
-- **Isolation.** A checker gets no user settings, plugins, or MCP servers, and only the tools it needs. Its
-  reads are fenced to its copy and the toolchains, its writes to the copy and caches, and its network to
-  localhost. A Codex-family checker also reaches HTTPS, because its own model call runs inside the fence. Every
-  round plants a canary in the real project, and a checker that reads it fails the round.
+- **Isolation.** A checker gets no user settings, plugins, or MCP servers, and only the tools it needs. It can
+  read only its own copy and the toolchains, write only to its copy and caches, and reach only localhost. A
+  Codex checker can also reach HTTPS, because its own connection to the model runs inside that sandbox. Every
+  round plants a canary token in the real project, and a checker that reads it fails the round.
 - **The owner's words.** Only messages the owner typed count. Agent reports and harness notices that arrive in
   the user role never count as a ruling.
 - **Owner rulings.** The intent lock, a milestone acceptance, and consent to a stand-in quote the owner. A script
@@ -148,10 +153,9 @@ The templates are in `skills/_shared/templates/`.
   provenance in `UPSTREAM.json`). `/code-craft` opens a method directly, and pipeline steps open the same files
   when their trigger fires. `index.md` says where the pipeline's rules win. The skill is named `code-craft`,
   not `craft`, so installing it never replaces a `/craft` skill you already have.
-- **The agent-product reference** (`skills/_shared/references/agent-product/`) compresses the AI Engineering
-  Handbook's controls for a product that runs agents or causes outside effects (payments, messages, bookings,
-  publishing). `/plan` reads it at intake for such a product. [`docs/handbook-adoption.md`](docs/handbook-adoption.md)
-  records which handbook chapters apply and why.
+- **The agent-product reference** (`skills/_shared/references/agent-product/`) is a checklist of controls for
+  a product that runs agents or causes outside effects (payments, messages, bookings, publishing). `/plan`
+  reads it at intake for such a product.
 
 ## Install
 
@@ -170,13 +174,14 @@ manifest, `~/.claude/.pipeline-install.json`, records each installed file's hash
 edited under `~/.claude` and names it. It never touches your routing override (`~/.claude/.pipeline-models.json`)
 or your shadow-run records (`~/.claude/.pipeline-shadow.jsonl`).
 
-A local `private/` folder, if present, is installed over the same paths (the owner's standing requirements and
-private rules) with its own tests, which the self-test runs. It is never published.
+An optional local `private/` folder can hold your own rules and their tests. `install.py apply` installs it
+over the same paths, and the self-test runs its tests. Keep it out of commits.
 
 Requirements: macOS (the sandbox and copy-on-write clones), Python 3.9 or later, Claude Code 2.1.283 or later,
 Playwright for Python with Chromium (the checkers' browser), and `playwright-cli` (the builder's browser).
-`install.py check` fails when one is missing. Optional: the Codex CLI (the second model family for code review)
-and whisper (audio capture).
+`install.py check` fails when one is missing. Optional: the Codex CLI, for a second model family in code
+review, and whisper, for audio capture. When Codex is unavailable, the code review runs on Claude and the
+summary records the switch.
 
 Tests: `bash tests/pipeline-selftest.sh` runs every script and hook suite and the static checks.
 `python3 tests/agent_fixtures.py` runs each checker against projects with planted defects and clean controls,
