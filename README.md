@@ -154,8 +154,8 @@ The templates are in `skills/_shared/templates/`.
   when their trigger fires. `index.md` says where the pipeline's rules win. The skill is named `code-craft`,
   not `craft`, so installing it never replaces a `/craft` skill you already have.
 - **The agent-product reference** (`skills/_shared/references/agent-product/`) is a checklist of controls for
-  a product that runs agents or causes outside effects (payments, messages, bookings, publishing). `/plan`
-  reads it at intake for such a product.
+  a product that runs agents or causes outside effects (payments, messages, bookings, publishing).
+  `install.py` installs it with the other shared references; no skill loads it yet.
 
 ## Install
 
