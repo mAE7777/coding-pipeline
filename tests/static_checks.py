@@ -37,12 +37,12 @@ results = []
 OPTIONAL_SHARED = {"_shared/references/owner-standing.md", "_shared/references/venture-mode.md",
                    "_shared/references/research-craft.md", "_shared/references/stacks/README.md"}
 
-# The descriptions every session loads (plan 6.2). The budget is the total after the October 2026 trims (5,916
+# The descriptions every session loads. The budget is the total after the October 2026 trims (5,916
 # bytes) plus 10 percent, rounded: raising it is a decision, never drift.
 ALWAYS_LOADED_BUDGET = 6500
 SKILL_DESCRIPTION_LIMIT = 450
 AGENT_DESCRIPTION_LIMIT = 120
-# The craft layer is read lazily (plan D4): the index once per milestone or fix session, the skill on /code-craft.
+# The craft layer is read lazily: the index once per milestone or fix session, the skill on /code-craft.
 CRAFT_BUDGETS = {"skills/code-craft/index.md": 10240, "skills/code-craft/SKILL.md": 6144}
 # The checker role whose agent file comes from the fixture that runs it (--agent-file), never from agents/.
 NO_AGENT_FILE = ("probe",)

@@ -437,7 +437,7 @@ def compute(project, mid, rnd, ev, ledger, intent_only=False):
 
 
 def model_record(s):
-    """What a checker step asked for and what served it (plan 7.3 step 1), from its summary."""
+    """What a checker step asked for and what served it (switch test step 1), from its summary."""
     if not s:
         return None
     rec = {k: s.get(k) for k in ("route", "requested_model", "requested_effort", "served_model", "family")}

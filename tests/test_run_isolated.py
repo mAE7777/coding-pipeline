@@ -872,7 +872,7 @@ def judge_answer(drift):
 
 
 class ShadowRunTest(unittest.TestCase):
-    """Shadow runs beside a checker (plan 7.3 step 4): no model calls, a stand-in claude that logs each call."""
+    """Shadow runs beside a checker (switch test step 4): no model calls, a stand-in claude that logs each call."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

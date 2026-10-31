@@ -547,7 +547,7 @@ def finding_rows(scope):
 
 def to_reverify(scope):
     """[(heading, body, what is missing)] for the findings and, for a hotfix, the fix-log entries to re-verify.
-    A fix entry's Change line (the builder's account of how the fix works) stays out: the delta shows it (D8)."""
+    A fix entry's Change line (the builder's account of how the fix works) stays out: the delta shows it."""
     findings = ("Findings to re-verify (every finding blocking since the last full round, open or fixed)",
                 "\n".join(finding_rows(scope)) or None, "the findings (scope.json findings)")
     if scope.get("kind") != "hotfix":

@@ -101,7 +101,7 @@
       "upstream": "skills/poteto-mode/SKILL.md",
       "commit": "99743e9",
       "sha256": "c5e6b605f46e5d9fbab31afa7a99d3d50680f2180d1fdfae3a924901bc52d99a",
-      "local_edit": "adapted: this pipeline's override lines first (plan D3's six, plus delegation and the architect gate), then a map from pstack skill names to craft files; Non-negotiables cut to the triggers that map onto this pipeline and pointed at craft files; Principles index verbatim with the leaf path pattern; Writing the reply and Comments verbatim except 'playbook' reads 'method'; Autonomy, Subagents, Playbooks, and Cursor machinery dropped"
+      "local_edit": "adapted: this pipeline's override lines first (six, plus delegation and the architect gate), then a map from pstack skill names to craft files; Non-negotiables cut to the triggers that map onto this pipeline and pointed at craft files; Principles index verbatim with the leaf path pattern; Writing the reply and Comments verbatim except 'playbook' reads 'method'; Autonomy, Subagents, Playbooks, and Cursor machinery dropped"
     },
     {
       "local": "methods/bug-fix.md",
@@ -115,14 +115,14 @@
       "upstream": "skills/poteto-mode/playbooks/bug-fix.md",
       "commit": "99743e9",
       "sha256": "66e26542dad131cfd7df80ac0cdf81ed4d85e7b5e3f0eb65b933888760c4831f",
-      "local_edit": "control skill becomes playwright-cli or the project's verification skill; Cursor /loop becomes Claude Code's; subagent model and speed lines point to brief.md and models.json; step 1 gains benny's reproduce-twice rule for UI and timing bugs; step 5 keeps the regression test required and takes tdd's test-writing guidance (D3); step 6 hands back per the active skill before any PR"
+      "local_edit": "control skill becomes playwright-cli or the project's verification skill; Cursor /loop becomes Claude Code's; subagent model and speed lines point to brief.md and models.json; step 1 gains benny's reproduce-twice rule for UI and timing bugs; step 5 keeps the regression test required and takes tdd's test-writing guidance (pipeline rules win); step 6 hands back per the active skill before any PR"
     },
     {
       "local": "methods/bug-fix.md",
       "upstream": "skills/tdd/SKILL.md",
       "commit": "99743e9",
       "sha256": "eeb868e2dfebee528d730a67d7b17498fac4bb85dec2e38bc5c5176aca4d5d2f",
-      "local_edit": "step 5 takes tdd's workflow steps 2 to 4 and its first guardrail; the 'prefer no new test' rule is replaced (D3)"
+      "local_edit": "step 5 takes tdd's workflow steps 2 to 4 and its first guardrail; the 'prefer no new test' rule is replaced (pipeline rules win)"
     },
     {
       "local": "methods/feature-shape.md",

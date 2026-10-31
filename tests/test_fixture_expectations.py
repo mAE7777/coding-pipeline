@@ -1,10 +1,10 @@
-"""Tests for the Level-3 fixtures added for the model-routing comparisons (plan 7.2 and 7.3), with no model.
+"""Tests for the Level-3 fixtures added for the model-routing comparisons (docs/model-routing.md), with no model.
 
 For each new expectation: a verdict that catches everything passes, a verdict that misses one planted item
 reports that item alone, and the empty verdict reports every item (so pooled counts are items, not runs).
 For each new fixture: its folder holds what its spec names, its pack renders the way agent_fixtures.py renders
 it with nothing NOT PROVIDED and no canary in it, and its planted defect is really there (the products run).
-The fast-reviewer fixtures (fast plan 4.6) are tested the same way on synthetic text answers, with their review
+The fast-reviewer fixtures are tested the same way on synthetic text answers, with their review
 copy made a git repository and gate-fast's prompt filled from a fast repository made in a temporary folder (and
 from the real one beside this repository, when it is there).
 """
@@ -115,7 +115,7 @@ class RegistrationTest(unittest.TestCase):
                 self.assertTrue(empty(name), f"{name}: an empty verdict must fail the clean control")
 
     def test_the_reverify_route_pools_at_least_six_planted_items_per_run(self):
-        """Plan 7.3: at least 30 item-trials per side at --runs 5."""
+        """The switch test: at least 30 item-trials per side at --runs 5."""
         planted = [n for n, s in FIXTURES.items() if s["serves"] == "code-verifier.reverify" and s["kind"] == "planted"]
         self.assertGreaterEqual(sum(len(empty(n)) for n in planted) * 5, 30)
 
@@ -1022,7 +1022,7 @@ class LayeredProductTest(unittest.TestCase):
                     self.assertTrue(c["path"] in named or c["path"].startswith("tests/"), c["path"])
 
 
-# ---------- the fast pipeline's reviewer (fast plan 4.6) ----------
+# ---------- the fast pipeline's reviewer ----------
 
 # gate-fast's reviewer prompt as the fast repository holds it at 5cfa3b9, in a skill cut to what the harness reads.
 FAST_SKILL_TEXT = """---

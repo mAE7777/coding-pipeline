@@ -33,10 +33,10 @@ routes and some fields, and {"codex": {...}} likewise; the rest come from the ta
 
 Shadow: the same file may hold {"shadow": {"<route>": {"model": ..., "effort": ...}}} beside "routes": a candidate
 setting that runs beside the route's own on real work (run_isolated.py runs it after the main run, and only the
-main run's result counts; shadow_diff.py compares the two and says when a candidate is ready to promote, plan 7.3
-step 4). A shadow names both fields: a model ID from allowed_models (never default or session) and an effort level
-(never inherit). Only checker routes can have one; builder-side routes cannot. The ignore variable ignores the
-shadows too. list and check show them.
+main run's result counts; shadow_diff.py compares the two and says when a candidate is ready to promote, switch
+test step 4 in docs/model-routing.md). A shadow names both fields: a model ID from allowed_models (never default or
+session) and an effort level (never inherit). Only checker routes can have one; builder-side routes cannot. The
+ignore variable ignores the shadows too. list and check show them.
 
 Nothing falls back silently: an unknown route, a model outside allowed_models, any ID containing fable or
 mythos, an unknown effort, or a malformed file is an error that names the route and the file, and every

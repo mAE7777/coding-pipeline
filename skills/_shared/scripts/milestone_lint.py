@@ -38,7 +38,7 @@ CONTRACT_FIELDS = ("Promise:", "Carries:", "Demo ending:", "Done examples:")
 SUPERSEDED = re.compile(r"^Superseded:\s*(D-\d+)", re.M)
 ACCEPT = re.compile(r"Accept (M\d+) · contract ([0-9a-f]{16})")
 WIRING_STATUS = {"built", "validated", "wired", "proven", "parked"}
-# The format rules live in these messages, not in comments copied into every record (plan 6.2).
+# The format rules live in these messages, not in comments copied into every record.
 STATUS_RULE = ("the builder sets building and gate, a gate report sets changes, only an owner acceptance in "
                "decisions.md allows accepted, and a dropped milestone keeps its section with a reason; release is "
                "tracked in the Readiness line")

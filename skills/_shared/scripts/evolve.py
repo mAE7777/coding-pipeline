@@ -646,7 +646,7 @@ FIXTURES_OF_AGENT = {"code-verifier": "code-verifier,escape", "loyal-evaluator":
                      "change-reviewer": "change-reviewer"}
 ALL_CHECKERS = "code-verifier,loyal-evaluator,gate-judge,cold-reader,claim-verifier,change-reviewer,escape,probe"
 ROUTING_TABLE = "skills/_shared/models.json"
-ROUTE_MIN_TRIALS = 30  # plan 7.3: planted item-trials on each side before the route rule judges a routing change
+ROUTE_MIN_TRIALS = 30  # switch test: planted item-trials on each side before the route rule judges a routing change
 # Every suite measures the repository's own routing table, never the owner's personal override.
 SUITE_ENV = {"PIPELINE_MODELS_IGNORE_OVERRIDE": "1"}
 

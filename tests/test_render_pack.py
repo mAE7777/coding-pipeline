@@ -539,7 +539,7 @@ class ReverifyTest(unittest.TestCase):
         self.assertIn("- F-007 Delete did not sync", fix)
         self.assertIn("symptom: B still shows milk", fix)
         self.assertIn("reproduction: python3 -m unittest tests.test_a", fix)
-        self.assertNotIn("BUILDER-ACCOUNT", text, "the builder's account of the fix stays out (D8); the delta shows it")
+        self.assertNotIn("BUILDER-ACCOUNT", text, "the builder's account of the fix stays out; the delta shows it")
 
     def test_a_fixed_finding_is_checked_again(self):
         fixed = {"id": "F-2", "status": "fixed", "fixed_round": 3, "summary": "a blank name is accepted",
@@ -634,7 +634,7 @@ Mechanisms: none
 
 
 class DemoScopeTest(unittest.TestCase):
-    """Demo mode replays an earlier ending only when the current change can reach it (plan 6.3)."""
+    """Demo mode replays an earlier ending only when the current change can reach it."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

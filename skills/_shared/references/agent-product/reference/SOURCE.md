@@ -2,8 +2,7 @@
 
 `coordination.py` and `test_coordination.py` are copied unchanged from the `agent-handbook/reference/`
 folder of the AI Engineering Handbook 1.0 kit (version 1.0, evidence baseline 2026-10-10), which the owner
-supplied for this repository (plan decision 8, recorded in `docs/plan-craft-economy.md` section 11a). Only this
-file was added. The kit states no license of its own.
+supplied for this repository. Only this file was added. The kit states no license of its own.
 
 | File | Bytes | sha256 |
 |---|---|---|

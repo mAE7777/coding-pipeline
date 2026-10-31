@@ -1,11 +1,10 @@
 # Model routing: candidates and how a switch is measured
 
 This page lives in the repository only; `install.py` never installs it and no step reads it at run time. It
-lists, for every route in `skills/_shared/models.json`, today's setting and the candidate from plan section
-7.2 (`docs/plan-craft-economy.md`), what must exist before the candidate can be tested, and the exact commands
-of the five steps in plan 7.3. The commands spend real money and need the owner's machine (Codex, the macOS
-sandbox, Playwright), so they run there, with the owner's approval of the spend. Nothing here is promoted
-yet: every route runs today's setting.
+lists, for every route in `skills/_shared/models.json`, today's setting and its candidate, what must exist
+before the candidate can be tested, and the exact commands of the five steps that test a switch. The commands
+spend real money and need the owner's machine (Codex, the macOS sandbox, Playwright), so they run there, with
+the owner's approval of the spend. Nothing here is promoted yet: every route runs today's setting.
 
 ## Rules that hold for every switch
 
@@ -14,14 +13,14 @@ yet: every route runs today's setting.
   names one. Only full IDs from `allowed_models` are used (`claude-opus-5-5`, `claude-sonnet-5-5`,
   `claude-haiku-5-5`), never an alias that can move.
 - **Only isolated runs and forked skills switch,** never a session midway: prompt caches are per model, so a
-  mid-session switch re-sends the whole conversation uncached (plan 7.1 and 7.4).
+  mid-session switch re-sends the whole conversation uncached.
 - **Sonnet or Haiku only where an independent check stands downstream** (the judge opens every demo capture;
   the fidelity audit re-reads every extraction; the builder reads the lines an explorer cites). Effort before
   model: try `high` on Opus before trying Sonnet.
 - **The retry escalates.** `gate_run.py`'s one retry of a checker that ended ERROR or INCONCLUSIVE runs on
   `escalate` (claude-opus-5-5 at xhigh). In a fixture run an escalated run counts as a failure, so the retry
   never rescues the candidate's score.
-- **One route at a time, safest first** (plan 9, phase 3): the explorer and a forked `/scout map`; the
+- **One route at a time, safest first**: the explorer and a forked `/scout map`; the
   claim-verifier; the re-read's effort; the understanding check's effort; a forked `/explain`; the judge's
   effort, with the capture check; the demo; extraction. Measure on the prompts that will ship: both sides of
   a comparison carry the same agent texts.
@@ -66,7 +65,7 @@ resolves to on this machine, the personal override and any shadow included.
 
 Fixture names are keys of `FIXTURES` in `tests/fixture_expectations.py`; each spec's `"serves"` field names
 the route it measures. Items per run counts the planted defects an expectation checks one by one (its
-verdict check aside, though a wrong verdict also counts as a problem in the pooled rule). Plan 7.3 asks for at
+verdict check aside, though a wrong verdict also counts as a problem in the pooled rule). The switch test asks for at
 least 30 item-trials per side; the column gives the count at `--runs 5`.
 
 | Route | Planted fixtures (items per run) | Item-trials at `--runs 5` | Clean controls | Still missing |
@@ -86,7 +85,7 @@ least 30 item-trials per side; the column gives the count at `--runs 5`.
 | `change-reviewer` | change-reviewer-planted (3) | 15 | change-reviewer-clean | no candidate |
 | `explorer`, `scout-map` | probe-explorer-recall (8) | 40 | none (a probe) | the forked `/scout map` skill itself |
 | `explain` | probe-explain-grounding (4) | 20: short; `--runs 8` gives 32 | none (a probe) | the forked `/explain` skill itself |
-| `delegate` | none | 0 | none | a rename scenario (plan 7.2) |
+| `delegate` | none | 0 | none | a rename scenario |
 
 The web demo fixtures (code-verifier-demo-web-planted and -clean) need Playwright for python3 on the machine
 (`pip install playwright; python3 -m playwright install chromium`). Without it each of their runs is recorded
@@ -98,7 +97,7 @@ or `--effort` is given, and never run a shadow. A direct run also reads the pers
 benches of `evolve.py` ignore it (`PIPELINE_MODELS_IGNORE_OVERRIDE=1`), so set that variable for a direct
 comparison too.
 
-## How a switch is tested: the five steps of plan 7.3
+## How a switch is tested: the five steps
 
 Run from the repository checkout that `install.py` recorded (or set `$PIPELINE_REPO`), on the `/evolve`
 branch of the change (`evolve/chg-<nnnn>`), whose product change is the route's entry in `models.json`.
@@ -178,7 +177,7 @@ while the project's phase is over its spend cap. Remove the shadow entry when th
 names them) with the served models stored. A full fixture run, monthly or after a Claude Code upgrade,
 catches drift between changes: `python3 tests/agent_fixtures.py --runs 5`, its problem counts read against
 the last run's (a run replaces `.evidence/fixtures/`, so keep a copy). A defect found after acceptance is
-traced to the route that checked it (plan 10).
+traced to the route that checked it.
 
 ## Builder-side routes
 
@@ -215,14 +214,14 @@ lowering the effort: a long session re-reads its whole context on every turn.
 
 ## The fast reviewer (the fast pipeline's /gate-fast)
 
-The fast pipeline (mAE7777/coding-pipeline-fast) has no routing table: `/gate-fast` names its reviewer's model in
-its own text, and the default is **opus at xhigh** (fast plan 9.2). The `fast-reviewer-` fixtures measure that
+The fast pipeline (coding-pipeline-fast) has no routing table: `/gate-fast` names its reviewer's model in
+its own text, and the default is **opus at xhigh**. The `fast-reviewer-` fixtures measure that
 reviewer's prompt (the blockquote in the fast repository's `skills/gate-fast/SKILL.md`, read from the checkout
 at `FAST_REPO`, by default `../coding-pipeline-fast`; without it the fixtures are skipped) on four planted
 fixtures (8 items a run: tally-defects' four, the import's dropped duplicate line, the refix's doubled archive
 header, and two faked Done-when items) and three clean controls (tally-clean, structure-clean, refix-works).
 Each run reviews a git copy of the fixture with the change uncommitted, as a fast project stands at
-`/gate-fast`, inside the code-verifier sandbox. The probe answers two questions before fast plan 4.2's two
+`/gate-fast`, inside the code-verifier sandbox. The probe answers two questions before the fast pipeline's two proposed
 "measured" reviewer lines or a cheaper model ship: does sonnet catch as much as the opus default, and do the
 two candidate lines (`tests/fixtures/agents/fast-reviewer/candidate-lines.md`) help.
 
@@ -251,10 +250,10 @@ What each outcome decides:
 - **The model.** The reviewer stays on opus at xhigh. It moves to sonnet only when, on the prompt that ships,
   sonnet's pooled misses are no higher than opus's and no clean sonnet run fails; the dollars say what the move
   saves. The move is a change to fast's gate-fast text, the owner's decision with these numbers.
-- **The two lines.** They ship (fast plan 4.2) only when, on the reviewer's model, the prompt with them misses no
+- **The two lines.** They ship only when, on the reviewer's model, the prompt with them misses no
   more than today's prompt and fails no clean run; the first line's purpose is the dollars (no second run of the
   suite), so a side that costs no less has not earned it. Otherwise they stay out, or ship marked unmeasured
-  (fast plan section 1, the admission test).
+  (the fast pipeline's admission test).
 - A close result (within two misses of 40) is noise at 5 runs: run both sides again at `--runs 10`.
 
 ## Prices, and what they are worth

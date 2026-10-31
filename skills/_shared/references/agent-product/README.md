@@ -157,5 +157,5 @@ It is a single-host teaching program: caller identity, approvals, and plan are t
 never an agent tool; `complete` assumes acceptance was checked elsewhere. A product ports the behavior tests
 to its own storage and provider sandboxes (29): "Do not remove failing tests to accommodate the adapter."
 
-Status in this repository: no skill points here yet and `install.py` does not install this folder; both are
-planned changes (`docs/plan-craft-economy.md`, sections 5.2 and 8).
+Status in this repository: `install.py` installs this folder with the other shared references; no skill
+points here yet.

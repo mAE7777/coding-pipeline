@@ -214,7 +214,7 @@ class CheckerRouteTest(HomeCase):
 
 
 class ShadowTest(HomeCase):
-    """The override's shadow section: a candidate setting run beside a route on real work (plan 7.3 step 4)."""
+    """The override's shadow section: a candidate setting run beside a route on real work (switch test step 4)."""
 
     def shadow(self, entries, routes=None):
         self.override(routes or {}, shadow=entries)

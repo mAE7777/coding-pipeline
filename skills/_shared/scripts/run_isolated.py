@@ -75,7 +75,7 @@ records prompt_sha256 (the prompt as passed) beside agent_sha256 (the file).
 every existing file the globs match with its Read tool; otherwise it is INCONCLUSIVE with the reason
 "did not open: <files>".
 
-Shadow runs (plan 7.3 step 4). --shadow <model>:<effort> sets a candidate setting for this run; otherwise the
+Shadow runs (switch test step 4). --shadow <model>:<effort> sets a candidate setting for this run; otherwise the
 personal override's shadow entry for this run's route applies (models.py); --no-shadow turns any off. After the
 main run has written its summary with its final status, the same role runs with the same pack on the shadow
 setting into <evidence-dir>/shadow/ (the same stem: shadow/<stem>.summary.json, .result.md, ...), then
