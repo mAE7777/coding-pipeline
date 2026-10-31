@@ -5,8 +5,8 @@ Loaded by `/explain`. Four registers for the SAME build, each re-derived at a di
 Amazon working-backwards / PR-FAQ, YC/NFX investor-update conventions, NN/g + plain-language +
 Keep-a-Changelog.
 
-The core rule: **do not summarize-then-reskin. Re-derive from the change through three transforms
-— altitude, lead-with, omit-list.**
+The core rule: **do not summarize-then-reskin. Re-derive from the change through three transforms:
+altitude, lead-with, omit-list.**
 
 ---
 
